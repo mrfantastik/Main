@@ -1,0 +1,126 @@
+# 🏙️ AI Hustle City
+
+A persistent little city of 20 autonomous AI citizens trying to get ahead. They pick jobs, start businesses, undercut rivals, borrow from friends, fall out, go bust, invent things — and you watch it unfold (and occasionally play god).
+
+Nothing is scripted. Every story comes from the systems: needs, money, personality, beliefs, memories and relationships.
+
+---
+
+## Quick start
+
+You need [Node.js](https://nodejs.org) 22 or newer (20 works too, without the SQLite database).
+
+```bash
+npm install
+npm start
+```
+
+Then open **http://localhost:3000**.
+
+That's it. The city starts at 6am on Day 1 and keeps running on the server — refresh the page, close the tab, even restart the server, and it carries on where it left off.
+
+### Turning on Claude (optional)
+
+Without an API key the citizens run on the built-in **utility AI** (free, and fully reproducible).
+With a key, Claude voices the *big moments*: tough career/business dilemmas and conversations about money, jobs and debts.
+
+1. Get an API key from [console.anthropic.com](https://console.anthropic.com) (API usage is billed separately from a Claude.ai subscription).
+2. Copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY=...`
+3. `npm start`
+
+**Cost controls (all on by default):**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `AI_BUDGET_USD` | `2` | Hard cap on **lifetime** spend, stored in `data/hustle.db` (survives restarts and resets). When reached, citizens just carry on with the utility AI. |
+| `AI_MAX_CALLS_PER_DAY` | `12` | Max Claude calls per *game* day. |
+| `AI_MODEL` | `claude-opus-5-5` | `claude-haiku-4-5` is ~4× cheaper per token if you want the budget to stretch further. |
+
+In practice the city makes **~2–3 Claude calls per game day** (≈ $0.03/day with Opus 5.5), because only genuine dilemmas and money talk qualify. Walking, working, buying, pricing, small talk etc. never touch the LLM. You can pause Claude, change the budget and read every prompt/response in the **🧠 AI** panel.
+
+---
+
+## How to watch
+
+| | |
+|---|---|
+| **Pan / zoom** | Drag the map / mouse wheel (or WASD + `+`/`-`) |
+| **Inspect a citizen** | Click them on the map or in the list. Tabs: Overview, 🧠 Mind (why they did things), Social (relationships, memories, conversations), Money |
+| **Inspect a business** | Click a shop |
+| **Speed** | ⏸ 1× 5× 20× 50× (1× = one game hour every 15 s) |
+| **📊 Dashboard** | Money supply, wealth, inequality, unemployment, businesses, prices, richest/poorest, top businesses… |
+| **⚡ God Mode** | Give/take money, shortages, surpluses, set prices, assign jobs, spawn/close businesses, booms and crashes, save/export, new world |
+| **🧠 AI** | Claude status, spend, call log, recent conversations |
+| **📰 Live events** | Everything happening, filterable; click names; "Read conversation" opens transcripts |
+
+---
+
+## What's simulated
+
+- **City**: houses, shops, marketplace, CityCorp offices, cowork hub, bank & exchange, pub, diner, park, research lab, wholesale depot. Day/night cycle. Citizens walk the roads.
+- **Citizens**: name, age, personality (ambitious, risk-taking, conservative, lazy, friendly, competitive, entrepreneurial, greedy, generous, frugal, curious), skills that improve with practice, needs (energy, hunger, social, fun), mood, money, savings, credit score, inventory, home, goal, thoughts.
+- **Jobs**: employee (CityCorp or citizen businesses), freelancer, shopkeeper, reseller, trader, entrepreneur, researcher, unemployed — each behaves differently.
+- **Economy** (all virtual £): wholesale market with volatility and demand shocks, a marketplace with listings and clearance lots, shops/stalls/cafés/agencies competing on price, reputation and staffing, rent, wages, owner draws, dividends, bank savings & loans, peer loans, equity investments, bankruptcies, evictions, inventions with royalties.
+- **Memory**: short-term and long-term memories, importance-weighted, merging repeats, fading over time.
+- **Relationships**: affinity, trust, familiarity and roles (family, friend, rival, employer, partner, creditor…). They change through encounters, deals, favours and betrayals — and they change decisions.
+- **Conversations**: loans, investment pitches, job requests/offers, debt collection, asking for help, sharing/selling research tips, arguments, gossip. The engine sets each side's real limits; templates or Claude write the words; outcomes move real money.
+
+---
+
+## Debugging: why did they do that?
+
+Every decision records the options considered, their scores and the factors behind them.
+
+- In the app: click a citizen → **🧠 Mind** tab → expand any decision.
+- From the terminal (same engine, Claude off, reproducible):
+
+```bash
+npm run sim -- --days 10 --seed 42                 # run 10 days, print the story
+npm run sim -- --days 5 --seed 42 --explain Jake   # every decision Jake made, and why
+npm run diagnose -- --days 20 --seed 42            # money flows, businesses, earnings by job
+npm test                                           # determinism, money conservation, systems
+```
+
+The same seed always produces the same story (with Claude off), so bugs are reproducible. In the browser console, `hustle.store.s` holds everything the UI knows.
+
+---
+
+## Data
+
+- `data/hustle.db` — SQLite: world snapshots (last 5), full event and transaction history, Claude spend.
+- **⚡ God Mode → 💾 Save now / ⬇️ Download world** for manual saves/exports. `GET /api/history?limit=100` returns older events.
+- To start fresh: God Mode → *Start over*, or delete the `data` folder.
+- `npm run serve` builds the client and runs in production mode.
+
+---
+
+## Architecture
+
+```
+src/
+  sim/                 The simulation — pure TypeScript, no I/O, runs anywhere
+    engine.ts          Fixed 1-minute ticks: movement, activities, hourly & daily systems
+    world.ts setup.ts  World creation (city, citizens, starting economy)
+    types.ts           All state is plain JSON-serialisable data
+    city/              Map generation, A* pathfinding
+    ai/                Decision system: actions, activity & strategy options, utility
+                       scoring, beliefs, careers, thoughts, AI director, LLM prompts
+    economy/           Ledger (all money moves here), market, businesses, bank,
+                       jobs, services, trading, reselling, research, housing, shopping
+    memory/            Memory system
+    social/            Relationships, encounters, conversations, negotiation, dialogue
+    god.ts             God Mode commands + macro economy
+    stats.ts           Economy statistics
+    snapshot.ts        World → UI messages
+  server/              Node server: runs the sim, WebSocket streaming, persistence
+    persistence/       SQLite store (node:sqlite) with JSON-file fallback
+    anthropic.ts       Claude client (structured JSON output)
+  client/              Browser: React panels + canvas renderer
+  shared/protocol.ts   Messages between server and browser
+scripts/               Headless runner and diagnostics
+tests/                 node:test suites
+```
+
+**Separation**: simulation engine (`sim/engine.ts`), AI decisions (`sim/ai`), memory (`sim/memory`), economy (`sim/economy`), persistence (`server/persistence`), UI (`client/ui`), rendering (`client/render`).
+
+**Extension points** (for later — not implemented): new professions register a *work provider* and a *career target*; new actions register in the action registry; products are data (`sim/data/products.ts`); conversation topics are handlers in `social/conversation.ts`; storage is an interface (swap SQLite for Postgres); the server is authoritative and already supports many clients (multiplayer, user-owned citizens/businesses); the engine is headless so it can run continuously on a server. Balance knobs live in `sim/config.ts`.

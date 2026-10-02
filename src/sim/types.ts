@@ -787,6 +787,8 @@ export interface AIState {
 
 export interface WorldState {
   version: number;
+  /** Unique id for this world (separates history in the database). */
+  id: string;
   seed: number;
   /** PRNG state (mulberry32). */
   rng: number;

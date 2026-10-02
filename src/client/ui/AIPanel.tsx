@@ -76,7 +76,7 @@ export function AIPanel() {
             </button>
           </div>
           <p className="muted" style={{ fontSize: 11 }}>
-            The budget is a hard cap on lifetime spend (stored in data/ai-usage.json). When it's reached, citizens simply carry on with the
+            The budget is a hard cap on lifetime spend (tracked in the database, data/hustle.db). When it's reached, citizens simply carry on with the
             utility AI.
           </p>
         </div>

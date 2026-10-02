@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,8 +9,12 @@ import { applyGodCommand, GodError } from "../sim/god";
 import * as snap from "../sim/snapshot";
 import type { WorldState } from "../sim/types";
 import { AIDirector } from "../sim/ai/director";
+import type { SpendLedger } from "../sim/ai/director";
+import { prepareLoadedWorld } from "../sim/migrate";
 import { createClaudeClient } from "./anthropic";
-import { FileSpendLedger } from "./spend";
+import { openJsonStore } from "./persistence/jsonStore";
+import { openSqliteStore } from "./persistence/sqliteStore";
+import type { WorldStore } from "./persistence/store";
 import { SimRunner } from "./runner";
 
 // AI Hustle City server: runs the simulation continuously and streams it to
@@ -18,6 +22,18 @@ import { SimRunner } from "./runner";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
+
+/** Load settings from .env (if present) without extra dependencies. */
+function loadEnv(file: string): void {
+  if (!existsSync(file)) return;
+  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!m || line.trim().startsWith("#")) continue;
+    const value = m[2].replace(/^["']|["']$/g, "");
+    if (value !== "" && process.env[m[1]] === undefined) process.env[m[1]] = value;
+  }
+}
+loadEnv(path.join(root, ".env"));
 const PORT = Number(process.env.PORT ?? 3000);
 const PROD = process.argv.includes("--prod");
 
@@ -36,7 +52,19 @@ let runner: SimRunner;
 const AI_MODEL = process.env.AI_MODEL || "claude-opus-5-5";
 const AI_BUDGET_USD = Number(process.env.AI_BUDGET_USD ?? 2);
 const AI_MAX_CALLS_PER_DAY = Number(process.env.AI_MAX_CALLS_PER_DAY ?? 12);
-const ledger = new FileSpendLedger(path.join(root, "data", "ai-usage.json"));
+const DATA_DIR = process.env.DATA_DIR ?? path.join(root, "data");
+const AUTOSAVE_MS = Number(process.env.AUTOSAVE_SECONDS ?? 30) * 1000;
+
+let store: WorldStore;
+let savedAt: number | null = null;
+let savedEventId = 0;
+let savedTxId = 0;
+
+/** Lifetime Claude spend, kept in the database so the cap survives restarts and resets. */
+const ledger: SpendLedger = {
+  total: () => Number(store?.getMeta("aiSpendUsd") ?? 0),
+  add: (usd) => store?.setMeta("aiSpendUsd", String(ledger.total() + usd)),
+};
 const director = new AIDirector(createClaudeClient(AI_MODEL), ledger);
 director.attach();
 
@@ -52,7 +80,7 @@ function send(ws: WebSocket, msg: ServerMsg): void {
 }
 
 function hello(world: WorldState): HelloMsg {
-  return { type: "hello", worldName: world.name, seed: world.seed, map: world.map, persistence: "memory" };
+  return { type: "hello", worldName: world.name, seed: world.seed, map: world.map, persistence: store.kind };
 }
 
 function aiStatus(world: WorldState): AIStatusDTO {
@@ -74,8 +102,43 @@ function aiStatus(world: WorldState): AIStatusDTO {
 function newWorld(seed?: number): WorldState {
   const s = seed ?? (Date.now() % 1_000_000);
   const world = createWorld(s);
+  world.id = `w${s.toString(36)}-${Date.now().toString(36)}`;
   configureAI(world);
   return world;
+}
+
+/** Save a snapshot and append new history rows. */
+function saveWorld(reason: string): void {
+  const world = runner.world;
+  try {
+    const events = world.events.filter((e) => e.id > savedEventId);
+    const txs = world.transactions.filter((t) => t.id > savedTxId);
+    store.appendHistory(world.id, events, txs);
+    store.saveSnapshot(world);
+    savedEventId = world.events[world.events.length - 1]?.id ?? savedEventId;
+    savedTxId = world.transactions[world.transactions.length - 1]?.id ?? savedTxId;
+    savedAt = world.time;
+    if (reason !== "autosave") console.log(`  💾 Saved (${reason}) at game time ${world.time}`);
+  } catch (err) {
+    console.error("  ⚠️  Save failed:", (err as Error).message);
+  }
+}
+
+function resumeOrCreate(): WorldState {
+  const raw = store.loadLatest();
+  const loaded = raw ? prepareLoadedWorld(raw) : null;
+  if (loaded && !process.env.SEED) {
+    configureAI(loaded);
+    savedEventId = loaded.events[loaded.events.length - 1]?.id ?? 0;
+    savedTxId = loaded.transactions[loaded.transactions.length - 1]?.id ?? 0;
+    savedAt = loaded.time;
+    console.log(`  📂 Resumed ${loaded.name} at Day ${Math.floor(loaded.time / 1440) + 1} (seed ${loaded.seed}) from ${store.kind}`);
+    return loaded;
+  }
+  if (raw && !loaded) console.log("  ⚠️  Saved world was incompatible — starting a new one.");
+  const w = newWorld(Number(process.env.SEED) || undefined);
+  console.log(`  🌱 New world (seed ${w.seed})`);
+  return w;
 }
 
 function handle(client: Client, msg: ClientMsg): void {
@@ -115,8 +178,16 @@ function handle(client: Client, msg: ClientMsg): void {
       if (msg.maxCallsPerDay !== undefined && msg.maxCallsPerDay >= 0) world.ai.maxCallsPerDay = Math.round(msg.maxCallsPerDay);
       break;
     }
+    case "save":
+      saveWorld("manual");
+      send(client.ws, { type: "toast", text: "💾 World saved.", level: "info" });
+      break;
     case "reset": {
+      saveWorld("before reset");
       runner.world = newWorld(msg.seed);
+      savedEventId = 0;
+      savedTxId = 0;
+      saveWorld("new world");
       for (const c of clients) {
         c.lastEventId = 0;
         c.lastTxId = 0;
@@ -150,7 +221,7 @@ function broadcastState(): void {
     if (events.length) c.lastEventId = events[events.length - 1].id;
     const fx = c.lastTxId > 0 ? snap.moneyFx(world, c.lastTxId) : [];
     c.lastTxId = world.transactions[world.transactions.length - 1]?.id ?? c.lastTxId;
-    send(c.ws, snap.state(world, { speed: runner.speed, paused: runner.paused, events, ai: aiStatus(world), savedAt: null, fx }));
+    send(c.ws, snap.state(world, { speed: runner.speed, paused: runner.paused, events, ai: aiStatus(world), savedAt, fx }));
     if (c.selected) pushDetail(c);
   }
 }
@@ -190,7 +261,9 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse): void 
 }
 
 async function main(): Promise<void> {
-  runner = new SimRunner(newWorld(Number(process.env.SEED) || undefined));
+  store = (await openSqliteStore(path.join(DATA_DIR, "hustle.db"))) ?? openJsonStore(DATA_DIR);
+  console.log(`\n  🗄️  Persistence: ${store.kind} in ${DATA_DIR}`);
+  runner = new SimRunner(resumeOrCreate());
 
   let viteMiddleware: ((req: http.IncomingMessage, res: http.ServerResponse, next: () => void) => void) | null = null;
   if (!PROD) {
@@ -206,7 +279,20 @@ async function main(): Promise<void> {
   const server = http.createServer((req, res) => {
     if (req.url?.startsWith("/api/health")) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, time: runner.world.time, citizens: runner.world.citizenOrder.length }));
+      res.end(JSON.stringify({ ok: true, time: runner.world.time, citizens: runner.world.citizenOrder.length, seed: runner.world.seed, savedAt, persistence: store.kind }));
+      return;
+    }
+    if (req.url?.startsWith("/api/export")) {
+      res.writeHead(200, { "Content-Type": "application/json", "Content-Disposition": `attachment; filename="hustle-city-day${Math.floor(runner.world.time / 1440) + 1}.json"` });
+      res.end(JSON.stringify(runner.world));
+      return;
+    }
+    if (req.url?.startsWith("/api/history")) {
+      const u = new URL(req.url, "http://x");
+      const limit = Math.min(500, Number(u.searchParams.get("limit") ?? 100));
+      const before = u.searchParams.get("before");
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(store.eventHistory(runner.world.id, limit, before ? Number(before) : undefined)));
       return;
     }
     if (viteMiddleware) viteMiddleware(req, res, () => res.writeHead(404).end());
@@ -235,6 +321,14 @@ async function main(): Promise<void> {
 
   runner.afterSteps = (w) => director.pump(w);
   runner.start();
+  setInterval(() => saveWorld("autosave"), AUTOSAVE_MS);
+  const shutdown = () => {
+    saveWorld("shutdown");
+    store.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
   console.log(director.available ? `  🧠 Claude enabled (${director.model}), budget $${AI_BUDGET_USD}, spent so far $${ledger.total().toFixed(3)}` : "  🧠 Claude disabled (no ANTHROPIC_API_KEY) — using the built-in utility AI");
   setInterval(broadcastFrames, 100);
   setInterval(broadcastState, 500);

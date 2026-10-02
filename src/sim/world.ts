@@ -217,6 +217,7 @@ export function initProductMarket(p: Product, trend = 1): ProductMarket {
 export function createWorld(seed: number, name = "Hustle City"): WorldState {
   const world: WorldState = {
     version: WORLD_VERSION,
+    id: `w${seed.toString(36)}-${Math.floor(rand({ rng: seed ^ 0x5bd1e995 }) * 1e9).toString(36)}`,
     seed,
     rng: seed >>> 0,
     time: START_TIME,

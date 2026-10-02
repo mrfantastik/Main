@@ -3,8 +3,10 @@ import { clamp, newId } from "../util";
 
 // Memory system.
 //
-// - Short-term memory: the last few things that happened (any importance).
-// - Long-term memory: only important things (importance >= 5), capped.
+// - Short-term memory: the last few minor things that happened.
+// - Long-term memory: important things (importance >= 5), capped.
+//   Each memory lives in exactly one list (important ones move to long-term),
+//   so the state stays plain data that saves and reloads identically.
 // - Memories fade every day unless reinforced; trivial ones fade fastest.
 // - Repeated similar memories merge ("Sarah lent me money" x3) instead of
 //   piling up, which keeps memory small while making patterns stronger.
@@ -63,7 +65,8 @@ export function remember(world: WorldState, c: Citizen, input: MemoryInput): Mem
 
 function promote(c: Citizen, m: Memory): void {
   if (m.importance < LONG_TERM_THRESHOLD) return;
-  if (!c.memories.long.includes(m)) c.memories.long.push(m);
+  c.memories.short = c.memories.short.filter((x) => x.id !== m.id);
+  if (!c.memories.long.some((x) => x.id === m.id)) c.memories.long.push(m);
   if (c.memories.long.length > LONG_LIMIT) {
     let weakest = 0;
     for (let i = 1; i < c.memories.long.length; i++) {
@@ -80,8 +83,7 @@ export function decayMemories(c: Citizen): void {
     m.strength = clamp(m.strength - rate, 0, 1);
   }
   c.memories.long = c.memories.long.filter((m) => m.strength > 0.08 || m.importance >= 9);
-  const longIds = new Set(c.memories.long.map((m) => m.id));
-  for (const m of c.memories.short) if (!longIds.has(m.id)) m.strength = clamp(m.strength - 0.25, 0, 1);
+  for (const m of c.memories.short) m.strength = clamp(m.strength - 0.25, 0, 1);
 }
 
 /** What do I remember about this person? Most significant first. */

@@ -5,7 +5,7 @@
   "description": "A persistent virtual city of autonomous AI agents building an emergent economy.",
   "type": "module",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=20"
   },
   "scripts": {
     "start": "tsx src/server/index.ts",
@@ -14,7 +14,8 @@
     "serve": "vite build && tsx src/server/index.ts --prod",
     "sim": "tsx scripts/headless.ts",
     "test": "tsx --test tests/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "diagnose": "tsx scripts/diagnose.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",

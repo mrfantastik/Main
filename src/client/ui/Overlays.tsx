@@ -39,7 +39,14 @@ function Help() {
           <b>📊 Dashboard</b>: the whole economy. <b>⚡ God Mode</b>: interfere. <b>🧠 AI</b>: Claude usage and decision log.
         </li>
       </ul>
-      <p className="muted">Citizens' colours show their occupation (see the legend, bottom-left).</p>
+      <p>
+        <b>Reading the map:</b> citizen colours show their occupation (legend, bottom-left); the little icon shows what they're doing; speech
+        bubbles are live conversations (gold border = written by Claude); green "+£" shows money landing.
+      </p>
+      <p>
+        <b>Persistence:</b> the city lives on the server and autosaves. Refresh, close the tab or restart the server — it carries on.
+      </p>
+      <p className="muted">Everything you see emerges from the simulation. Nothing is scripted.</p>
     </Shell>
   );
 }

@@ -155,6 +155,21 @@ export function GodPanel() {
       </div>
 
       <div className="god-section">
+        <h4>💾 Save</h4>
+        <div className="god-row">
+          <button className="btn" onClick={() => store.send({ type: "save" })}>
+            💾 Save now
+          </button>
+          <a className="btn" href="/api/export" download style={{ textDecoration: "none" }}>
+            ⬇️ Download world (JSON)
+          </a>
+        </div>
+        <div className="muted" style={{ fontSize: 11 }}>
+          The world autosaves every 30 seconds and when the server stops. Restart the server and it carries on where it left off.
+        </div>
+      </div>
+
+      <div className="god-section">
         <h4>🔄 New world</h4>
         <div className="god-row">
           <input placeholder="Seed (optional)" value={seed} onChange={(e) => setSeed(e.target.value)} />
