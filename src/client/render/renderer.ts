@@ -55,6 +55,8 @@ export class Renderer {
   private hover: string | null = null;
   private raf = 0;
   private fitted = false;
+  private popups: { x: number; y: number; text: string; born: number }[] = [];
+  private lastFx: unknown = null;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d")!;
@@ -268,7 +270,38 @@ export class Renderer {
     this.drawCitizens(ctx);
     this.drawNight(ctx);
     this.drawLabels(ctx);
+    this.drawMoney(ctx, now);
     this.drawBubbles(ctx);
+  }
+
+  /** Floating "+£5" where money lands — makes the economy visible. */
+  private drawMoney(ctx: CanvasRenderingContext2D, now: number) {
+    const st = store.s.state;
+    if (st && st.fx !== this.lastFx) {
+      this.lastFx = st.fx;
+      for (const f of st.fx.slice(0, 12)) {
+        this.popups.push({ x: f.x + (Math.random() - 0.5) * 0.8, y: f.y, text: `+£${f.amount >= 100 ? Math.round(f.amount) : f.amount.toFixed(f.amount % 1 ? 2 : 0)}`, born: now + Math.random() * 400 });
+      }
+      if (this.popups.length > 60) this.popups.splice(0, this.popups.length - 60);
+    }
+    const life = 1600;
+    this.popups = this.popups.filter((p) => now - p.born < life);
+    if (this.cam.scale < 12) return;
+    ctx.font = "bold 12px Inter, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const p of this.popups) {
+      const age = (now - p.born) / life;
+      if (age < 0) continue;
+      const s = this.cam.worldToScreen(p.x, p.y);
+      const y = s.y - 10 - age * 30;
+      ctx.globalAlpha = Math.max(0, 1 - age);
+      ctx.fillStyle = "rgba(10,20,15,0.6)";
+      ctx.fillText(p.text, s.x + 1, y + 1);
+      ctx.fillStyle = "#5ee08f";
+      ctx.fillText(p.text, s.x, y);
+    }
+    ctx.globalAlpha = 1;
   }
 
   private drawBusinesses(ctx: CanvasRenderingContext2D) {

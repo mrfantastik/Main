@@ -44,7 +44,7 @@ export function accountName(world: WorldState, acc: string): string {
     bank: "Hustle Bank",
     exchange: "Exchange",
     god: "⚡ God",
-    market: "Marketplace buyers",
+    market: "Marketplace (outside traders)",
   };
   return names[id] ?? id;
 }
@@ -151,9 +151,30 @@ export function bubbles(world: WorldState): BubbleDTO[] {
   return out;
 }
 
+/** Where money landed on the map, for floating "+£" effects. */
+export function moneyFx(world: WorldState, sinceTxId: number): StateMsg["fx"] {
+  const out: StateMsg["fx"] = [];
+  for (let i = world.transactions.length - 1; i >= 0 && out.length < 24; i--) {
+    const tx = world.transactions[i];
+    if (tx.id <= sinceTxId) break;
+    if (!["sale", "purchase", "meal", "trade", "salary", "wage", "gig", "grant", "dividend", "royalty", "gift", "god", "loan"].includes(tx.kind)) continue;
+    let pos: { x: number; y: number } | null = null;
+    if (tx.to.startsWith("b:")) {
+      const b = world.businesses[tx.to.slice(2)];
+      const bld = b ? getBuildingIndexed(world.map, b.buildingId) : undefined;
+      if (bld) pos = { x: bld.x + bld.w / 2, y: bld.y + bld.h / 2 };
+    } else if (tx.to.startsWith("c:")) {
+      const c = world.citizens[tx.to.slice(2)];
+      if (c) pos = { x: c.pos.x, y: c.pos.y };
+    }
+    if (pos) out.push({ x: round2(pos.x), y: round2(pos.y), amount: tx.amount });
+  }
+  return out;
+}
+
 export function state(
   world: WorldState,
-  opts: { speed: number; paused: boolean; events: StateMsg["events"]; ai: AIStatusDTO; savedAt: number | null },
+  opts: { speed: number; paused: boolean; events: StateMsg["events"]; ai: AIStatusDTO; savedAt: number | null; fx: StateMsg["fx"] },
 ): StateMsg {
   const e = world.economy;
   return {
@@ -171,6 +192,8 @@ export function state(
     ai: opts.ai,
     savedAt: opts.savedAt,
     txCount: world.txCount,
+    conversations: world.conversationLog.slice(-12).map((x) => conversationDTO(world, x)),
+    fx: opts.fx,
   };
 }
 
@@ -353,6 +376,9 @@ export function dashboard(world: WorldState): DashboardMsg {
       .reverse()
       .slice(0, 20)
       .map((x) => conversationDTO(world, x)),
+    tapes: Object.fromEntries(world.productOrder.map((pid) => [pid, world.market[pid].tape])),
+    econEvents: world.events.filter((e) => (e.cat === "market" || e.cat === "god" || (e.cat === "business" && e.importance >= 4)) && e.importance >= 3).slice(-30).reverse(),
+    market: marketRows(world),
     products: world.productOrder.map((pid) => {
       const p = world.products[pid];
       return { id: p.id, name: p.name, emoji: p.emoji, category: p.category, baseCost: p.baseCost, baseRetail: p.baseRetail, inventorId: p.inventorId };

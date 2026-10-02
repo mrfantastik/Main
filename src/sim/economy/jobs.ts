@@ -131,6 +131,7 @@ export function registerJobActions(): void {
           transfer(world, externalAcc("clients"), citizenAcc(c.id), earned, "gig", `Freelance work (${hours.toFixed(1)}h)`);
           creditOccupation(world, c.id, earned);
           c.cooldowns.lastGigEarned = earned;
+          if (earned >= 28) logEvent(world, "job", `💻 ${c.name} delivered a client project (+${money(earned)}).`, 1, [c.id]);
         }
         c.skills.tech = Math.min(100, c.skills.tech + hours * 0.08);
       }

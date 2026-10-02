@@ -3,6 +3,7 @@ import type {
   BusinessDetail,
   CitizenDetail,
   ClientMsg,
+  ConversationDTO,
   DashboardMsg,
   FrameMsg,
   HelloMsg,
@@ -46,6 +47,8 @@ class Store {
     followSelected: false,
   };
   frames: FrameMsg[] = [];
+  /** Conversation transcripts seen so far (so old feed items can still open them). */
+  conversations = new Map<number, ConversationDTO>();
   /** Real time (ms) when the latest frame arrived. */
   lastFrameAt = 0;
   private listeners = new Set<() => void>();
@@ -95,6 +98,11 @@ class Store {
         this.lastFrameAt = performance.now();
         break;
       case "state": {
+        for (const c of msg.conversations) this.conversations.set(c.id, c);
+        if (this.conversations.size > 300) {
+          const keys = [...this.conversations.keys()].slice(0, this.conversations.size - 300);
+          for (const k of keys) this.conversations.delete(k);
+        }
         const events = msg.events.length ? [...this.s.events, ...msg.events].slice(-EVENT_CAP) : this.s.events;
         this.set({ state: msg, events });
         break;

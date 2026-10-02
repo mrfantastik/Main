@@ -35,7 +35,22 @@ function compact(v: number, fmt?: (v: number) => string): string {
   return Number(v.toFixed(2)).toString();
 }
 
-export function Sparkline({ values, height = 32, color = SERIES[0], format }: { values: number[]; height?: number; color?: string; format?: (v: number) => string }) {
+export function Sparkline({
+  values,
+  height = 32,
+  color = SERIES[0],
+  format,
+  showValue = true,
+  unit = "h",
+}: {
+  values: number[];
+  height?: number;
+  color?: string;
+  format?: (v: number) => string;
+  showValue?: boolean;
+  /** Time step between points, for the hover label ("h" or " days"). */
+  unit?: string;
+}) {
   const [hover, setHover] = useState<number | null>(null);
   const ref = useRef<SVGSVGElement>(null);
   const W = 300;
@@ -55,15 +70,17 @@ export function Sparkline({ values, height = 32, color = SERIES[0], format }: { 
   };
   return (
     <div className="chart-wrap" style={{ position: "relative" }}>
-      <svg ref={ref} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ height: H }} onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
+      <svg ref={ref} className="plot" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ height: H }} onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
         <path d={`${d}L${x(last)},${H}L${x(0)},${H}Z`} fill={color} opacity={0.1} />
         <path d={d} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
         {hover !== null && <line x1={x(hover)} x2={x(hover)} y1={0} y2={H} stroke={TEXT_2} strokeWidth={1} vectorEffect="non-scaling-stroke" />}
       </svg>
-      <div style={{ position: "absolute", right: 0, top: -2, fontSize: 11, color: "#e6ebf3", fontWeight: 700 }}>
-        {compact(values[hover ?? last], format)}
-        {hover !== null && <span className="muted" style={{ fontWeight: 500 }}> (point {hover + 1})</span>}
-      </div>
+      {(showValue || hover !== null) && (
+        <div style={{ position: "absolute", right: 0, top: -2, fontSize: 11, color: "#e6ebf3", fontWeight: 700, background: showValue ? "transparent" : "#0f141c", padding: showValue ? 0 : "0 4px", borderRadius: 4, pointerEvents: "none" }}>
+          {compact(values[hover ?? last], format)}
+          {hover !== null && <span className="muted" style={{ fontWeight: 500 }}> ({hover - last === 0 ? "now" : `${last - hover}${unit} ago`})</span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -128,7 +145,7 @@ export function LineChart({
           ))}
         </div>
       )}
-      <svg ref={ref} viewBox={`0 0 ${W} ${H}`} style={{ height: "auto" }} onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
+      <svg ref={ref} className="plot" viewBox={`0 0 ${W} ${H}`} style={{ height: "auto" }} onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
         {ticks.map((t) => (
           <g key={t}>
             <line x1={left} x2={W - right} y1={y(t)} y2={y(t)} stroke={GRID} strokeWidth={1} />

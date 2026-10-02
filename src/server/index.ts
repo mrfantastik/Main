@@ -26,6 +26,7 @@ interface Client {
   selected: { kind: "citizen" | "business"; id: string } | null;
   dashboard: boolean;
   lastEventId: number;
+  lastTxId: number;
 }
 
 const clients = new Set<Client>();
@@ -118,6 +119,7 @@ function handle(client: Client, msg: ClientMsg): void {
       runner.world = newWorld(msg.seed);
       for (const c of clients) {
         c.lastEventId = 0;
+        c.lastTxId = 0;
         c.selected = null;
         send(c.ws, hello(runner.world));
       }
@@ -146,7 +148,9 @@ function broadcastState(): void {
   for (const c of clients) {
     const events = world.events.filter((e) => e.id > c.lastEventId).slice(-60);
     if (events.length) c.lastEventId = events[events.length - 1].id;
-    send(c.ws, snap.state(world, { speed: runner.speed, paused: runner.paused, events, ai: aiStatus(world), savedAt: null }));
+    const fx = c.lastTxId > 0 ? snap.moneyFx(world, c.lastTxId) : [];
+    c.lastTxId = world.transactions[world.transactions.length - 1]?.id ?? c.lastTxId;
+    send(c.ws, snap.state(world, { speed: runner.speed, paused: runner.paused, events, ai: aiStatus(world), savedAt: null, fx }));
     if (c.selected) pushDetail(c);
   }
 }
@@ -214,7 +218,7 @@ async function main(): Promise<void> {
     if (req.url?.startsWith("/ws")) wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
   });
   wss.on("connection", (ws) => {
-    const client: Client = { ws, selected: null, dashboard: false, lastEventId: 0 };
+    const client: Client = { ws, selected: null, dashboard: false, lastEventId: 0, lastTxId: 0 };
     clients.add(client);
     send(ws, hello(runner.world));
     // Send recent history so the feed isn't empty.

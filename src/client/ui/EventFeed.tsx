@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { SimEvent } from "../../sim/types";
 import { store, useStore } from "../net/store";
 import { when } from "./format";
+import { Transcript } from "./Transcript";
 
 const FILTERS: { id: string; label: string; cats: string[] }[] = [
   { id: "all", label: "All", cats: [] },
@@ -45,6 +46,21 @@ function EventText({ ev }: { ev: SimEvent }) {
   );
 }
 
+function ConversationToggle({ id }: { id: number }) {
+  useStore((s) => s.state);
+  const conv = store.conversations.get(id);
+  const [open, setOpen] = useState(false);
+  if (!conv) return null;
+  return (
+    <div>
+      <button className="chip" style={{ border: 0, marginTop: 3 }} onClick={() => setOpen(!open)}>
+        {open ? "Hide" : "💬 Read"} conversation{conv.source === "llm" ? " · 🧠 Claude" : ""}
+      </button>
+      {open && <Transcript c={conv} />}
+    </div>
+  );
+}
+
 export function EventFeed() {
   const events = useStore((s) => s.events);
   const [filter, setFilter] = useState("all");
@@ -74,6 +90,7 @@ export function EventFeed() {
               <div className="time">{when(e.t)}</div>
               <div>
                 <EventText ev={e} />
+                {e.conversationId !== undefined && <ConversationToggle id={e.conversationId} />}
               </div>
             </div>
           ))}

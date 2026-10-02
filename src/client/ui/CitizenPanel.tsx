@@ -115,7 +115,7 @@ function Overview({ d }: { d: CitizenDetail }) {
           <div className="muted" style={{ fontSize: 11 }}>
             Net worth, last {d.financeHistory.length} days
           </div>
-          <Sparkline values={d.financeHistory.map((h) => h.netWorth)} height={38} />
+          <Sparkline values={d.financeHistory.map((h) => h.netWorth)} height={38} format={(v) => gbp(v)} unit=" days" />
         </>
       )}
       <div className="section">Personality</div>

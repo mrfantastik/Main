@@ -1,5 +1,6 @@
 import { registerAction } from "../ai/actions";
 import { setThought } from "../ai/decision";
+import { logEvent } from "../events";
 import { remember } from "../memory/memory";
 import { adjustRel } from "../social/relationships";
 import type { WorldState } from "../types";
@@ -69,6 +70,10 @@ export function registerShoppingActions(): void {
         c.wants[pid] = Math.max(0, (c.wants[pid] ?? 0) - 70 * got);
         c.needs.fun = clamp(c.needs.fun + (p.category === "luxury" ? 20 : 8), 0, 100);
         if (p.category === "luxury") remember(world, c, { text: `I bought ${p.name.toLowerCase()} — treated myself.`, kind: "financial", importance: 3, valence: 0.5, people: [], key: `bought:${pid}` });
+        if (p.category === "luxury" || p.category === "durable") {
+          const where = bid ? world.businesses[bid]?.name : "the Marketplace";
+          logEvent(world, "business", `🛍️ ${c.name} bought ${p.emoji} ${p.name.toLowerCase()} at ${where}.`, 1, [c.id], bid);
+        }
         setThought(world, c, p.category === "essential" ? `Stocked up on ${p.name.toLowerCase()}.` : `Got my ${p.name.toLowerCase()}! ${money(c.money)} left.`, 2);
       }
     },

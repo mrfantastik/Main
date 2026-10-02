@@ -233,6 +233,8 @@ export function buyListing(world: WorldState, buyer: Citizen | "external", l: Li
     const profit = round2((l.price - listingCost(l)) * qty);
     creditOccupation(world, l.sellerId, profit);
     payRoyalty(world, to, l.productId, total);
+    const seller = world.citizens[l.sellerId];
+    if (seller && profit >= 15) logEvent(world, "market", `💷 ${seller.name} sold ${qty}× ${pname.toLowerCase()} at the Marketplace (+${money(profit)} profit).`, 1, [seller.id]);
   }
   if (buyer === "external") recordRetailSale(world, l.productId, l.price, qty);
   return qty;

@@ -349,6 +349,8 @@ export function restockBusiness(world: WorldState, b: Business, buyer: Citizen):
     }
   }
   if (buyer.id !== b.ownerId) buyer.skills.management = Math.min(100, buyer.skills.management + 0.1);
+  const bought = parts.filter((x) => /^\d+×/.test(x));
+  if (bought.length) logEvent(world, "business", `📦 ${buyer.name} restocked ${b.name}: ${bought.join(", ")}.`, 1, [buyer.id], b.id);
   return parts.length ? `Restocked ${b.name}: ${parts.join(", ")}.` : `Couldn't restock ${b.name} — no money or no stock at the depot.`;
 }
 

@@ -593,6 +593,20 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
         listener.needs.social = clamp(listener.needs.social + 15, 0, 100);
       }
       conv.summary = `${a.name} and ${b.name} caught up.`;
+      // Notable gossip is news: it's how success spreads (and gets copied).
+      for (const [teller, listener] of [
+        [a, b],
+        [b, a],
+      ] as const) {
+        if (world.time - (teller.cooldowns.brag ?? -1e9) < 12 * 60) continue;
+        const biz = teller.businessIds.map((id) => world.businesses[id]).find((x) => x && x.open);
+        const earn0 = teller.finance.occupationEarnings.slice(-3);
+        if ((biz && biz.avgProfit >= 40) || (earn0.length && earn0.reduce((x, y) => x + y, 0) / earn0.length >= 50)) teller.cooldowns.brag = world.time;
+        if (biz && biz.avgProfit >= 40) return news(`💬 ${teller.name} told ${listener.name} that ${biz.name} makes about ${money(biz.avgProfit)} a day.`, "conversation", 1);
+        const earn = teller.finance.occupationEarnings.slice(-3);
+        const avgEarn = earn.length ? earn.reduce((x, y) => x + y, 0) / earn.length : 0;
+        if (avgEarn >= 50) return news(`💬 ${teller.name} bragged to ${listener.name} about making ${money(avgEarn)} a day as a ${teller.occupation}.`, "conversation", 1);
+      }
       return null;
     },
   },

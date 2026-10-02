@@ -148,6 +148,10 @@ export interface StateMsg {
   ai: AIStatusDTO;
   savedAt: number | null;
   txCount: number;
+  /** Recently finished conversations (for expanding events in the feed). */
+  conversations: ConversationDTO[];
+  /** Money moving around the map since the last update (floating "+£5"). */
+  fx: { x: number; y: number; amount: number }[];
 }
 
 export interface RelationshipDTO {
@@ -268,6 +272,11 @@ export interface DashboardMsg {
   aiLog: (AILogEntry & { citizenName: string })[];
   products: ProductDTO[];
   conversations: ConversationDTO[];
+  /** Hourly wholesale price tape per product (last 48h). */
+  tapes: Record<string, number[]>;
+  /** Major economic news. */
+  econEvents: SimEvent[];
+  market: MarketRow[];
 }
 
 export interface ToastMsg {

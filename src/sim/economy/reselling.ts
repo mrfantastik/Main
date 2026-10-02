@@ -93,6 +93,8 @@ export function runResellerSession(world: WorldState, c: Citizen): string {
   }
 
   c.skills.sales = Math.min(100, c.skills.sales + 0.3);
+  const bought = notes.filter((n) => n.startsWith("picked up"));
+  if (bought.length) logEvent(world, "market", `🔁 ${c.name} ${bought[0]}.`, 2, [c.id]);
   const thought = notes.length ? `At the Marketplace: ${notes.slice(0, 3).join("; ")}.` : "No bargains at the Marketplace today. Everything's overpriced.";
   options.push({ id: "wait", label: "Wait for better deals", factors: { patience: 0.05 }, payload: null, thought });
   const chosen = options.find((o) => notes.some((n) => n.startsWith("picked")) && o.id.startsWith("buy:")) ?? options[options.length - 1];

@@ -715,7 +715,7 @@ table.t td {
 .chart-wrap {
   width: 100%;
 }
-.chart-wrap svg {
+.chart-wrap svg.plot {
   display: block;
   width: 100%;
   overflow: visible;
