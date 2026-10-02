@@ -17,6 +17,7 @@ export function prepareLoadedWorld(raw: unknown): WorldState | null {
   w.shocks ??= [];
   w.inventionPool ??= [];
   w.ai.log ??= [];
+  w.economy.rentIndex ??= 1;
   for (const id of w.citizenOrder) {
     const c = w.citizens[id];
     c.strategyLog ??= [];

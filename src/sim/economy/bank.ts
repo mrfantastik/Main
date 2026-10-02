@@ -211,14 +211,19 @@ export function loansDaily(world: WorldState): void {
     // Willingness to honour the debt (a deterministic, logged-by-event choice).
     const honesty = 0.55 + b.traits.generosity * 0.25 - b.traits.greed * 0.35 + (rel.affinity + rel.trust) / 400 + (b.family.includes(l.lender) ? 0.3 : 0);
     const canPay = liquid >= owed + 5;
-    if (canPay && honesty > 0.3) {
+    // Paying in full when it would leave them with almost nothing for rent and
+    // food is a real temptation: only the very honest do it without blinking.
+    const cushion = 3 * avg(b.finance.history.slice(-5).map((h) => h.expenses));
+    const strained = liquid - owed < cushion;
+    if (canPay && honesty > 0.3 && (!strained || honesty > 0.75)) {
       repay(world, l, owed);
       continue;
     }
-    if (!canPay && liquid > 20 && honesty > 0.3) {
-      // Pay what they can and ask for more time.
-      const part = round2((liquid - 15) * 0.6);
+    if (honesty > 0.3) {
+      // Pay what they can spare and ask for more time.
+      const part = round2((liquid - Math.max(15, canPay ? cushion : 0)) * 0.6);
       if (part > 0) repay(world, l, part);
+      if (l.status !== "active") continue;
     }
     l.missed++;
     if (lender && l.missed === 1) {
@@ -226,7 +231,9 @@ export function loansDaily(world: WorldState): void {
       adjustRel(world, lender, b.id, { trust: -10 });
       lender.cooldowns[`chase:${b.id}`] = world.time;
     }
-    if (l.missed >= 4 || (canPay && honesty <= 0.3)) defaultLoan(world, l);
+    // Someone who has paid back most of it gets more patience.
+    const patience = l.paid >= l.totalDue * 0.5 ? 7 : 4;
+    if (l.missed >= patience || (canPay && honesty <= 0.3)) defaultLoan(world, l);
   }
 }
 

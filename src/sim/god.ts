@@ -19,8 +19,8 @@ import { clamp, money, newId, round2 } from "./util";
 
 export class GodError extends Error {}
 
-const BOOM_DAYS = 4;
-const CRASH_DAYS = 4;
+const BOOM_DAYS = 5;
+const CRASH_DAYS = 6;
 
 export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
   switch (cmd.cmd) {
@@ -179,5 +179,6 @@ export function macroHourly(world: WorldState): void {
     e.corpOpenings = 6;
   }
   const target = e.mode === "boom" ? 1.6 : e.mode === "crash" ? 0.5 : 1;
-  e.multiplier = round2(e.multiplier + (target - e.multiplier) * 0.12);
+  // Snap the last few percent, otherwise rounding leaves it stuck just short of the target.
+  e.multiplier = Math.abs(target - e.multiplier) < 0.05 ? target : round2(e.multiplier + (target - e.multiplier) * 0.12);
 }

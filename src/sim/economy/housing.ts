@@ -15,7 +15,27 @@ export function residentsOf(world: WorldState, buildingId: string): Citizen[] {
 
 export function rentOf(world: WorldState, c: Citizen): number {
   const h = getBuildingIndexed(world.map, c.homeId);
-  return h && !c.homeless ? h.rent : 0;
+  return h && !c.homeless ? round2(h.rent * world.economy.rentIndex) : 0;
+}
+
+/**
+ * Weekly: landlords move rents toward a share of what people actually earn.
+ * A prosperous town gets pricier — which squeezes the people left behind.
+ */
+export function reviewRents(world: WorldState): void {
+  // Landlords price to what the typical tenant can afford: as the median
+  // citizen's cash cushion grows, rents creep up and eat into it (and fall
+  // back when people are struggling). Moves at most ~12% a week.
+  const liquid = world.citizenOrder.map((id) => world.citizens[id].money + world.citizens[id].savings).sort((a, b) => a - b);
+  if (liquid.length === 0) return;
+  const median = liquid[Math.floor(liquid.length / 2)];
+  const target = Math.min(2.5, Math.max(0.85, 0.85 + median / 1500));
+  const before = world.economy.rentIndex;
+  const next = round2(Math.min(before * 1.12, Math.max(before * 0.93, before * 0.6 + target * 0.4)));
+  world.economy.rentIndex = next;
+  const change = next / before - 1;
+  if (change > 0.02) logEvent(world, "life", `🏠 Landlords are raising rents by ${Math.round(change * 100)}% — the town is getting pricier.`, 4);
+  else if (change < -0.02) logEvent(world, "life", `🏠 Rents are coming down ${Math.round(-change * 100)}% as people struggle to pay.`, 3);
 }
 
 /** Pay from cash first, then savings. Returns amount actually paid. */
@@ -92,7 +112,7 @@ export function tryRehouse(world: WorldState, c: Citizen): boolean {
   const options = vacantHomes(world).sort((a, b) => a.rent - b.rent);
   const home = options[0];
   if (!home) return false;
-  const deposit = home.rent;
+  const deposit = round2(home.rent * world.economy.rentIndex);
   if (c.money < deposit + 15) return false;
   if (!transfer(world, citizenAcc(c.id), externalAcc("landlord"), deposit, "rent", `First week's rent at ${home.name}`)) return false;
   c.homeless = false;

@@ -11,7 +11,7 @@ import { registerResellerActions } from "./economy/reselling";
 import { registerShoppingActions, updateWants } from "./economy/shopping";
 import { registerTradingActions } from "./economy/trading";
 import { setThought } from "./ai/decision";
-import { chargeRent, settleArrears } from "./economy/housing";
+import { chargeRent, reviewRents, settleArrears } from "./economy/housing";
 import { corpDaily, registerJobActions } from "./economy/jobs";
 import { netWorth } from "./economy/valuation";
 import { homeOrShelter, payWelfare, registerLivingActions } from "./economy/living";
@@ -127,8 +127,10 @@ function daily(world: WorldState): void {
   businessDaily(world);
   loansDaily(world);
   interestDaily(world);
-  if (day % 7 === 0) chargeRent(world);
-  else settleArrears(world);
+  if (day % 7 === 0) {
+    chargeRent(world);
+    reviewRents(world);
+  } else settleArrears(world);
   marketDaily(world);
   updateWants(world);
 

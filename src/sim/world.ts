@@ -249,6 +249,7 @@ export function createWorld(seed: number, name = "Hustle City"): WorldState {
       servicePool: 0,
       serviceSupplied: 0,
       streetIncome: { ...PUBLIC_INCOME },
+      rentIndex: 1,
     },
     shocks: [],
     conversations: [],

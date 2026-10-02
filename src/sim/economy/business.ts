@@ -361,7 +361,7 @@ export function businessDaily(world: WorldState): void {
   for (const b of openBusinesses(world)) {
     const owner = world.citizens[b.ownerId];
     // Rent.
-    const rent = CONFIG.rent[b.kind];
+    const rent = round2(CONFIG.rent[b.kind] * world.economy.rentIndex);
     let paidRent = true;
     if (b.cash < rent && owner) {
       const need = round2(rent - b.cash);

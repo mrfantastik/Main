@@ -25,6 +25,8 @@ function hash(s: string): number {
 export function updateWants(world: WorldState): void {
   for (const id of world.citizenOrder) {
     const c = world.citizens[id];
+    // Lifestyle creep: the more you have, the more you want.
+    const affluence = 1 + Math.min(2.5, (c.money + c.savings) / 400) * (1 - c.traits.frugality * 0.6);
     for (const pid of world.productOrder) {
       const p = world.products[pid];
       const m = world.market[pid];
@@ -34,7 +36,7 @@ export function updateWants(world: WorldState): void {
       if (p.category === "consumable") rate = 18;
       else if (p.category === "durable") rate = 6;
       else rate = 3.5 * (1 + c.traits.ambition * 0.5 + c.traits.greed * 0.3);
-      c.wants[pid] = clamp((c.wants[pid] ?? 0) + rate * taste * m.trend, 0, 100);
+      c.wants[pid] = clamp((c.wants[pid] ?? 0) + rate * taste * m.trend * (p.category === "consumable" ? 1 : affluence), 0, 100);
     }
   }
 }

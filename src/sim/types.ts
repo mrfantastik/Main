@@ -730,6 +730,8 @@ export interface EconomyState {
   serviceSupplied: number;
   /** "Word on the street": what each occupation actually earns per day lately. */
   streetIncome: Record<string, number>;
+  /** Rent multiplier: landlords push rents up as the town gets richer. */
+  rentIndex: number;
 }
 
 export interface StatPoint {
