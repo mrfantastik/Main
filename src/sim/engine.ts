@@ -18,6 +18,7 @@ import { homeOrShelter, payWelfare, registerLivingActions } from "./economy/livi
 import { registerResearchActions } from "./economy/research";
 import { servicesHourly } from "./economy/services";
 import { decayMemories } from "./memory/memory";
+import { encountersHourly } from "./social/encounters";
 import { decayRelationships } from "./social/relationships";
 import { statsDaily, statsHourly } from "./stats";
 import { moveStep } from "./systems/movement";
@@ -104,6 +105,7 @@ function hourly(world: WorldState): void {
   salesHourly(world);
   const svc = servicesHourly(world);
   agencyHourly(world);
+  encountersHourly(world);
   world.economy.servicePool = round2(svc.pool);
   world.economy.serviceSupplied = round2(svc.supplied);
   for (const id of world.citizenOrder) updateMood(world, world.citizens[id]);

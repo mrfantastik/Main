@@ -351,12 +351,46 @@ export function proposeInvestment(world: WorldState, investor: Citizen, b: Busin
   }
   if (!addPartner(world, b, investor, amount, share)) return false;
   logEvent(world, "finance", `🤝 ${investor.name} invested ${money(amount)} in ${b.name} for a ${pct(share)} stake. ${owner.name} and ${investor.name} are now business partners.`, 4, [investor.id, owner.id], b.id);
-  remember(world, investor, { text: `I invested ${money(amount)} in ${owner.name}'s ${b.name} for ${pct(share)}.`, kind: "deal", importance: 7, valence: 0.5, people: [owner.id] });
+  remember(world, investor, { text: `I invested ${money(amount)} in ${b.name} (${owner.name}'s business) for ${pct(share)}.`, kind: "deal", importance: 7, valence: 0.5, people: [owner.id] });
   remember(world, owner, { text: `${investor.name} invested ${money(amount)} in ${b.name}.`, kind: "deal", importance: 7, valence: 0.7, people: [investor.id] });
   adjustRel(world, owner, investor.id, { affinity: 10, trust: 10, familiarity: 10 });
   adjustRel(world, investor, owner.id, { affinity: 6, trust: 6, familiarity: 10 });
   return true;
 }
 
+// ------------------------------------------------- working for someone
+
+function employeeOptions(world: WorldState, c: Citizen): StrategyOption[] {
+  if (c.occupation !== "employee" || !c.employerId || c.employerId === "corp") return [];
+  const b = world.businesses[c.employerId];
+  if (!b) return [];
+  const boss = world.citizens[b.ownerId];
+  const rel = boss ? peekRel(c, boss.id) : undefined;
+  const unpaid = c.unpaidWages;
+  const dislike = rel ? Math.max(0, -rel.affinity) : 0;
+  if (unpaid <= 0 && dislike < 25) return [];
+  return [
+    {
+      id: "quit",
+      label: `Quit ${b.name}`,
+      factors: { unpaid: Math.min(1, unpaid / 40), dislike: dislike / 80, security: -(1 - c.traits.risk) * 0.3, loyalty: -(rel?.trust ?? 0) / 200 },
+      payload: {
+        stakes: c.wage * 7,
+        execute: (w, cc) => {
+          leaveJob(w, cc, "quit");
+          logEvent(w, "job", `🚪 ${cc.name} quit ${b.name}${unpaid > 0 ? ` (owed ${money(unpaid)} in wages)` : ""}.`, 3, [cc.id, b.ownerId], b.id);
+          if (boss) {
+            remember(w, cc, { text: `I quit working for ${boss.name}${unpaid > 0 ? " — they never paid me properly" : ""}.`, kind: "job", importance: 6, valence: -0.5, people: [boss.id] });
+            remember(w, boss, { text: `${cc.name} quit ${b.name}.`, kind: "business", importance: 4, valence: -0.3, people: [cc.id] });
+            adjustRel(w, boss, cc.id, { affinity: -5 });
+          }
+        },
+      },
+      thought: unpaid > 0 ? `${boss?.name ?? "The boss"} owes me ${money(unpaid)}. I'm done working for free.` : `I can't stand working for ${boss?.name ?? "this boss"} any more.`,
+    },
+  ];
+}
+
 registerStrategyProvider(businessOptions);
+registerStrategyProvider(employeeOptions);
 registerStrategyProvider(moneyOptions);

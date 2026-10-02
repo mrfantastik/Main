@@ -80,7 +80,8 @@ export function decayMemories(c: Citizen): void {
     m.strength = clamp(m.strength - rate, 0, 1);
   }
   c.memories.long = c.memories.long.filter((m) => m.strength > 0.08 || m.importance >= 9);
-  for (const m of c.memories.short) m.strength = clamp(m.strength - 0.25, 0, 1);
+  const longIds = new Set(c.memories.long.map((m) => m.id));
+  for (const m of c.memories.short) if (!longIds.has(m.id)) m.strength = clamp(m.strength - 0.25, 0, 1);
 }
 
 /** What do I remember about this person? Most significant first. */

@@ -134,7 +134,30 @@ export function createBusiness(world: WorldState, owner: Citizen, kind: Business
   const what = kind === "agency" ? "a digital agency" : kind === "cafe" ? "a café" : `a ${KIND_INFO[kind].noun} selling ${products.map((p) => world.products[p].name.toLowerCase()).join(" & ")}`;
   logEvent(world, "business", `🏪 ${owner.name} opened ${b.name} — ${what}.`, 4, [owner.id], id);
   remember(world, owner, { text: `I opened ${b.name} with ${money(capital)}.`, kind: "business", importance: 8, valence: 0.8, people: [] });
+  markRivals(world, b);
   return b;
+}
+
+/** Owners selling the same things become rivals. */
+function markRivals(world: WorldState, b: Business): void {
+  const owner = world.citizens[b.ownerId];
+  if (!owner || b.products.length === 0) return;
+  for (const other of openBusinesses(world)) {
+    if (other.id === b.id || other.ownerId === owner.id) continue;
+    const shared = other.products.filter((p) => b.products.includes(p));
+    if (shared.length === 0) continue;
+    const rival = world.citizens[other.ownerId];
+    if (!rival) continue;
+    const what = world.products[shared[0]].name.toLowerCase();
+    addRole(owner, rival.id, "rival");
+    addRole(rival, owner.id, "rival");
+    adjustRel(world, rival, owner.id, { affinity: -4 - rival.traits.competitiveness * 10, familiarity: 5 });
+    adjustRel(world, owner, rival.id, { familiarity: 5 });
+    remember(world, rival, { text: `${owner.name} opened ${b.name} selling ${what} — competing with my ${other.name}.`, kind: "business", importance: 6, valence: -0.5, people: [owner.id], key: `rival:${owner.id}` });
+    if (rival.traits.competitiveness > 0.6) {
+      logEvent(world, "business", `⚔️ ${rival.name} isn't happy: ${owner.name} is now selling ${what} too.`, 3, [rival.id, owner.id], b.id);
+    }
+  }
 }
 
 /** Everyone working at the business right now (owner or staff, on shift). */

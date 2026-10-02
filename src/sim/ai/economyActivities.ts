@@ -1,6 +1,7 @@
 import { CONFIG } from "../config";
 import { expectedDailySales, KIND_INFO, openBusinesses, staffOnDuty } from "../economy/business";
 import { hourWeight, listingsFor, refPrice } from "../economy/market";
+import { rememberBetrayal } from "../memory/memory";
 import { peekRel } from "../social/relationships";
 import type { Business, Citizen, WorldState } from "../types";
 import { money } from "../util";
@@ -207,7 +208,8 @@ function shoppingOptions(world: WorldState, c: Citizen, s: Situation): ActivityO
       const owner = world.citizens[b.ownerId] ?? null;
       const rel = owner ? peekRel(c, owner.id) : undefined;
       const price = b.prices[pid];
-      const score = -(price / ref - 1) * 2 + (b.reputation - 50) / 100 + (rel ? rel.affinity / 120 : 0) + travelPenalty(world, c, b.buildingId);
+      const grudge = owner && rememberBetrayal(c, owner.id) ? -1.2 : 0;
+      const score = -(price / ref - 1) * 2 + (b.reputation - 50) / 100 + (rel ? rel.affinity / 120 : 0) + grudge + travelPenalty(world, c, b.buildingId);
       if (!best || score > best.score) best = { score, label: b.name, bid: b.id, price, where: b.buildingId, owner };
     }
     if (h < 19) {

@@ -3,6 +3,7 @@ import { getBuildingIndexed } from "../city/lookup";
 import { corpOpenings } from "../economy/jobs";
 import { homeOrShelter } from "../economy/living";
 import { travelMinutes } from "../systems/movement";
+import { friendsAt } from "../social/encounters";
 import { MIN_PER_DAY, startOfDay } from "../time";
 import type { Citizen, Occupation, PlannedAction, WorldState } from "../types";
 import { money } from "../util";
@@ -114,8 +115,11 @@ function needsOptions(world: WorldState, c: Citizen, s: Situation): ActivityOpti
     }
   }
 
-  // --- go out
+  // --- go out (people prefer places where their friends are)
   const hasDuty = c.occupation === "employee" && h >= 9 && h < 17 && c.workedToday < 300;
+  const pubFriends = friendsAt(world, c, "pub");
+  const parkFriends = friendsAt(world, c, "park");
+  const friendThought = (list: Citizen[], fallback: string) => (list.length ? `${list[0].name}${list.length > 1 ? ` and ${list.length - 1} other friend${list.length > 2 ? "s" : ""}` : ""} ${list.length > 1 ? "are" : "is"} there. Let's go.` : fallback);
   if (h >= 11 || h < 1) {
     out.push(
       opt(
@@ -127,10 +131,11 @@ function needsOptions(world: WorldState, c: Citizen, s: Situation): ActivityOpti
           evening: h >= 18 || h < 1 ? 0.5 : h >= 12 && h < 14 ? 0.1 : -0.1,
           cost: -costPenalty(c, s, CONFIG.pubDrinkPrice),
           duty: hasDuty ? -0.6 : 0,
+          friends: Math.min(0.6, pubFriends.length * 0.22),
           travel: travelPenalty(world, c, "pub"),
         },
         makeAction("SOCIALIZE", "pub", 75 + Math.round(c.traits.sociability * 60), "At the pub"),
-        s.lonely > 0.6 ? "I need to see some people. Pub?" : "A pint and a chat would be nice.",
+        friendThought(pubFriends, s.lonely > 0.6 ? "I need to see some people. Pub?" : "A pint and a chat would be nice."),
       ),
     );
   }
@@ -139,9 +144,9 @@ function needsOptions(world: WorldState, c: Citizen, s: Situation): ActivityOpti
       opt(
         "park_social",
         "Hang out in the park",
-        { lonely: s.lonely * (0.4 + c.traits.sociability) * 0.9, bored: s.bored * 0.35, daytime: 0.12, duty: hasDuty ? -0.6 : 0, travel: travelPenalty(world, c, "park") },
+        { lonely: s.lonely * (0.4 + c.traits.sociability) * 0.9, bored: s.bored * 0.35, daytime: 0.12, duty: hasDuty ? -0.6 : 0, friends: Math.min(0.5, parkFriends.length * 0.2), travel: travelPenalty(world, c, "park") },
         makeAction("SOCIALIZE", "park", 60, "Hanging out in the park"),
-        "It's a nice day for the park. Maybe I'll bump into someone.",
+        friendThought(parkFriends, "It's a nice day for the park. Maybe I'll bump into someone."),
       ),
     );
     out.push(
