@@ -1,0 +1,35 @@
+{
+  "name": "ai-hustle-city",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A persistent virtual city of autonomous AI agents building an emergent economy.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "tsx src/server/index.ts",
+    "dev": "tsx src/server/index.ts",
+    "build": "vite build",
+    "serve": "vite build && tsx src/server/index.ts --prod",
+    "sim": "tsx scripts/headless.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@types/ws": "^8.18.2",
+    "@vitejs/plugin-react": "^6.1.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2"
+  }
+}
