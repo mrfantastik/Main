@@ -1,5 +1,6 @@
 import { store, useStore } from "../net/store";
 import { AIPanel } from "./AIPanel";
+import { GodPanel } from "./GodPanel";
 
 function Shell({ title, children, drawer }: { title: string; children: React.ReactNode; drawer?: boolean }) {
   return (
@@ -46,7 +47,7 @@ export function Overlays() {
   const panel = useStore((s) => s.panel);
   if (panel === "help") return <Help />;
   if (panel === "dashboard") return <Shell title="📊 Economy dashboard">Coming soon.</Shell>;
-  if (panel === "god") return <Shell title="⚡ God Mode" drawer>Coming soon.</Shell>;
+  if (panel === "god") return <GodPanel />;
   if (panel === "ai") return <AIPanel />;
   return null;
 }

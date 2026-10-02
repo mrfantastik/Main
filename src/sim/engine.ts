@@ -18,6 +18,7 @@ import { homeOrShelter, payWelfare, registerLivingActions } from "./economy/livi
 import { registerResearchActions } from "./economy/research";
 import { servicesHourly } from "./economy/services";
 import { decayMemories } from "./memory/memory";
+import { macroHourly } from "./god";
 import { conversationsTick, registerConversationActions, startOpportunisticConversations } from "./social/conversation";
 import { encountersHourly } from "./social/encounters";
 import "./ai/socialActivities";
@@ -107,6 +108,7 @@ function think(world: WorldState, c: Citizen): void {
 }
 
 function hourly(world: WorldState): void {
+  macroHourly(world);
   marketHourly(world);
   salesHourly(world);
   const svc = servicesHourly(world);

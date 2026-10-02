@@ -1,7 +1,7 @@
 // Interfaces and prompt builders for the (optional) LLM layer.
 // The simulation never imports an SDK: the server injects an LLMClient.
 
-import { getBuildingIndexed } from "../city/lookup";
+import { placeName } from "../places";
 import { recallAbout } from "../memory/memory";
 import { formatTime } from "../time";
 import type { Citizen, Conversation, WorldState } from "../types";
@@ -112,7 +112,7 @@ export const CONVERSATION_SYSTEM =
 export function conversationPrompt(world: WorldState, conv: Conversation, brief: string, outcomeSchema: Record<string, unknown>): { user: string; schema: Record<string, unknown> } {
   const a = world.citizens[conv.a];
   const b = world.citizens[conv.b];
-  const place = getBuildingIndexed(world.map, conv.buildingId)?.name ?? "town";
+  const place = placeName(world, conv.buildingId);
   const rel = (x: Citizen, y: Citizen) => {
     const r = x.relationships[y.id];
     return r ? `${relLabel(r).toLowerCase()} (affinity ${Math.round(r.affinity)}, trust ${Math.round(r.trust)})` : "strangers";

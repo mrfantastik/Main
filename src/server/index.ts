@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { AIStatusDTO, ClientMsg, HelloMsg, ServerMsg } from "../shared/protocol";
 import { newWorld as createWorld } from "../sim";
+import { applyGodCommand, GodError } from "../sim/god";
 import * as snap from "../sim/snapshot";
 import type { WorldState } from "../sim/types";
 import { AIDirector } from "../sim/ai/director";
@@ -94,6 +95,15 @@ function handle(client: Client, msg: ClientMsg): void {
       client.dashboard = msg.open;
       if (msg.open) send(client.ws, snap.dashboard(world));
       break;
+    case "god": {
+      try {
+        const text = applyGodCommand(world, msg.command);
+        send(client.ws, { type: "toast", text: `⚡ ${text}`, level: "info" });
+      } catch (err) {
+        send(client.ws, { type: "toast", text: err instanceof GodError ? err.message : `God mode failed: ${(err as Error).message}`, level: "error" });
+      }
+      break;
+    }
     case "ai": {
       if (msg.mode) {
         if (msg.mode === "llm" && !director.available) {

@@ -9,6 +9,7 @@ import { hireAtBusiness } from "../economy/jobs";
 import { citizenAcc, creditOccupation, transfer } from "../economy/ledger";
 import { addStock, removeStock } from "../economy/market";
 import { logEvent } from "../events";
+import { placeName } from "../places";
 import { remember, rememberBetrayal } from "../memory/memory";
 import { chance, rand, type RngHolder } from "../rng";
 import { dayOf } from "../time";
@@ -598,7 +599,7 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
 };
 
 function placeLabel(world: WorldState, conv: Conversation): string {
-  return getBuildingIndexed(world.map, conv.buildingId)?.name ?? "town";
+  return placeName(world, conv.buildingId);
 }
 
 // ------------------------------------------------------- lifecycle

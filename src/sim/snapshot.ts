@@ -13,6 +13,7 @@ import type {
   StateMsg,
 } from "../shared/protocol";
 import { getBuildingIndexed } from "./city/lookup";
+import { placeName } from "./places";
 import { employerName } from "./economy/jobs";
 import { findTx } from "./economy/ledger";
 import { debtsOf, netWorth } from "./economy/valuation";
@@ -202,14 +203,6 @@ function loanDTO(world: WorldState, l: Loan): LoanDTO {
     status: l.status,
     purpose: l.purpose,
   };
-}
-
-/** Building name, or the business occupying it (e.g. "Mike's Café" instead of "Unit 2"). */
-export function placeName(world: WorldState, buildingId: string): string {
-  const b = getBuildingIndexed(world.map, buildingId);
-  if (!b) return buildingId;
-  if (b.businessId && world.businesses[b.businessId]?.open) return world.businesses[b.businessId].name;
-  return b.name;
 }
 
 export function citizenDetail(world: WorldState, id: string): CitizenDetail | null {

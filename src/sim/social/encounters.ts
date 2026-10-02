@@ -1,5 +1,6 @@
 import { getBuildingIndexed } from "../city/lookup";
 import { logEvent } from "../events";
+import { placeName } from "../places";
 import { remember } from "../memory/memory";
 import { chance, randRange } from "../rng";
 import type { ActivityKind, Citizen, WorldState } from "../types";
@@ -70,7 +71,7 @@ export function encountersHourly(world: WorldState): void {
   }
   for (const [placeId, people] of byPlace) {
     if (people.length < 2) continue;
-    const place = getBuildingIndexed(world.map, placeId)?.name ?? "town";
+    const place = placeName(world, placeId);
     for (let i = 0; i < people.length; i++) {
       for (let j = i + 1; j < people.length; j++) {
         const a = people[i];

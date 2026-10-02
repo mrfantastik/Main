@@ -1,3 +1,4 @@
+import { placeName } from "../places";
 import { meetOptions } from "../social/conversation";
 import { makeAction } from "./actions";
 import { registerActivityProvider, travelPenalty } from "./activity";
@@ -25,7 +26,7 @@ registerActivityProvider((world, c, s) => {
       label: `Find ${target.name} to ${VERB[agenda.topic] ?? "talk"}`,
       factors: { urgency: agenda.urgency * 1.3, pressure: s.pressure * 0.3, travel: travelPenalty(world, c, where) },
       payload: makeAction("MEET", where, 10, `Looking for ${target.name}`, { targetId: target.id, topic: agenda.topic, ...agenda.params }),
-      thought: `${agenda.reason}. ${target.name} is at the ${world.map.buildings.find((b) => b.id === where)?.name ?? "usual place"} — I'll go and ${VERB[agenda.topic] ?? "talk to them"}.`,
+      thought: `${agenda.reason}. ${target.name} is at ${placeName(world, where)} — I'll go and ${VERB[agenda.topic] ?? "talk to them"}.`,
       priority: 3,
     },
   ];
