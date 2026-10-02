@@ -400,6 +400,9 @@ export interface Citizen {
   goal: Goal;
   thought: string;
   thoughtSource: "utility" | "llm";
+  thoughtT: number;
+  /** 1 mundane, 2 urgent need, 3 strategic/social, 4 major life event. */
+  thoughtPriority: number;
 
   memories: { short: Memory[]; long: Memory[] };
   relationships: Record<CitizenId, Relationship>;
@@ -409,7 +412,10 @@ export interface Citizen {
   finance: CitizenFinance;
   /** Ids of recent transactions involving this citizen. */
   txIds: number[];
+  /** Recent tactical decisions (what to do next). */
   decisions: DecisionRecord[];
+  /** Recent strategic decisions (career, business, money) — kept longer. */
+  strategyLog: DecisionRecord[];
 
   research: { points: number; breakthroughs: number; patents: ProductId[] };
   lastReviewT: number;
@@ -698,6 +704,8 @@ export interface EconomyState {
   /** Last hour of the services market: work on offer vs. work delivered. */
   servicePool: number;
   serviceSupplied: number;
+  /** "Word on the street": what each occupation actually earns per day lately. */
+  streetIncome: Record<string, number>;
 }
 
 export interface StatPoint {

@@ -139,6 +139,7 @@ export function registerJobActions(): void {
   registerAction("APPLY_FOR_JOB", {
     kind: "job_hunt",
     complete(world, c, a: PlannedAction, minutes) {
+      c.cooldowns.jobHunt = world.time;
       if (minutes < 20) return;
       const target = String(a.params.target ?? "corp");
       if (target === "corp") {

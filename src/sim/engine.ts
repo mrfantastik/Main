@@ -1,5 +1,7 @@
 import { beginAction, finishActivity, makeAction, startActivity, tickActivity } from "./ai/actions";
+import { updateBeliefsDaily } from "./ai/beliefs";
 import { decideNext } from "./ai/brain";
+import { setThought } from "./ai/decision";
 import { chargeRent } from "./economy/housing";
 import { corpDaily, registerJobActions } from "./economy/jobs";
 import { netWorth } from "./economy/valuation";
@@ -74,6 +76,7 @@ function think(world: WorldState, c: Citizen): void {
   const action = decideNext(world, c);
   const err = beginAction(world, c, action);
   if (err) {
+    setThought(world, c, `I wanted to ${action.label.toLowerCase()}, but: ${err.toLowerCase()}.`, 2);
     // The engine refused the plan (e.g. can't afford it): fall back to resting.
     const fallback = makeAction("REST", c.insideId ?? homeOrShelter(world, c), 30, "Taking a breather");
     if (beginAction(world, c, fallback)) {
@@ -109,5 +112,6 @@ function daily(world: WorldState): void {
     decayMemories(c);
     decayRelationships(world, c);
   }
+  updateBeliefsDaily(world);
   statsDaily(world);
 }

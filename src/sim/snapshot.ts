@@ -260,7 +260,7 @@ export function citizenDetail(world: WorldState, id: string): CitizenDetail | nu
       .filter((t): t is Transaction => !!t)
       .slice(0, 20)
       .map((t) => txDTO(world, t)),
-    decisions: [...c.decisions].reverse().slice(0, 12),
+    decisions: [...c.strategyLog.slice(-8), ...c.decisions.slice(-10)].sort((a, b) => b.t - a.t),
     financeHistory: c.finance.history.slice(-30),
     loans: world.loans.filter((l) => (l.borrower === c.id || l.lender === c.id) && (l.status === "active" || world.time - l.dueT < 3 * 1440)).map((l) => loanDTO(world, l)),
     research: { points: Math.round(c.research.points), threshold: breakthroughThreshold(c), breakthroughs: c.research.breakthroughs, patents: c.research.patents },
