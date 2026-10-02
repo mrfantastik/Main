@@ -186,6 +186,14 @@ function loanDTO(world: WorldState, l: Loan): LoanDTO {
   };
 }
 
+/** Building name, or the business occupying it (e.g. "Mike's Café" instead of "Unit 2"). */
+export function placeName(world: WorldState, buildingId: string): string {
+  const b = getBuildingIndexed(world.map, buildingId);
+  if (!b) return buildingId;
+  if (b.businessId && world.businesses[b.businessId]?.open) return world.businesses[b.businessId].name;
+  return b.name;
+}
+
 export function citizenDetail(world: WorldState, id: string): CitizenDetail | null {
   const c = world.citizens[id];
   if (!c) return null;
@@ -215,7 +223,7 @@ export function citizenDetail(world: WorldState, id: string): CitizenDetail | nu
     home: c.homeId ? getBuildingIndexed(world.map, c.homeId)?.name ?? null : null,
     homeless: c.homeless,
     rentArrears: c.rentArrears,
-    location: inside ? inside.name : dest ? `On the way to ${dest.name}` : "Out and about",
+    location: inside ? placeName(world, inside.id) : dest ? `On the way to ${placeName(world, dest.id)}` : "Out and about",
     activity: c.activity.label,
     goal: c.goal,
     thought: c.thought,

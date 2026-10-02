@@ -134,7 +134,7 @@ export class Renderer {
     let bestD = 14;
     for (const [id, p] of this.positions) {
       const s = this.cam.worldToScreen(p.x, p.y);
-      const d = Math.hypot(s.x - sx, s.y - sy) - (p.inside ? 0 : 4);
+      const d = Math.hypot(s.x - sx, s.y - sy) + (p.inside ? 7 : -4);
       if (d < bestD) {
         bestD = d;
         best = id;

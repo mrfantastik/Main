@@ -22,6 +22,8 @@ export interface CareerTarget {
   label(world: WorldState, c: Citizen): string;
   /** Perform the switch. */
   execute(world: WorldState, c: Citizen): void;
+  /** Optional: explain the idea in the citizen's own words. */
+  thought?(world: WorldState, c: Citizen): string | null;
 }
 
 const targets = new Map<Occupation, CareerTarget>();
@@ -69,7 +71,7 @@ export function currentExpected(world: WorldState, c: Citizen): number {
 }
 
 export function fitScore(c: Citizen, occ: Occupation): number {
-  return (occupationFit(c.traits, occ) - 1.1) * 0.45;
+  return (occupationFit(c.traits, occ) - 1.1) * 0.6;
 }
 
 // ---------------------------------------------------- built-in careers
@@ -92,7 +94,8 @@ registerCareer({
     const researchers = world.citizenOrder.filter((id) => world.citizens[id].occupation === "researcher").length;
     return researchers < world.economy.labPlaces ? null : "the Lab has no places";
   },
-  expected: (world) => world.economy.grant * 1.05,
+  // The grant, plus a dream of inventing something big (ambitious people dream bigger).
+  expected: (world, c) => world.economy.grant * 1.05 + c.traits.ambition * 12 + (c.skills.research / 100) * 10,
   startCost: () => 0,
   label: () => "Join the Research Lab",
   execute: (world, c) => changeCareer(world, c, "researcher", "The Lab had a place and I want to invent something."),

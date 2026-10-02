@@ -1,8 +1,17 @@
 import { beginAction, finishActivity, makeAction, startActivity, tickActivity } from "./ai/actions";
 import { updateBeliefsDaily } from "./ai/beliefs";
 import { decideNext } from "./ai/brain";
+import "./ai/economyActivities";
+import "./ai/economyStrategy";
+import { interestDaily, loansDaily, registerBankActions } from "./economy/bank";
+import { agencyHourly, businessDaily, salesHourly } from "./economy/business";
+import { marketDaily, marketHourly } from "./economy/market";
+import { registerOperationsActions } from "./economy/operations";
+import { registerResellerActions } from "./economy/reselling";
+import { registerShoppingActions, updateWants } from "./economy/shopping";
+import { registerTradingActions } from "./economy/trading";
 import { setThought } from "./ai/decision";
-import { chargeRent } from "./economy/housing";
+import { chargeRent, settleArrears } from "./economy/housing";
 import { corpDaily, registerJobActions } from "./economy/jobs";
 import { netWorth } from "./economy/valuation";
 import { homeOrShelter, payWelfare, registerLivingActions } from "./economy/living";
@@ -27,6 +36,11 @@ export function initEngine(): void {
   registerLivingActions();
   registerJobActions();
   registerResearchActions();
+  registerBankActions();
+  registerTradingActions();
+  registerResellerActions();
+  registerOperationsActions();
+  registerShoppingActions();
 }
 
 /** Advance the world by one game minute. */
@@ -86,7 +100,10 @@ function think(world: WorldState, c: Citizen): void {
 }
 
 function hourly(world: WorldState): void {
+  marketHourly(world);
+  salesHourly(world);
   const svc = servicesHourly(world);
+  agencyHourly(world);
   world.economy.servicePool = round2(svc.pool);
   world.economy.serviceSupplied = round2(svc.supplied);
   for (const id of world.citizenOrder) updateMood(world, world.citizens[id]);
@@ -97,7 +114,13 @@ function daily(world: WorldState): void {
   const day = dayOf(world.time - 1);
   payWelfare(world);
   corpDaily(world);
+  businessDaily(world);
+  loansDaily(world);
+  interestDaily(world);
   if (day % 7 === 0) chargeRent(world);
+  else settleArrears(world);
+  marketDaily(world);
+  updateWants(world);
 
   for (const id of world.citizenOrder) {
     const c = world.citizens[id];

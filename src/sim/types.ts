@@ -478,7 +478,10 @@ export interface ProductMarket {
   soldTotal: number;
   /** Units visitors wanted but nobody in town could sell. */
   unmetToday: number;
+  unmetYesterday: number;
   history: PricePoint[];
+  /** Hourly wholesale prices, last 48 hours (the traders' price tape). */
+  tape: number[];
   /** Net units bought by traders recently (moves prices). */
   traderPressure: number;
 }
@@ -490,6 +493,8 @@ export interface Listing {
   qty: number;
   price: number;
   listedT: number;
+  /** Seller's cost basis per unit (for profit accounting). */
+  cost: number;
 }
 
 export type BusinessKind = "shop" | "stall" | "cafe" | "agency";
@@ -557,6 +562,14 @@ export interface Business {
   ownerInvested: number;
   /** Agency service revenue accrued this hour (booked hourly). */
   agencyEarned: number;
+  /** Smoothed units sold per day, per product. */
+  salesAvg: Record<ProductId, number>;
+  /** Customers who wanted to buy but the business was full/closed/out of stock (today). */
+  missedToday: number;
+  missedYesterday: number;
+  /** Shopping hours in which someone was serving. */
+  staffedHoursToday: number;
+  staffedHoursYesterday: number;
 }
 
 export interface Loan {

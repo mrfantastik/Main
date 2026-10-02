@@ -5,8 +5,17 @@ import type { Citizen, WorldState } from "../types";
 import { clamp } from "../util";
 import { citizenAcc, externalAcc, transfer } from "./ledger";
 import { remember } from "../memory/memory";
+import { buyFromBusiness } from "./business";
 
 // Everyday life: eating, sleeping, resting, going out.
+
+function withdrawForSpending(c: Citizen, amount: number): void {
+  const need = Math.min(c.savings, amount - c.money);
+  if (need > 0) {
+    c.savings = Math.round((c.savings - need) * 100) / 100;
+    c.money = Math.round((c.money + need) * 100) / 100;
+  }
+}
 
 export function homeOrShelter(world: WorldState, c: Citizen): string {
   if (c.homeId && !c.homeless) return c.homeId;
@@ -27,15 +36,24 @@ export function registerLivingActions(): void {
     validate(world, c, a) {
       const venue = String(a.params.venue ?? "diner");
       if (venue === "home") return (c.inventory.food?.qty ?? 0) >= 1 ? null : "No food at home";
-      if (venue === "diner") return c.money >= CONFIG.dinerMealPrice ? null : "Can't afford the diner";
-      return "Unknown place to eat";
+      if (venue === "diner") return c.money + c.savings >= CONFIG.dinerMealPrice ? null : "Can't afford the diner";
+      const b = world.businesses[venue];
+      if (!b || !b.open) return "That café has closed";
+      return c.money + c.savings >= (b.prices.food ?? 999) ? null : "Can't afford it";
     },
     complete(world, c, a, minutes) {
       if (minutes < 10) return;
       const venue = String(a.params.venue ?? "diner");
       let ate = false;
       if (venue === "home") ate = eatAtHome(c);
-      else if (venue === "diner") ate = !!transfer(world, citizenAcc(c.id), externalAcc("diner"), CONFIG.dinerMealPrice, "meal", "Meal at City Diner");
+      else if (venue === "diner") {
+        if (c.money < CONFIG.dinerMealPrice) withdrawForSpending(c, CONFIG.dinerMealPrice);
+        ate = !!transfer(world, citizenAcc(c.id), externalAcc("diner"), CONFIG.dinerMealPrice, "meal", "Meal at City Diner");
+      } else {
+        const b = world.businesses[venue];
+        if (b) ate = buyFromBusiness(world, b, c, "food", 1, true) > 0;
+        if (b && !ate) b.missedToday++;
+      }
       if (!ate && eatAtHome(c)) ate = true;
       if (ate) {
         c.needs.hunger = clamp(c.needs.hunger + 62, 0, 100);

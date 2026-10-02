@@ -19,7 +19,7 @@ export const CONFIG = {
   // ---- incomes
   corpBaseWage: 42,
   corpOpenings: 6,
-  grant: 30,
+  grant: 34,
   labPlaces: 3,
   welfare: 8,
   /** £ of freelance/agency work demanded per day in a normal economy. */

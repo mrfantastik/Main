@@ -56,6 +56,22 @@ export function chargeRent(world: WorldState): void {
   }
 }
 
+/** Daily: anyone in arrears pays the landlord back as soon as they can. */
+export function settleArrears(world: WorldState): void {
+  for (const id of world.citizenOrder) {
+    const c = world.citizens[id];
+    if (c.rentArrears <= 0 || c.homeless) continue;
+    const pay = Math.min(c.rentArrears, Math.max(0, c.money + c.savings - 10));
+    if (pay <= 0) continue;
+    const paid = payExternal(world, c, round2(pay), "landlord", "Paid off rent arrears");
+    c.rentArrears = round2(c.rentArrears - paid);
+    if (c.rentArrears <= 0.01) {
+      c.rentArrears = 0;
+      remember(world, c, { text: "I finally paid off my rent arrears.", kind: "financial", importance: 5, valence: 0.6, people: [], key: "rent-arrears" });
+    }
+  }
+}
+
 export function evict(world: WorldState, c: Citizen): void {
   c.homeless = true;
   c.homeId = null;

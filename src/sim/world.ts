@@ -207,7 +207,9 @@ export function initProductMarket(p: Product, trend = 1): ProductMarket {
     revenueToday: 0,
     soldTotal: 0,
     unmetToday: 0,
+    unmetYesterday: 0,
     history: [],
+    tape: [p.baseCost],
     traderPressure: 0,
   };
 }

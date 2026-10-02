@@ -57,7 +57,8 @@ export function pickGoal(world: WorldState, c: Citizen, s: Situation): Goal {
     since: c.goal.kind === kind ? c.goal.since : t,
   });
   if (c.homeless) return g("survive", "Get off the streets: save for a deposit", s.rent || 40);
-  if (c.rentArrears > 0 || (s.rentDueIn <= 2 && s.liquid < s.rent)) return g("pay_rent", `Find ${money(Math.max(s.rent, c.rentArrears) - s.liquid)} for rent`, s.rent);
+  const rentGap = Math.max(s.rent, c.rentArrears) - s.liquid;
+  if (rentGap > 0 && (c.rentArrears > 0 || s.rentDueIn <= 2)) return g("pay_rent", `Find ${money(rentGap)} for rent`, s.rent);
   const debt = world.loans.filter((l) => l.borrower === c.id && l.status === "active").reduce((a, l) => a + l.totalDue - l.paid, 0);
   if (debt > s.liquid * 0.8 && debt > 30) return g("repay_debt", `Pay back ${money(debt)} of debt`, debt);
   if (c.occupation === "unemployed") return g("find_job", "Find a job or a way to earn", null);
@@ -122,7 +123,7 @@ function careerOptions(world: WorldState, c: Citizen, s: Situation): StrategyOpt
     const gain = (expected - cur) / Math.max(25, cur);
     const story = inspiringStory(c, target.occupation, cur);
     const factors: Record<string, number> = {
-      gain: gain * (0.5 + c.traits.ambition * 0.8 + s.pressure * 0.4),
+      gain: Math.min(1.2, gain * (0.35 + c.traits.ambition * 0.6 + s.pressure * 0.4)),
       fit: fitScore(c, target.occupation),
       risk: -target.risk * (1 - c.traits.risk) * 0.7,
       switching: -(0.3 + c.traits.frugality * 0.1),
@@ -135,7 +136,7 @@ function careerOptions(world: WorldState, c: Citizen, s: Situation): StrategyOpt
       label: `${target.label(world, c)} (expect ~${money(expected)}/day)`,
       factors,
       payload: { stakes: Math.max(cost, expected * 7), execute: (w, cc) => target.execute(w, cc) },
-      thought: careerThought(world, c, target.occupation, expected, cur),
+      thought: (story ? null : target.thought?.(world, c)) ?? careerThought(world, c, target.occupation, expected, cur),
     });
   }
   return out;

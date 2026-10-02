@@ -14,7 +14,8 @@ export function inventoryValue(world: WorldState, inv: Inventory): number {
 
 export function businessValue(world: WorldState, b: Business): number {
   if (!b.open) return 0;
-  return round2(Math.max(0, b.cash + inventoryValue(world, b.inventory) + Math.max(0, b.avgProfit) * 10 - b.unpaidWages));
+  const goodwill = b.history.length >= 3 ? Math.max(0, b.avgProfit) * 4 : 0;
+  return round2(Math.max(0, b.cash + inventoryValue(world, b.inventory) + goodwill - b.unpaidWages));
 }
 
 /** Fraction of a business owned by its founder (partners hold the rest). */

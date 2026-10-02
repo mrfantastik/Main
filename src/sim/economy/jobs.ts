@@ -6,6 +6,7 @@ import { addRole, adjustRel, removeRole } from "../social/relationships";
 import type { Citizen, PlannedAction, WorldState } from "../types";
 import { money, pushRing, round2 } from "../util";
 import { businessAcc, citizenAcc, creditOccupation, externalAcc, transfer } from "./ledger";
+import { considerApplicant } from "./operations";
 
 // Employment: CityCorp (the big external employer with limited openings)
 // and jobs at citizen-run businesses.
@@ -153,6 +154,10 @@ export function registerJobActions(): void {
         } else {
           remember(world, c, { text: "CityCorp turned down my application.", kind: "job", importance: 4, valence: -0.5, people: [], key: "corp-rejected" });
         }
+      } else {
+        c.cooldowns[`applied:${target}`] = world.time;
+        const b = world.businesses[target];
+        if (b && b.open && b.hiringWage > 0) considerApplicant(world, b, c);
       }
     },
   });
