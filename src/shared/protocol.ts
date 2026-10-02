@@ -129,6 +129,7 @@ export interface AIStatusDTO {
   callsToday: number;
   maxCallsPerDay: number;
   pending: number;
+  reason: string | null;
 }
 
 /** Overall state for UI panels, ~2x per second. */
@@ -169,6 +170,20 @@ export interface LoanDTO {
   dueT: number;
   status: string;
   purpose: string;
+}
+
+export interface ConversationDTO {
+  id: number;
+  t: number;
+  topic: ConversationTopic;
+  a: string;
+  b: string;
+  aName: string;
+  bName: string;
+  place: string;
+  lines: { speaker: string; name: string; text: string }[];
+  summary: string;
+  source: "template" | "llm";
 }
 
 export interface CitizenDetail {
@@ -214,6 +229,7 @@ export interface CitizenDetail {
   research: { points: number; threshold: number; breakthroughs: number; patents: string[] };
   insights: string[];
   beliefs: { occupation: string; value: number; source: string }[];
+  conversations: ConversationDTO[];
 }
 
 export interface BusinessDetail {
@@ -249,8 +265,9 @@ export interface DashboardMsg {
   recentTx: (Transaction & { fromName: string; toName: string })[];
   loans: LoanDTO[];
   service: { pool: number; supplied: number };
-  aiLog: AILogEntry[];
+  aiLog: (AILogEntry & { citizenName: string })[];
   products: ProductDTO[];
+  conversations: ConversationDTO[];
 }
 
 export interface ToastMsg {

@@ -251,6 +251,7 @@ export function createWorld(seed: number, name = "Hustle City"): WorldState {
     },
     shocks: [],
     conversations: [],
+    conversationLog: [],
     events: [],
     transactions: [],
     txCount: 0,

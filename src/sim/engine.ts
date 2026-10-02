@@ -18,7 +18,9 @@ import { homeOrShelter, payWelfare, registerLivingActions } from "./economy/livi
 import { registerResearchActions } from "./economy/research";
 import { servicesHourly } from "./economy/services";
 import { decayMemories } from "./memory/memory";
+import { conversationsTick, registerConversationActions, startOpportunisticConversations } from "./social/conversation";
 import { encountersHourly } from "./social/encounters";
+import "./ai/socialActivities";
 import { decayRelationships } from "./social/relationships";
 import { statsDaily, statsHourly } from "./stats";
 import { moveStep } from "./systems/movement";
@@ -42,6 +44,7 @@ export function initEngine(): void {
   registerResellerActions();
   registerOperationsActions();
   registerShoppingActions();
+  registerConversationActions();
 }
 
 /** Advance the world by one game minute. */
@@ -49,6 +52,7 @@ export function step(world: WorldState): void {
   initEngine();
   world.time += 1;
   const t = world.time;
+  conversationsTick(world);
 
   for (const id of world.citizenOrder) {
     const c = world.citizens[id];
@@ -64,9 +68,11 @@ export function step(world: WorldState): void {
     tickActivity(world, c);
     if (t >= c.activity.endsAt) {
       finishActivity(world, c);
-      think(world, c);
+      // Finishing can pull them into something new (e.g. a conversation).
+      if (c.activity.kind === "idle") think(world, c);
     }
   }
+  if (t % 10 === 0) startOpportunisticConversations(world);
 
   if (t % 60 === 0) hourly(world);
   if (t % MIN_PER_DAY === 0) daily(world);
@@ -138,5 +144,6 @@ function daily(world: WorldState): void {
     decayRelationships(world, c);
   }
   updateBeliefsDaily(world);
+  world.ai.callsToday = 0;
   statsDaily(world);
 }

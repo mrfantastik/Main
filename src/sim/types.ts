@@ -647,6 +647,8 @@ export interface SimEvent {
   importance: number;
   citizens: CitizenId[];
   businessId: BusinessId | null;
+  /** Set when the event summarises a conversation (transcript in conversationLog). */
+  conversationId?: number;
 }
 
 // ---------------------------------------------------------- conversations
@@ -668,6 +670,8 @@ export interface ConversationLine {
   text: string;
 }
 
+export type ConvValue = number | string | boolean | null;
+
 export interface Conversation {
   id: number;
   a: CitizenId;
@@ -678,10 +682,17 @@ export interface Conversation {
   /** Lines are revealed one by one for speech bubbles. */
   lines: ConversationLine[];
   revealed: number;
+  nextRevealT: number;
   status: "talking" | "awaiting_ai" | "done";
-  /** Engine-computed negotiation terms and limits (validated against AI output). */
-  terms: Record<string, number | string | boolean>;
-  outcome: string | null;
+  /** What the initiator wanted (amount, purpose, business, loan...). */
+  agenda: Record<string, ConvValue>;
+  /** Engine-computed negotiation terms and limits (AI output is validated against them). */
+  terms: Record<string, ConvValue>;
+  /** Final agreed outcome (e.g. agreed, amount, rate). */
+  outcome: Record<string, ConvValue> | null;
+  /** Template version, used if the AI is unavailable or replies with nonsense. */
+  fallback: { lines: ConversationLine[]; outcome: Record<string, ConvValue> } | null;
+  summary: string;
   source: "template" | "llm";
   endT: number;
 }
@@ -797,6 +808,8 @@ export interface WorldState {
   economy: EconomyState;
   shocks: ScheduledShock[];
   conversations: Conversation[];
+  /** Finished conversations (most recent last), for the UI. */
+  conversationLog: Conversation[];
   events: SimEvent[];
   transactions: Transaction[];
   txCount: number;

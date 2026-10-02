@@ -5,6 +5,7 @@ import { leaveJob } from "../economy/jobs";
 import { planBusiness, productOpportunity, type BusinessPlan } from "../economy/opportunity";
 import { logEvent } from "../events";
 import { remember, rememberBetrayal } from "../memory/memory";
+import { MAX_STAFF } from "../social/negotiation";
 import { adjustRel, peekRel } from "../social/relationships";
 import type { Business, BusinessKind, Citizen, WorldState } from "../types";
 import { money, pct, round2 } from "../util";
@@ -137,7 +138,7 @@ function businessOptions(world: WorldState, c: Citizen, s: Situation): StrategyO
     const days = b.history.length;
     const wage = Math.round(world.economy.corpWage * (0.78 + c.traits.generosity * 0.3 - c.traits.greed * 0.15));
     // Hire.
-    if (b.hiringWage === 0 && b.employees.length < 3) {
+    if (b.hiringWage === 0 && b.employees.length < (MAX_STAFF[b.kind] ?? 1)) {
       const capacityLimited = b.kind !== "agency" && (b.missedYesterday > 3 || b.staffedHoursYesterday < 7);
       const agencyRoom = b.kind === "agency" && world.economy.servicePool > world.economy.serviceSupplied * 1.05;
       const wantsHelp = c.traits.diligence < 0.4 || c.traits.greed > 0.7 || c.age > 55;

@@ -7,6 +7,9 @@ import type { AIStatusDTO, ClientMsg, HelloMsg, ServerMsg } from "../shared/prot
 import { newWorld as createWorld } from "../sim";
 import * as snap from "../sim/snapshot";
 import type { WorldState } from "../sim/types";
+import { AIDirector } from "../sim/ai/director";
+import { createClaudeClient } from "./anthropic";
+import { FileSpendLedger } from "./spend";
 import { SimRunner } from "./runner";
 
 // AI Hustle City server: runs the simulation continuously and streams it to
@@ -27,6 +30,21 @@ interface Client {
 const clients = new Set<Client>();
 let runner: SimRunner;
 
+// ---- AI (Claude) configuration. Everything works without it.
+const AI_MODEL = process.env.AI_MODEL || "claude-opus-5-5";
+const AI_BUDGET_USD = Number(process.env.AI_BUDGET_USD ?? 2);
+const AI_MAX_CALLS_PER_DAY = Number(process.env.AI_MAX_CALLS_PER_DAY ?? 12);
+const ledger = new FileSpendLedger(path.join(root, "data", "ai-usage.json"));
+const director = new AIDirector(createClaudeClient(AI_MODEL), ledger);
+director.attach();
+
+function configureAI(world: WorldState): void {
+  world.ai.model = director.model;
+  world.ai.budgetUsd = AI_BUDGET_USD;
+  world.ai.maxCallsPerDay = AI_MAX_CALLS_PER_DAY;
+  world.ai.mode = director.available ? "llm" : "off";
+}
+
 function send(ws: WebSocket, msg: ServerMsg): void {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
 }
@@ -37,12 +55,25 @@ function hello(world: WorldState): HelloMsg {
 
 function aiStatus(world: WorldState): AIStatusDTO {
   const ai = world.ai;
-  return { mode: ai.mode, available: false, model: ai.model, spentUsd: ai.spentUsd, budgetUsd: ai.budgetUsd, calls: ai.calls, callsToday: ai.callsToday, maxCallsPerDay: ai.maxCallsPerDay, pending: 0 };
+  return {
+    mode: ai.mode,
+    available: director.available,
+    model: director.model,
+    spentUsd: ledger.total(),
+    budgetUsd: ai.budgetUsd,
+    calls: ai.calls,
+    callsToday: ai.callsToday,
+    maxCallsPerDay: ai.maxCallsPerDay,
+    pending: director.pending,
+    reason: director.unavailableReason,
+  };
 }
 
 function newWorld(seed?: number): WorldState {
   const s = seed ?? (Date.now() % 1_000_000);
-  return createWorld(s);
+  const world = createWorld(s);
+  configureAI(world);
+  return world;
 }
 
 function handle(client: Client, msg: ClientMsg): void {
@@ -61,8 +92,18 @@ function handle(client: Client, msg: ClientMsg): void {
       break;
     case "dashboard":
       client.dashboard = msg.open;
-      if (msg.open) send(client.ws, snap.dashboard(world, world.ai.log));
+      if (msg.open) send(client.ws, snap.dashboard(world));
       break;
+    case "ai": {
+      if (msg.mode) {
+        if (msg.mode === "llm" && !director.available) {
+          send(client.ws, { type: "toast", text: `Claude isn't available: ${director.unavailableReason ?? "no API key"}`, level: "error" });
+        } else world.ai.mode = msg.mode;
+      }
+      if (msg.budgetUsd !== undefined && Number.isFinite(msg.budgetUsd) && msg.budgetUsd >= 0) world.ai.budgetUsd = msg.budgetUsd;
+      if (msg.maxCallsPerDay !== undefined && msg.maxCallsPerDay >= 0) world.ai.maxCallsPerDay = Math.round(msg.maxCallsPerDay);
+      break;
+    }
     case "reset": {
       runner.world = newWorld(msg.seed);
       for (const c of clients) {
@@ -102,7 +143,7 @@ function broadcastState(): void {
 
 function broadcastDashboard(): void {
   const world = runner.world;
-  for (const c of clients) if (c.dashboard) send(c.ws, snap.dashboard(world, world.ai.log));
+  for (const c of clients) if (c.dashboard) send(c.ws, snap.dashboard(world));
 }
 
 // ------------------------------------------------------------- static files
@@ -178,7 +219,9 @@ async function main(): Promise<void> {
     ws.on("close", () => clients.delete(client));
   });
 
+  runner.afterSteps = (w) => director.pump(w);
   runner.start();
+  console.log(director.available ? `  🧠 Claude enabled (${director.model}), budget $${AI_BUDGET_USD}, spent so far $${ledger.total().toFixed(3)}` : "  🧠 Claude disabled (no ANTHROPIC_API_KEY) — using the built-in utility AI");
   setInterval(broadcastFrames, 100);
   setInterval(broadcastState, 500);
   setInterval(broadcastDashboard, 1500);

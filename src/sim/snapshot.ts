@@ -1,5 +1,6 @@
 import type {
   AIStatusDTO,
+  ConversationDTO,
   BubbleDTO,
   BusinessDetail,
   BusinessSummary,
@@ -19,7 +20,7 @@ import { breakthroughThreshold } from "./economy/research";
 import { recentMemories } from "./memory/memory";
 import { relLabel } from "./social/relationships";
 import { dayOf, formatTime } from "./time";
-import type { Business, Citizen, Loan, Transaction, WorldState } from "./types";
+import type { Business, Citizen, Conversation, Loan, Transaction, WorldState } from "./types";
 import { avg, round2 } from "./util";
 
 // Converts the internal world state into compact messages for the UI.
@@ -172,6 +173,23 @@ export function state(
   };
 }
 
+export function conversationDTO(world: WorldState, c: Conversation): ConversationDTO {
+  const name = (id: string) => world.citizens[id]?.name ?? id;
+  return {
+    id: c.id,
+    t: c.startedT,
+    topic: c.topic,
+    a: c.a,
+    b: c.b,
+    aName: name(c.a),
+    bName: name(c.b),
+    place: c.buildingId ? placeName(world, c.buildingId) : "town",
+    lines: c.lines.map((l) => ({ speaker: l.speaker, name: name(l.speaker), text: l.text })),
+    summary: c.summary,
+    source: c.source,
+  };
+}
+
 function loanDTO(world: WorldState, l: Loan): LoanDTO {
   return {
     id: l.id,
@@ -274,6 +292,11 @@ export function citizenDetail(world: WorldState, id: string): CitizenDetail | nu
     research: { points: Math.round(c.research.points), threshold: breakthroughThreshold(c), breakthroughs: c.research.breakthroughs, patents: c.research.patents },
     insights: c.beliefs.insights.map((i) => `${world.products[i.productId]?.name ?? i.productId} ${i.kind === "hype" ? "boom" : "slump"} around Day ${dayOf(i.startT)}`),
     beliefs: Object.entries(c.beliefs.occupationIncome).map(([occ, b]) => ({ occupation: occ, value: Math.round(b!.value), source: b!.source })),
+    conversations: [...world.conversations, ...world.conversationLog]
+      .filter((x) => (x.a === c.id || x.b === c.id) && x.lines.length > 0)
+      .sort((x, y) => y.startedT - x.startedT)
+      .slice(0, 8)
+      .map((x) => conversationDTO(world, x)),
   };
 }
 
@@ -305,7 +328,7 @@ export function businessDetail(world: WorldState, id: string): BusinessDetail | 
   };
 }
 
-export function dashboard(world: WorldState, aiLog: DashboardMsg["aiLog"]): DashboardMsg {
+export function dashboard(world: WorldState): DashboardMsg {
   const cs = world.citizenOrder.map((id) => world.citizens[id]);
   const worth = cs.map((c) => ({ id: c.id, name: c.name, netWorth: netWorth(world, c), occupation: c.occupation })).sort((a, b) => b.netWorth - a.netWorth);
   const occupations: Record<string, number> = {};
@@ -331,7 +354,12 @@ export function dashboard(world: WorldState, aiLog: DashboardMsg["aiLog"]): Dash
     recentTx: world.transactions.slice(-30).reverse().map((t) => txDTO(world, t)),
     loans: world.loans.filter((l) => l.status === "active").map((l) => loanDTO(world, l)),
     service: { pool: world.economy.servicePool, supplied: world.economy.serviceSupplied },
-    aiLog,
+    aiLog: [...world.ai.log].reverse().map((l) => ({ ...l, citizenName: l.citizenId ? world.citizens[l.citizenId]?.name ?? "?" : "—" })),
+    conversations: [...world.conversationLog]
+      .filter((x) => x.topic !== "chat" || x.source === "llm")
+      .reverse()
+      .slice(0, 20)
+      .map((x) => conversationDTO(world, x)),
     products: world.productOrder.map((pid) => {
       const p = world.products[pid];
       return { id: p.id, name: p.name, emoji: p.emoji, category: p.category, baseCost: p.baseCost, baseRetail: p.baseRetail, inventorId: p.inventorId };

@@ -749,3 +749,7 @@ table.t td {
     grid-row: 3;
   }
 }
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

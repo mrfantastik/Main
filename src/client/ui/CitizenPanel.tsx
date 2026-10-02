@@ -6,6 +6,7 @@ import { store, useStore } from "../net/store";
 import { Avatar } from "./CitizenList";
 import { gbp, KIND_LABEL, OCC_COLORS, OCC_LABEL, when } from "./format";
 import { Sparkline } from "./charts";
+import { Transcript } from "./Transcript";
 
 function Bar({ label, value, max = 100, color }: { label: string; value: number; max?: number; color: string }) {
   return (
@@ -229,6 +230,13 @@ function Mind({ d }: { d: CitizenDetail }) {
 function Social({ d }: { d: CitizenDetail }) {
   return (
     <>
+      <div className="section">Recent conversations</div>
+      <div className="list">
+        {d.conversations.length === 0 && <div className="empty">Hasn't talked to anyone yet.</div>}
+        {d.conversations.map((c) => (
+          <Transcript key={c.id} c={c} />
+        ))}
+      </div>
       <div className="section">Relationships</div>
       <div className="list">
         {d.relationships.length === 0 && <div className="empty">Doesn't really know anyone yet.</div>}

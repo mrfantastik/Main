@@ -1,4 +1,5 @@
 import { store, useStore } from "../net/store";
+import { AIPanel } from "./AIPanel";
 
 function Shell({ title, children, drawer }: { title: string; children: React.ReactNode; drawer?: boolean }) {
   return (
@@ -46,7 +47,7 @@ export function Overlays() {
   if (panel === "help") return <Help />;
   if (panel === "dashboard") return <Shell title="📊 Economy dashboard">Coming soon.</Shell>;
   if (panel === "god") return <Shell title="⚡ God Mode" drawer>Coming soon.</Shell>;
-  if (panel === "ai") return <Shell title="🧠 AI engine">Coming soon.</Shell>;
+  if (panel === "ai") return <AIPanel />;
   return null;
 }
 
