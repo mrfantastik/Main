@@ -240,9 +240,11 @@ export function BrainBox({ ai }: { ai: AIStatusDTO }) {
       <h3>The town's brain</h3>
       <p style={{ marginTop: 0 }}>
         An open-source AI (<b>SmolLM2</b> by Hugging Face, free under the Apache 2.0 licence) that runs <b>here, on your computer</b>: on your graphics
-        card if your browser has WebGPU, otherwise on your processor. Nothing is sent anywhere. Once it's awake it runs the people, all the time: it{" "}
-        <b>chooses what they do next</b>, decides their <b>tough calls</b> (jobs, money, businesses), writes what they <b>say</b> to each other and
-        what they <b>think</b>, from who they are, how they feel, what they've heard and what they remember. Whoever you're looking at comes first.
+        card if your browser has WebGPU, otherwise on your processor. Nothing is sent anywhere and nothing costs anything. Once it's awake, every
+        citizen is an AI agent run by it, all the time: each morning it writes their <b>plan for the day</b>, it <b>chooses what they do next</b>{" "}
+        (including going to see a friend), decides their <b>tough calls</b> (jobs, money, businesses), writes what they <b>say</b> and{" "}
+        <b>think</b>, and each night their <b>diary</b>, which it reads back the next day. All from who they are, how they feel, what they've heard
+        and what they remember. Whoever you're looking at comes first.
       </p>
       <p>
         The town keeps the rules: it only offers choices a person can actually make, and it settles who lends what and what news gets passed on, so
@@ -289,7 +291,8 @@ export function BrainBox({ ai }: { ai: AIStatusDTO }) {
           <>
             <span className="k">So far</span>
             <span>
-              {ai.done.plan} choices · {ai.done.conversation} conversations · {ai.done.thought} thoughts
+              {ai.done.dayplan} day plans ({ai.done.followed} things done from them) · {ai.done.plan} other choices · {ai.done.conversation} conversations ·{" "}
+              {ai.done.thought} thoughts · {ai.done.diary} diary entries
             </span>
           </>
         )}

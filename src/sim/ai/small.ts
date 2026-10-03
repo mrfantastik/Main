@@ -24,6 +24,13 @@ export const SMALL_THOUGHT_SYSTEM =
 export const SMALL_CHOICE_SYSTEM =
   "You decide what a person in a story would really do, given who they are and how they feel. Answer with the option number, then one short sentence in their voice saying why.";
 
+export const SMALL_DAY_PLAN_SYSTEM =
+  "You plan the day of a person in a story set in Hustle City, a small British town, the way they would plan it themselves: their work, money, meals, friends and what they want out of life. " +
+  "Write one line per thing, in time order: the time, the number of the thing from their list, a dash, and a few words in their voice saying why. For example:\n8am: 2 - rent's due Friday, every shift counts\n1pm: 5 - Priya's been quiet lately";
+
+export const SMALL_DIARY_SYSTEM =
+  "You write the diary of a person in a story set in Hustle City, a small British town. Write in the first person, as them, one or two short sentences about their day: what happened, how they feel about it, what they'll do about it. Specific and honest. No quotation marks.";
+
 const VOICE: Record<SpeakingStyle, string> = {
   formal: "speaks formally and politely, never uses slang",
   blunt: "blunt and brief, says exactly what they think",
@@ -66,9 +73,11 @@ export function sketch(world: WorldState, c: Citizen): string {
   return `${c.name} (${c.age}, ${job(world, c)}): ${VOICE[c.personality.style]}. Feeling ${feel}. Dreams of ${c.personality.dream}.`;
 }
 
-/** The thing on their mind: a worry, a big moment today, or news. */
+/** The thing on their mind: last night's diary, a worry, a big moment today, or news. */
 function onTheirMind(world: WorldState, c: Citizen): string[] {
   const out: string[] = [];
+  const diary = c.agent?.diary[c.agent.diary.length - 1];
+  if (diary && diary.day >= dayOf(world.time) - 1) out.push(`From their diary: "${diary.text}"`);
   const s = situation(world, c);
   if (s.worry) out.push(`Worried: "${s.worry}"`);
   const today = dayOf(world.time);
@@ -81,7 +90,22 @@ function onTheirMind(world: WorldState, c: Citizen): string[] {
     .map((k) => world.happenings.find((h) => h.id === k.id)?.title)
     .filter(Boolean);
   if (heard.length) out.push(`Heard about: ${heard.join("; ")}`);
-  return out.slice(0, 3);
+  return out.slice(0, 4);
+}
+
+/** "8am", "1:30pm". */
+export function hourLabel(h: number): string {
+  const hh = Math.floor(h) % 24;
+  const mm = Math.round((h - Math.floor(h)) * 60);
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  return `${h12}${mm ? `:${String(mm).padStart(2, "0")}` : ""}${hh < 12 ? "am" : "pm"}`;
+}
+
+/** Their plan for today, as they'd read it back ("8am work (done), 1pm see Priya"). */
+function planLine(c: Citizen, day: number): string {
+  const plan = c.agent?.plan;
+  if (!plan || plan.day !== day || !plan.items.length) return "";
+  return `Their plan for today: ${plan.items.map((i) => `${hourLabel(i.hour)} ${i.label.charAt(0).toLowerCase()}${i.label.slice(1)}${i.status === "done" ? " (done)" : i.status === "skipped" ? " (didn't happen)" : ""}`).join("; ")}.`;
 }
 
 function relation(world: WorldState, a: Citizen, b: Citizen): string {
@@ -105,10 +129,11 @@ export interface SmallPrompt {
   user: string;
   /** The start of the reply, written for the model (it carries on from here). */
   prefill: string;
-  kind: "lines" | "thought" | "choice";
-  /** For "lines": who may speak. For "choice": option ids in order. */
+  kind: "lines" | "thought" | "choice" | "plan" | "diary";
+  /** For "lines": who may speak. For "choice" and "plan": option ids in order (and for "plan", their labels). */
   names?: string[];
   options?: string[];
+  labels?: string[];
 }
 
 /** A conversation: who, where, how they speak, what's on their minds, what happens, and a rough draft to improve on. */
@@ -163,7 +188,7 @@ export function smallChoicePrompt(world: WorldState, c: Citizen, options: { id: 
 }
 
 /** What they'll do once they've finished what they're doing (asked while they're still at it). */
-export function smallPlanPrompt(world: WorldState, c: Citizen, options: { id: string; label: string }[]): SmallPrompt {
+export function smallNextPrompt(world: WorldState, c: Citizen, options: { id: string; label: string }[]): SmallPrompt {
   const s = situation(world, c);
   const body = [s.hungry > 0.75 ? "very hungry" : s.hungry > 0.5 ? "hungry" : "", s.tired > 0.75 ? "exhausted" : s.tired > 0.5 ? "tired" : ""].filter(Boolean);
   const doing = c.activity.label.charAt(0).toLowerCase() + c.activity.label.slice(1);
@@ -172,10 +197,47 @@ export function smallPlanPrompt(world: WorldState, c: Citizen, options: { id: st
     `It's ${formatTime(world.time).replace(/^Day \d+ /, "")} ${partOfDay(world.time)}. ${c.name} is ${doing}${body.length ? `, and ${body.join(" and ")}` : ""}.`,
     ...onTheirMind(world, c),
     `Money: ${money(c.money)} in their pocket, ${money(c.savings)} saved. Goal: ${c.goal.label}.`,
+    planLine(c, dayOf(world.time)),
     `After this, what does ${c.name} do?`,
     ...options.map((o, i) => `${i + 1}. ${o.label}`),
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
   return { system: SMALL_CHOICE_SYSTEM, user, prefill: "", kind: "choice", options: options.map((o) => o.id) };
+}
+
+/** Their plan for a day, from the things they could do that day (numbered). */
+export function smallDayPlanPrompt(world: WorldState, c: Citizen, day: number, wake: number, things: { id: string; label: string }[]): SmallPrompt {
+  const first = hourLabel(Math.ceil(wake * 2) / 2);
+  const user = [
+    sketch(world, c),
+    ...onTheirMind(world, c),
+    `Money: ${money(c.money)} in their pocket, ${money(c.savings)} saved. Goal: ${c.goal.label}.`,
+    `It's day ${day}. ${c.name} gets up at about ${first}. Things ${c.name} could do today:`,
+    ...things.map((o, i) => `${i + 1}. ${o.label}`),
+    `Write ${c.name}'s plan for today: 4 to 6 lines, from ${first} to the evening.`,
+  ].join("\n");
+  return { system: SMALL_DAY_PLAN_SYSTEM, user, prefill: `${first}:`, kind: "plan", options: things.map((o) => o.id), labels: things.map((o) => o.label) };
+}
+
+/** Last thing at night: a line in their diary about the day. */
+export function smallDiaryPrompt(world: WorldState, c: Citizen): SmallPrompt {
+  const today = dayOf(c.activity.kind === "sleep" ? c.activity.startedAt - 4 * 60 : world.time);
+  const happened = [...c.memories.short, ...c.memories.long]
+    .filter((m) => dayOf(m.t) === today)
+    .sort((a, b) => b.importance - a.importance)
+    .slice(0, 4)
+    .map((m) => `- ${m.text}`);
+  const user = [
+    sketch(world, c),
+    `Money: ${money(c.money)} in their pocket, ${money(c.savings)} saved. Goal: ${c.goal.label}.`,
+    planLine(c, today),
+    happened.length ? `What happened today:\n${happened.join("\n")}` : "A quiet day: nothing much happened.",
+    `Before going to sleep, ${c.name} writes in their diary. What do they write?`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return { system: SMALL_DIARY_SYSTEM, user, prefill: "Today", kind: "diary" };
 }
 
 // ------------------------------------------------------------- readers
@@ -235,4 +297,61 @@ export function readChoice(text: string, options: string[]): { choice: string; t
   const rest = text.slice((m!.index ?? 0) + 1).replace(/^[\s.):\-–]+/, "");
   const why = readThought(rest.replace(/^(option|number)\s*\d+[.:]?\s*/i, ""), "");
   return { choice: options[n - 1], thought: why };
+}
+
+const STOP = new Set(["with", "from", "that", "this", "your", "their", "about", "some", "into", "at", "the", "and", "for", "go", "to", "a", "an", "of", "in", "on"]);
+const words = (t: string) => t.toLowerCase().match(/[a-z']{3,}/g)?.filter((w) => !STOP.has(w)) ?? [];
+
+/** "8am: 2 - rent's due" lines -> plan items (hour, option, why), in time order. Lines that name a thing in words are matched to the list. */
+export function readPlan(text: string, ids: string[], labels: string[]): { hour: number; id: string; why: string }[] {
+  const out: { hour: number; id: string; why: string }[] = [];
+  for (const raw of text.split(/\n+/)) {
+    const m = raw.match(/^\s*[-*•]?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\s*[:\-–.]?\s*(.+)$/i);
+    if (!m) {
+      if (out.length && raw.trim()) break;
+      continue;
+    }
+    let h = Number(m[1]) + (m[2] ? Number(m[2]) / 60 : 0);
+    const ap = (m[3] ?? "").toLowerCase().replace(/\./g, "");
+    if (ap === "pm" && h < 12) h += 12;
+    else if (ap === "am" && h >= 12) h -= 12;
+    else if (!ap && h < 6) h += 12; // "1: lunch" means 1pm
+    if (h < 4 || h >= 23) continue; // the small hours are for sleeping
+    let rest = m[4].trim();
+    let idx = -1;
+    const num = rest.match(/^(?:no\.?\s*|number\s*|#)?(\d{1,2})\b[\s.):]*(?:[-–—:,]\s*)?(.*)$/i);
+    if (num && Number(num[1]) >= 1 && Number(num[1]) <= ids.length) {
+      idx = Number(num[1]) - 1;
+      rest = num[2].trim();
+    } else {
+      // In words: the thing on the list sharing the most words with it.
+      const said = new Set(words(rest));
+      let best = 0;
+      labels.forEach((l, i) => {
+        const shared = words(l).filter((w) => said.has(w)).length;
+        if (shared > best) {
+          best = shared;
+          idx = i;
+        }
+      });
+    }
+    if (idx < 0) continue;
+    let why = rest
+      .replace(/^[-–—:,\s]+/, "")
+      .replace(/^["“]|["”]$/g, "")
+      .trim();
+    if (why && labels[idx] && why.toLowerCase().startsWith(labels[idx].toLowerCase())) why = why.slice(labels[idx].length).replace(/^[\s\-–—:,]+/, "");
+    if (why && !looksLikeSpeech(why)) why = "";
+    if (out.length && h <= out[out.length - 1].hour) continue; // keep time order
+    if (out.length && out[out.length - 1].id === ids[idx]) continue;
+    out.push({ hour: h, id: ids[idx], why: why.slice(0, 140) });
+    if (out.length >= 7) break;
+  }
+  return out;
+}
+
+/** A diary entry: the first couple of sentences, cleaned up. */
+export function readDiary(text: string): string {
+  const t = readThought(text.replace(/\n+/g, " "), "");
+  return t.length >= 12 ? t : "";
 }

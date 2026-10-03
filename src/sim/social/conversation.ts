@@ -51,7 +51,7 @@ export function canTalk(world: WorldState, c: Citizen): boolean {
   return !world.conversations.some((x) => x.a === c.id || x.b === c.id);
 }
 
-function isPublic(world: WorldState, buildingId: string | null): boolean {
+export function isPublic(world: WorldState, buildingId: string | null): boolean {
   const b = getBuildingIndexed(world.map, buildingId);
   return !!b && b.type !== "house" && b.type !== "apartments";
 }

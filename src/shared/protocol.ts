@@ -2,6 +2,7 @@
 // The server is authoritative; clients render and send commands.
 
 import type {
+  AgentPlanItem,
   ActivityKind,
   AILogEntry,
   CityMap,
@@ -152,8 +153,8 @@ export interface AIStatusDTO {
   writer: string | null;
   /** What the AI is working on right now, in words ("Deciding what Mike does next"). */
   doing?: string | null;
-  /** What it has done so far (free AI): choices people acted on, conversations written, thoughts. */
-  done?: { plan: number; conversation: number; thought: number };
+  /** What it has done so far (free AI): moves it picked that people made, conversations written, thoughts, day plans written and moves made from them, diary entries. */
+  done?: { plan: number; conversation: number; thought: number; dayplan: number; followed: number; diary: number };
   /** The writer is a free public AI (no budget; rate limited). */
   free?: boolean;
   /** Free AI: which services answer, and whether this page can reach the internet at all. */
@@ -311,6 +312,8 @@ export interface CitizenDetail {
   memories: (Memory & { long: boolean })[];
   transactions: (Transaction & { fromName: string; toName: string })[];
   decisions: DecisionRecord[];
+  /** Run by the town's brain: their own plan for today, and their diary (newest first). */
+  agent: { plan: AgentPlanItem[] | null; diary: { day: number; text: string }[] } | null;
   financeHistory: { day: number; income: number; expenses: number; netWorth: number }[];
   loans: LoanDTO[];
   research: { points: number; threshold: number; breakthroughs: number; patents: string[] };

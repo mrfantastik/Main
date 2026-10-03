@@ -2,14 +2,17 @@ import { MEAL_FILLS } from "../economy/living";
 import { logEvent } from "../events";
 import { updateNeeds } from "../systems/needs";
 import { setReflectionHook } from "../mind/reflection";
-import { resolveConversationAI, setConversationAIHook } from "../social/conversation";
+import { placeName } from "../places";
+import { isPublic, resolveConversationAI, setConversationAIHook } from "../social/conversation";
 import { dayOf } from "../time";
-import type { AILogEntry, Citizen, Conversation, ConvValue, Reflection, WorldState } from "../types";
+import type { AgentPlanItem, AILogEntry, Citizen, Conversation, ConvValue, Reflection, WorldState } from "../types";
 import { newId, pushRing, round2 } from "../util";
 import { activityOptions, type ActivityOption } from "./activity";
 import { setActivityHook } from "./brain";
 import { scoreOf, setThought } from "./decision";
-import { smallChoicePrompt, smallConversationPrompt, smallPlanPrompt, smallThoughtPrompt, type SmallPrompt } from "./small";
+import { hourLabel, smallChoicePrompt, smallConversationPrompt, smallDayPlanPrompt, smallDiaryPrompt, smallNextPrompt, smallThoughtPrompt, type SmallPrompt } from "./small";
+import { situation } from "./situation";
+import { makeAction } from "./actions";
 import type { FreeAIClient, FreeAIStatus } from "./freeai";
 import { CONVERSATION_SYSTEM, conversationPrompt, costUsd, FREE_CONVERSATION_SYSTEM, freeConversationPrompt, REFLECTION_SYSTEM, reflectionPrompt, STRATEGY_SYSTEM, strategyPrompt, THOUGHT_SYSTEM, thoughtPrompt, type LLMClient } from "./llm";
 import { applyStrategy, setStrategyHook, strategyOptions, type StrategyOption } from "./strategy";
@@ -51,11 +54,14 @@ export interface DirectorOptions {
 
 interface Pending {
   id: number;
-  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan";
+  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary";
   world: WorldState;
   citizenId: string;
   convId?: number;
   fallbackId?: string;
+  /** Plans and diaries: which day; plans: the labels of the things they could choose from. */
+  day?: number;
+  labels?: Record<string, string>;
   startedAt: number;
   prompt: string;
 }
@@ -94,8 +100,10 @@ interface Queued {
 
 /** Activities the next move can be planned during (not walking, talking or between things). */
 const PLANNABLE = new Set(["sleep", "work", "eat", "shop", "socialize", "rest", "bank", "browse", "trade", "research", "restock", "job_hunt", "manage"]);
-/** Options within this much of the best are the sensible ones to choose between. */
-const PLAN_MARGIN = 1.0;
+/** Options within this much of the best are offered to the model... */
+const SHOW_MARGIN = 1.8;
+/** ...and its pick is taken if, when the time comes, it's still within this much of the best. */
+const ACCEPT_MARGIN = 2.2;
 /** A queued conversation gives up after this long (ms) and the built-in AI speaks it. */
 const QUEUE_WAIT_MS = 15_000;
 
@@ -131,7 +139,7 @@ export class AIDirector {
   /** Messages for the player (the server shows them as toasts). */
   readonly notices: { text: string; level: "info" | "error" }[] = [];
   /** What the AI has done so far: choices people acted on, conversations it wrote, thoughts. */
-  readonly tally = { plan: 0, conversation: 0, thought: 0 };
+  readonly tally = { plan: 0, conversation: 0, thought: 0, dayplan: 0, followed: 0, diary: 0 };
 
   constructor(
     private client: LLMClient | null,
@@ -203,6 +211,8 @@ export class AIDirector {
     const waiting = this.queue.length ? ` (${this.queue.length} conversation${this.queue.length > 1 ? "s" : ""} waiting)` : "";
     const what: Record<Pending["kind"], string> = {
       plan: `Deciding what ${name} does next`,
+      dayplan: `Planning ${name}'s day`,
+      diary: `Writing ${name}'s diary`,
       conversation: `Writing what ${name}${other ? ` and ${other}` : ""} say`,
       thought: `Thinking as ${name}`,
       strategy: `Weighing up a big decision for ${name}`,
@@ -314,9 +324,10 @@ export class AIDirector {
 
   /**
    * Keep the free AI busy. First the person the player is looking at: a
-   * conversation they're in, their next move, what they're thinking. Then
-   * everyone else, conversations and next moves taking turns (whoever is
-   * about to decide goes first), and now and then what someone's thinking.
+   * conversation they're in, their next move, their plan for the day, what
+   * they're thinking. Then everyone else: conversations, next moves and
+   * plans for the day taking turns (whoever is about to decide or wake goes
+   * first); at night, diaries; and now and then what someone's thinking.
    */
   private schedule(world: WorldState): void {
     for (const q of [...this.queue]) {
@@ -333,9 +344,15 @@ export class AIDirector {
       if (q) this.send(world, { kind: "conversation", citizenId: q.citizenId, convId: q.convId }, FREE_CONVERSATION_SYSTEM, q.user, q.schema, q.small);
       return !!q;
     };
-    if ((this.queue[0]?.watched && talk()) || this.maybePlan(world, true) || this.maybeThink(world, true)) return;
-    const turns = this.lastKind === "conversation" ? [() => this.maybePlan(world, false), talk] : [talk, () => this.maybePlan(world, false)];
-    if (turns.some((f) => f())) return;
+    if ((this.queue[0]?.watched && talk()) || this.maybeNext(world, true) || this.maybeDayPlan(world, true) || this.maybeThink(world, true)) return;
+    const turns: [Pending["kind"], () => boolean][] = [
+      ["conversation", talk],
+      ["plan", () => this.maybeNext(world, false)],
+      ["dayplan", () => this.maybeDayPlan(world, false)],
+    ];
+    const after = turns.findIndex(([k]) => k === this.lastKind) + 1;
+    if ([...turns.slice(after), ...turns.slice(0, after)].some(([, f]) => f())) return;
+    if (this.maybeDiary(world)) return;
     this.maybeThink(world, false);
   }
 
@@ -346,11 +363,11 @@ export class AIDirector {
   }
 
   /**
-   * What someone could do once they've finished what they're doing: as
-   * they'll be by then (fed, rested, tired from work) and at that time of
-   * day, not as they are now (halfway through a meal they're still hungry).
+   * Run the clock and their needs forward to the end of what they're doing
+   * (fed after a meal, rested after sleep), call `fn`, then put everything
+   * back. `at` moves the clock further (a time later that day).
    */
-  private optionsAfter(world: WorldState, c: Citizen): ActivityOption[] {
+  private projected<T>(world: WorldState, c: Citizen, fn: (at: (t: number) => void) => T): T {
     const needs = { ...c.needs };
     const now = world.time;
     const left = Math.max(0, Math.min(12 * 60, c.activity.endsAt - now));
@@ -358,23 +375,54 @@ export class AIDirector {
       for (let i = 0; i < left; i++) updateNeeds(c);
       if (c.activity.action?.type === "EAT") c.needs.hunger = Math.min(100, c.needs.hunger + MEAL_FILLS);
       world.time = now + left;
-      return activityOptions(world, c);
+      return fn((t) => (world.time = t));
     } finally {
       Object.assign(c.needs, needs);
       world.time = now;
     }
   }
 
-  /** The sensible things for someone to do next, best first (what the model chooses between). */
+  /** What someone could do once they've finished what they're doing, as they'll be by then (not halfway through a meal, still hungry). */
+  private optionsAfter(world: WorldState, c: Citizen): ActivityOption[] {
+    return this.projected(world, c, () => activityOptions(world, c));
+  }
+
+  /**
+   * Going to see a friend for a chat (someone they like who's out and about).
+   * Only the AI chooses this; the utility AI meets people by chance.
+   */
+  private seeOptions(world: WorldState, c: Citizen): ActivityOption[] {
+    const h = (world.time % 1440) / 60;
+    if (h < 8 || h >= 22) return [];
+    return Object.entries(c.relationships)
+      .filter(([, r]) => r.affinity > 15)
+      .sort((a, b) => b[1].affinity - a[1].affinity)
+      .map(([id]) => world.citizens[id])
+      .filter((t) => t && t.id !== c.id && t.insideId && t.insideId !== c.insideId && isPublic(world, t.insideId) && t.activity.kind !== "sleep" && world.time - (c.cooldowns[`miss:${t.id}`] ?? -1e9) >= 180)
+      .slice(0, 2)
+      .map((t) => ({
+        id: `see:${t.id}`,
+        label: `Go and see ${t.name} (at ${placeName(world, t.insideId)})`,
+        factors: { "wants to see a friend": 0.3 },
+        payload: makeAction("MEET", t.insideId!, 10, `Looking for ${t.name}`, { targetId: t.id, topic: "chat" }),
+        thought: `I'll go and see ${t.name}.`,
+        priority: 2,
+      }));
+  }
+
+  /** The sensible things for someone to do next, best first, and a friend or two to go and see (what the model chooses between). */
   private sensible(world: WorldState, c: Citizen): ActivityOption[] {
     const options = this.optionsAfter(world, c).sort((a, b) => scoreOf(b) - scoreOf(a));
     if (!options.length) return [];
     const best = scoreOf(options[0]);
-    return options.filter((o) => scoreOf(o) >= best - PLAN_MARGIN).slice(0, 4);
+    const near = options.filter((o) => scoreOf(o) >= best - SHOW_MARGIN).slice(0, 6);
+    // Worn out or starving: no wandering off to see friends.
+    const s = situation(world, c);
+    return s.tired > 0.8 || s.hungry > 0.8 ? near : [...near, ...this.seeOptions(world, c)];
   }
 
   /** Ask what someone (the person in focus, or anyone else) will do once they've finished what they're doing. */
-  private maybePlan(world: WorldState, focusOnly: boolean): boolean {
+  private maybeNext(world: WorldState, focusOnly: boolean): boolean {
     for (const [id, p] of this.plans) if (world.time > p.until) this.plans.delete(id);
     const left = (c: Citizen) => c.activity.endsAt - world.time;
     const ready = (c: Citizen) => PLANNABLE.has(c.activity.kind) && c.path.length === 0 && !c.awaitingAI && !this.plans.has(c.id);
@@ -398,7 +446,7 @@ export class AIDirector {
     }
     const list = options.map((o) => ({ id: o.id, label: o.label }));
     const { user, schema } = strategyPrompt(world, c, list);
-    const reqId = this.send(world, { kind: "plan", citizenId: c.id }, STRATEGY_SYSTEM, user, schema, this.small ? smallPlanPrompt(world, c, list) : undefined);
+    const reqId = this.send(world, { kind: "plan", citizenId: c.id }, STRATEGY_SYSTEM, user, schema, this.small ? smallNextPrompt(world, c, list) : undefined);
     this.plans.set(c.id, { reqId, until, choice: null, thought: null });
     return true;
   }
@@ -413,7 +461,7 @@ export class AIDirector {
     }
     const reply = d.json as { choice?: unknown; thought?: unknown } | null;
     const choice = reply && typeof reply.choice === "string" ? reply.choice : null;
-    const option = choice ? this.optionsAfter(world, c).find((o) => o.id === choice) : undefined;
+    const option = choice ? (this.optionsAfter(world, c).find((o) => o.id === choice) ?? this.seeOptions(world, c).find((o) => o.id === choice)) : undefined;
     if (!option) {
       // Left unanswered (not asked again during this activity): the utility AI decides.
       this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : "no usable choice: the utility AI decides");
@@ -425,17 +473,176 @@ export class AIDirector {
     this.log(world, d, "ok", JSON.stringify(reply), `${c.name} will ${option.label.charAt(0).toLowerCase()}${option.label.slice(1)} next${plan.thought ? `: "${plan.thought}"` : ""}`);
   }
 
-  /** The model's pick, when it's in and still makes sense; otherwise the utility AI decides. */
+  // ------------------------------------------------- a plan for the day
+
+  /** The day they're planning and when they'll be up, if they need a plan (asked through the night, or first thing if they've none). */
+  private dayToPlan(world: WorldState, c: Citizen): { day: number; wake: number } | null {
+    if (world.time - (c.cooldowns.agentPlan ?? -1e9) < 240 || c.awaitingAI) return null;
+    if (c.activity.kind === "sleep") {
+      const left = c.activity.endsAt - world.time;
+      const wake = (c.activity.endsAt % 1440) / 60;
+      if (left < 0 || left > 8 * 60 || wake < 4 || wake > 13) return null;
+      const day = dayOf(c.activity.endsAt);
+      return c.agent?.plan?.day === day ? null : { day, wake };
+    }
+    const h = (world.time % 1440) / 60;
+    const day = dayOf(world.time);
+    if (h < 5 || h > 17 || c.agent?.plan?.day === day) return null;
+    return { day, wake: h + 0.25 };
+  }
+
+  /** The things they could do over the day (as they'll be once up), best first, and friends to meet up with. */
+  private dayCatalog(world: WorldState, c: Citizen, day: number, wake: number): { id: string; label: string }[] {
+    const start = (day - 1) * 1440;
+    const hours = [...new Set([wake + 0.5, wake + 2.5, 12.5, 15, 18, 20.5].filter((h) => h >= wake && h < 22.5).map((h) => Math.round(h * 2) / 2))];
+    const best = new Map<string, { label: string; score: number }>();
+    this.projected(world, c, (at) => {
+      for (const h of hours) {
+        at(start + Math.round(h * 60));
+        for (const o of activityOptions(world, c)) {
+          const s = scoreOf(o);
+          if (!best.has(o.id) || best.get(o.id)!.score < s) best.set(o.id, { label: o.label, score: s });
+        }
+      }
+    });
+    const things = [...best.entries()]
+      .filter(([id]) => id !== "sleep")
+      .sort((a, b) => b[1].score - a[1].score)
+      .slice(0, 9)
+      .map(([id, x]) => ({ id, label: x.label }));
+    const friends = Object.entries(c.relationships)
+      .filter(([id, r]) => r.affinity > 15 && world.citizens[id])
+      .sort((a, b) => b[1].affinity - a[1].affinity)
+      .slice(0, 2)
+      .map(([id]) => ({ id: `see:${id}`, label: `Meet up with ${world.citizens[id].name}` }));
+    return [...things, ...friends];
+  }
+
+  /** Ask for someone's plan for the day: the person in focus, or whoever wakes up first. */
+  private maybeDayPlan(world: WorldState, focusOnly: boolean): boolean {
+    if (!this.small) return false; // the free web services are kept for conversations
+    const focus = this.focus ? world.citizens[this.focus] : undefined;
+    let c: Citizen | undefined;
+    let want: { day: number; wake: number } | null = null;
+    if (focusOnly) {
+      want = focus ? this.dayToPlan(world, focus) : null;
+      c = want ? focus : undefined;
+    } else {
+      const due = world.citizenOrder
+        .map((id) => world.citizens[id])
+        .map((x) => ({ x, w: this.dayToPlan(world, x) }))
+        .filter((e) => e.w)
+        .sort((a, b) => (a.w!.day - b.w!.day) * 24 + (a.w!.wake - b.w!.wake))[0];
+      c = due?.x;
+      want = due?.w ?? null;
+    }
+    if (!c || !want) return false;
+    const things = this.dayCatalog(world, c, want.day, want.wake);
+    if (things.length < 3) return false;
+    c.cooldowns.agentPlan = world.time;
+    const small = smallDayPlanPrompt(world, c, want.day, want.wake, things);
+    this.send(world, { kind: "dayplan", citizenId: c.id, day: want.day, labels: Object.fromEntries(things.map((t) => [t.id, t.label])) }, small.system, small.user, {}, small);
+    return true;
+  }
+
+  private applyDayPlanResult(world: WorldState, d: Done): void {
+    const c = world.citizens[d.pending.citizenId];
+    if (!c) return;
+    const labels = d.pending.labels ?? {};
+    const raw = (d.json as { items?: unknown } | null)?.items;
+    const items: AgentPlanItem[] = (Array.isArray(raw) ? raw : [])
+      .filter((x): x is { hour: number; id: string; why?: string } => !!x && typeof x.hour === "number" && typeof x.id === "string" && !!labels[x.id])
+      .map((x) => ({ hour: x.hour, id: x.id, label: labels[x.id], why: typeof x.why === "string" ? x.why : "", status: "todo" as const }));
+    if (items.length < 2) {
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : "no usable plan: the utility AI runs their day");
+      return;
+    }
+    c.agent ??= { plan: null, diary: [] };
+    c.agent.plan = { day: d.pending.day ?? dayOf(world.time), items };
+    this.tally.dayplan++;
+    this.log(world, d, "ok", JSON.stringify(d.json), `${c.name}'s plan for day ${c.agent.plan.day}: ${items.map((i) => `${hourLabel(i.hour)} ${i.label.charAt(0).toLowerCase()}${i.label.slice(1)}`).join(", ")}`);
+  }
+
+  // --------------------------------------------------- what they do
+
+  /**
+   * What they do next, when the AI has a say: the move it picked for them
+   * while they were busy, or else the next thing on their own plan for the
+   * day. Either way only if it still makes sense now (otherwise the utility
+   * AI decides).
+   */
   private activityHook(world: WorldState, c: Citizen, options: ActivityOption[], utility: ActivityOption): { option: ActivityOption; thought: string | null } | null {
-    const plan = this.plans.get(c.id);
-    if (!plan || plan.reqId < 0 || world.time > plan.until) return null;
-    this.plans.delete(c.id);
-    if (!plan.choice) return null; // not answered in time
-    const option = options.find((o) => o.id === plan.choice);
-    // Things change (they got hungrier, the shop shut): a pick that no longer makes sense is dropped.
-    if (!option || scoreOf(option) < scoreOf(utility) - PLAN_MARGIN * 1.3) return null;
-    this.tally.plan++;
-    return { option, thought: plan.thought };
+    void utility;
+    const best = Math.max(...options.map(scoreOf));
+    const s = situation(world, c);
+    const fits = (o: ActivityOption) => (o.id.startsWith("see:") ? s.tired <= 0.8 && s.hungry <= 0.8 : scoreOf(o) >= best - ACCEPT_MARGIN);
+    const find = (id: string) => options.find((o) => o.id === id) ?? (id.startsWith("see:") ? this.seeOptions(world, c).find((o) => o.id === id) : undefined);
+    // Their plan for today: what's due now (things left more than three hours late didn't happen).
+    const hour = (world.time % 1440) / 60;
+    const plan = c.agent?.plan?.day === dayOf(world.time) ? c.agent.plan : null;
+    if (plan) for (const it of plan.items) if (it.status === "todo" && hour > it.hour + 3) it.status = "skipped";
+    const due = plan?.items.find((it) => it.status === "todo" && hour >= it.hour - 0.75);
+
+    const pick = this.plans.get(c.id);
+    if (pick && pick.reqId >= 0 && world.time <= pick.until) {
+      this.plans.delete(c.id);
+      const o = pick.choice ? find(pick.choice) : undefined;
+      // Things change (they got hungrier, the shop shut): a pick that no longer makes sense is dropped.
+      if (o && fits(o)) {
+        this.tally.plan++;
+        const planned = plan?.items.find((it) => it.status === "todo" && it.id === o.id);
+        if (planned) planned.status = "done";
+        return { option: o, thought: pick.thought };
+      }
+    }
+    if (due) {
+      const o = find(due.id);
+      if (o && fits(o)) {
+        due.status = "done";
+        this.tally.followed++;
+        const why = due.why ? due.why.charAt(0).toUpperCase() + due.why.slice(1) : "";
+        return { option: o, thought: why ? (/[.!?]$/.test(why) ? why : `${why}.`) : `${hourLabel(due.hour)} on my plan: ${due.label.charAt(0).toLowerCase()}${due.label.slice(1)}.` };
+      }
+    }
+    return null;
+  }
+
+  // ------------------------------------------------------- the diary
+
+  /** Asleep for the night with no diary for the day yet: write it (whoever went to bed first). */
+  private maybeDiary(world: WorldState): boolean {
+    if (!this.small) return false;
+    const day = (c: Citizen) => dayOf(c.activity.startedAt - 4 * 60);
+    const c = world.citizenOrder
+      .map((id) => world.citizens[id])
+      .filter((x) => {
+        if (x.activity.kind !== "sleep" || world.time - x.activity.startedAt < 5) return false;
+        const h = (x.activity.startedAt % 1440) / 60;
+        if (h > 4 && h < 19) return false; // a nap
+        if (world.time - (x.cooldowns.agentDiary ?? -1e9) < 600) return false;
+        return !x.agent?.diary.some((e) => e.day === day(x));
+      })
+      .sort((a, b) => (a.id === this.focus ? -1 : b.id === this.focus ? 1 : a.activity.startedAt - b.activity.startedAt))[0];
+    if (!c) return false;
+    c.cooldowns.agentDiary = world.time;
+    const small = smallDiaryPrompt(world, c);
+    this.send(world, { kind: "diary", citizenId: c.id, day: day(c) }, small.system, small.user, {}, small);
+    return true;
+  }
+
+  private applyDiaryResult(world: WorldState, d: Done): void {
+    const c = world.citizens[d.pending.citizenId];
+    if (!c) return;
+    const text = (d.json as { text?: unknown } | null)?.text;
+    if (typeof text !== "string" || !text) {
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : "no usable diary entry");
+      return;
+    }
+    c.agent ??= { plan: null, diary: [] };
+    c.agent.diary.push({ day: d.pending.day ?? dayOf(world.time), text });
+    if (c.agent.diary.length > 3) c.agent.diary.shift();
+    this.tally.diary++;
+    this.log(world, d, "ok", JSON.stringify(d.json), `${c.name}'s diary: "${text}"`);
   }
 
   // --------------------------------------------------------- thoughts
@@ -609,6 +816,8 @@ export class AIDirector {
       else if (d.pending.kind === "invent") this.applyInventResult(world, d);
       else if (d.pending.kind === "thought") this.applyThoughtResult(world, d);
       else if (d.pending.kind === "plan") this.applyPlanResult(world, d);
+      else if (d.pending.kind === "dayplan") this.applyDayPlanResult(world, d);
+      else if (d.pending.kind === "diary") this.applyDiaryResult(world, d);
       else this.applyConversationResult(world, d);
     }
     // Replies first, so the next request goes out as soon as the last one is in.

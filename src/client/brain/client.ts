@@ -1,5 +1,5 @@
 import type { LLMClient, LLMRequest, LLMResponse } from "../../sim/ai/llm";
-import { readChoice, readLines, readThought } from "../../sim/ai/small";
+import { readChoice, readDiary, readLines, readPlan, readThought, type SmallPrompt } from "../../sim/ai/small";
 import type { BrainEvent, BrainRequest, BrainSource, GenerateOptions } from "./protocol";
 
 // The page's side of the town's brain: starts the worker, finds the model
@@ -208,14 +208,17 @@ export class BrainClient implements LLMClient {
     const p = req.small;
     if (!p) throw new Error("the in-page brain only takes short prompts");
     const base = { prompt: chatml(p.system, p.user, p.prefill), cachePrefix: chatmlStart(p.system), topK: 50, seed: Math.floor(Math.random() * 2 ** 31) };
-    const opts: GenerateOptions =
-      p.kind === "lines"
-        ? { ...base, maxNewTokens: 220, temperature: 0.85, topP: 0.92, repetitionPenalty: 1.15, stop: ["<|im_", "\n\n\n"] }
-        : p.kind === "thought"
-          ? { ...base, maxNewTokens: 60, temperature: 0.9, topP: 0.92, repetitionPenalty: 1.1, stop: ["\n"] }
-          : // A pick and a reason: stop before it starts listing the options again.
-            { ...base, maxNewTokens: 44, temperature: 0.6, topP: 0.9, repetitionPenalty: 1.05, stop: ["\n\n", "\n1", "\n2", "\n3", "\n4", "<|im_"] };
-    if (this.forced) opts.forced = forcedReply(p.kind, p.names ?? []);
+    // How long, how adventurous, and where to stop, for each kind of reply.
+    const shape: Record<SmallPrompt["kind"], Omit<GenerateOptions, "prompt" | "cachePrefix" | "topK" | "seed">> = {
+      lines: { maxNewTokens: 220, temperature: 0.85, topP: 0.92, repetitionPenalty: 1.15, stop: ["<|im_", "\n\n\n"] },
+      thought: { maxNewTokens: 60, temperature: 0.9, topP: 0.92, repetitionPenalty: 1.1, stop: ["\n"] },
+      // A pick and a reason: stop before it starts listing the options again.
+      choice: { maxNewTokens: 44, temperature: 0.6, topP: 0.9, repetitionPenalty: 1.05, stop: ["\n\n", "<|im_", ...Array.from({ length: 9 }, (_, i) => `\n${i + 1}`)] },
+      plan: { maxNewTokens: 120, temperature: 0.8, topP: 0.92, repetitionPenalty: 1.1, stop: ["\n\n", "<|im_"] },
+      diary: { maxNewTokens: 70, temperature: 0.9, topP: 0.92, repetitionPenalty: 1.1, stop: ["\n\n", "<|im_"] },
+    };
+    const opts: GenerateOptions = { ...base, ...shape[p.kind] };
+    if (this.forced) opts.forced = forcedReply(p.kind, p.names ?? [], p.prefill);
     const r = await this.generate(opts);
     const text = p.prefill + r.text;
     let json: unknown = null;
@@ -225,14 +228,27 @@ export class BrainClient implements LLMClient {
     } else if (p.kind === "thought") {
       const t = readThought(text, "");
       json = t ? { thought: t } : null;
+    } else if (p.kind === "plan") {
+      const items = readPlan(text, p.options ?? [], p.labels ?? []);
+      json = items.length >= 2 ? { items } : null;
+    } else if (p.kind === "diary") {
+      const t = readDiary(text);
+      json = t ? { text: t } : null;
     } else json = readChoice(text, p.options ?? []);
     return { json, inputTokens: r.promptTokens, outputTokens: r.newTokens, model: `brain:${this.status.name}` };
   }
 }
 
 /** What a forced (test) reply says: recognisable, and in the right shape. */
-function forcedReply(kind: "lines" | "thought" | "choice", names: string[]): string {
+function forcedReply(kind: SmallPrompt["kind"], names: string[], prefill: string): string {
   if (kind === "lines") return ` Well, look who it is! #brain\n${names[1]}: Hello yourself. #brain\n${names[0]}: Busy day? #brain\n${names[1]}: Always. #brain`;
   if (kind === "thought") return "I wonder what today will bring, #brain.";
+  if (kind === "plan") {
+    // From the first time it was given, every two and a half hours: the first few things on the list, in order.
+    const m = prefill.match(/^(\d{1,2})(?::(\d{2}))?(am|pm)/);
+    const start = m ? (Number(m[1]) % 12) + (m[3] === "pm" ? 12 : 0) + (m[2] ? 0.5 : 0) : 8;
+    return ` 1 - first things first #brain\n${[1, 2, 3].map((k) => `${Math.floor(start + k * 2.5)}:00: ${k + 1} - then this #brain`).join("\n")}`;
+  }
+  if (kind === "diary") return " was a long day, #brain. Tomorrow I'll do better.";
   return "1. It feels right. #brain";
 }

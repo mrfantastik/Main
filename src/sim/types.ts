@@ -409,6 +409,25 @@ export interface DecisionRecord {
   thought: string;
 }
 
+/** One line of a citizen's own plan for the day (written by the town's brain). */
+export interface AgentPlanItem {
+  /** Hour of the day (7.5 = 7:30am). */
+  hour: number;
+  /** The activity option it refers to (e.g. "pub", "work_corp", "see:c4"). */
+  id: string;
+  label: string;
+  /** Why, in their words. */
+  why: string;
+  status: "todo" | "done" | "skipped";
+}
+
+/** What a citizen run by the town's brain keeps for itself: today's plan, and its diary. */
+export interface AgentMind {
+  plan: { day: number; items: AgentPlanItem[] } | null;
+  /** Last few nights' diary entries, newest last. */
+  diary: { day: number; text: string }[];
+}
+
 export interface Citizen {
   id: CitizenId;
   name: string;
@@ -461,6 +480,8 @@ export interface Citizen {
   goal: Goal;
   thought: string;
   thoughtSource: "utility" | "llm";
+  /** Only when the town's brain runs them: their plan for the day and their diary. */
+  agent?: AgentMind;
   thoughtT: number;
   /** 1 mundane, 2 urgent need, 3 strategic/social, 4 major life event. */
   thoughtPriority: number;
@@ -906,7 +927,7 @@ export interface AILogEntry {
   id: number;
   t: number;
   citizenId: CitizenId | null;
-  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan";
+  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary";
   prompt: string;
   response: string;
   costUsd: number;

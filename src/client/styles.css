@@ -920,3 +920,10 @@ button:disabled {
     max-width: 70%;
   }
 }
+
+/* The connection / autosave chip keeps one width whatever it says. */
+.chip.status {
+  min-width: 7.8em;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}

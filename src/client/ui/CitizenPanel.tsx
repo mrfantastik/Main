@@ -131,6 +131,7 @@ function Overview({ d }: { d: CitizenDetail }) {
         {d.thought}
         <span className="src">{d.thoughtSource === "llm" ? `🧠 Reasoned by ${ai}` : "⚙️ From the utility AI's current decision"}</span>
       </div>
+      {d.agent?.plan && <TodaysPlan d={d} ai={ai} />}
       <div className="section">
         How {d.name} feels{d.emotion ? ` — mostly ${EMOTION_UI.find((e) => e.key === d.emotion!.kind)?.label.toLowerCase()} ${d.emotion.emoji}` : " — calm"}
       </div>
@@ -245,11 +246,52 @@ function Overview({ d }: { d: CitizenDetail }) {
   );
 }
 
+/** "8am", "1:30pm". */
+function clock(h: number): string {
+  const hh = Math.floor(h) % 24;
+  const mm = Math.round((h - Math.floor(h)) * 60);
+  return `${hh % 12 === 0 ? 12 : hh % 12}${mm ? `:${String(mm).padStart(2, "0")}` : ""}${hh < 12 ? "am" : "pm"}`;
+}
+
+/** Their own plan for today, as the town's brain wrote it, ticked off as they go. */
+function TodaysPlan({ d, ai }: { d: CitizenDetail; ai: string }) {
+  return (
+    <>
+      <div className="section">📝 {d.name}'s plan for today</div>
+      <div className="list plan">
+        {d.agent!.plan!.map((it, i) => (
+          <div key={i} className={`item ${it.status}`} style={{ opacity: it.status === "skipped" ? 0.5 : 1 }}>
+            <span className="chip">{clock(it.hour)}</span> {it.status === "done" ? "✅" : it.status === "skipped" ? "✖️" : "⏳"} <b>{it.label}</b>
+            {it.why && <div className="meta">"{it.why}"</div>}
+          </div>
+        ))}
+      </div>
+      <div className="muted" style={{ fontSize: 11 }}>
+        Written by {ai} for their day (overnight, or when they first need one). They follow it when it still makes sense; anything more than three
+        hours late is dropped.
+      </div>
+    </>
+  );
+}
+
 function Mind({ d }: { d: CitizenDetail }) {
   return (
     <>
       <div className="section">Current thought</div>
       <div className={`thought ${d.thoughtSource === "llm" ? "llm" : ""}`}>{d.thought}</div>
+      {d.agent && d.agent.diary.length > 0 && (
+        <>
+          <div className="section">📔 Diary</div>
+          <div className="list">
+            {d.agent.diary.map((e) => (
+              <div key={e.day} className="item" style={{ fontStyle: "italic" }}>
+                {e.text}
+                <div className="meta">Day {e.day}, last thing at night</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
       <div className="section">Key insights (lessons from sleeping on it)</div>
       {d.lessons.length === 0 ? (
         <div className="empty">Nothing learned yet. They reflect on the day while they sleep.</div>

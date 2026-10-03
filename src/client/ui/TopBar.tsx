@@ -44,14 +44,14 @@ export function TopBar() {
         <span className={`chip ${st.economy.mode === "boom" ? "good" : "bad"}`}>{st.economy.mode === "boom" ? "📈 BOOM" : "📉 CRASH"}</span>
       )}
       <div className="toolbar">
-        <span className={`chip ${connected ? "good" : "bad"}`} title={st?.savedAt ? "Running · last autosave" : undefined}>
+        {/* Always the same width, so the first autosave doesn't reflow the bar (and shift the map). */}
+        <span className={`chip status ${connected ? "good" : "bad"}`} title={connected ? (st?.savedAt ? `Running · last autosave ${clock(st.savedAt)}` : "Running") : "Not connected"}>
           <i className="dot" style={{ background: connected ? "#2fbf71" : "#e5484d" }} />
-          {connected ? "Live" : "Offline"}
-          {connected && st?.savedAt ? <span className="muted"> · 💾 {clock(st.savedAt)}</span> : null}
+          {!connected ? "Offline" : st?.savedAt ? <span>💾 {clock(st.savedAt)}</span> : "Live"}
         </span>
         {ai?.brain && (ai.brain.state === "off" || ai.brain.state === "error") && (
-          <button className="tool" title="Run an open-source AI on your computer so people think and talk for themselves" onClick={() => store.send({ type: "ai", brain: "load" })}>
-            🧠 Wake the town's brain
+          <button className="tool" aria-label="Wake the town's brain" title="Wake the town's brain: an open-source AI on your computer that runs the people" onClick={() => store.send({ type: "ai", brain: "load" })}>
+            🧠 Wake the brain
           </button>
         )}
         {ai && !(ai.brain && (ai.brain.state === "off" || ai.brain.state === "error")) && (
