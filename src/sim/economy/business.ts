@@ -155,7 +155,7 @@ function markRivals(world: WorldState, b: Business): void {
     addRole(rival, owner.id, "rival");
     adjustRel(world, rival, owner.id, { affinity: -4 - rival.traits.competitiveness * 10, familiarity: 5 });
     adjustRel(world, owner, rival.id, { familiarity: 5 });
-    remember(world, rival, { text: `${owner.name} opened ${b.name} selling ${what} — competing with my ${other.name}.`, kind: "business", importance: 6, valence: -0.5, people: [owner.id], key: `rival:${owner.id}` });
+    remember(world, rival, { text: `${owner.name} opened ${b.name} selling ${what}, the same as me.`, kind: "business", importance: 6, valence: -0.5, people: [owner.id], key: `rival:${owner.id}` });
     if (rival.traits.competitiveness > 0.6) {
       logEvent(world, "business", `⚔️ ${rival.name} isn't happy: ${owner.name} is now selling ${what} too.`, 3, [rival.id, owner.id], b.id);
     }

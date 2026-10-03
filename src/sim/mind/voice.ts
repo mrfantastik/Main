@@ -51,11 +51,12 @@ const FORMAL: [RegExp, string][] = [
   [/\bdon't\b/g, "do not"],
   [/\bwon't\b/g, "will not"],
   [/\bI'll\b/g, "I shall"],
+  [/\bit's (been|worked|got|gone|done|had)\b/g, "it has $1"],
   [/\bit's\b/g, "it is"],
   [/\bIt's\b/g, "It is"],
   [/\byou're\b/g, "you are"],
   [/\bI've\b/g, "I have"],
-  [/\bthat's\b/g, "that is"],
+  [/\bthat's\b(?! me\b)/g, "that is"],
   [/\bisn't\b/g, "is not"],
   [/\bdidn't\b/g, "did not"],
   [/\bAlright\b/g, "Good day"],
@@ -104,24 +105,26 @@ function styled(style: SpeakingStyle, text: string, seed: string, listener: Citi
       return t;
     }
     case "chatty":
-      if (r < 0.45 && !/^(Anyway|Right|Well|So)\b/.test(text) && !/\?$/.test(text) && spend(budget, "flair")) return prefix(pickBy(seed, ["Oh! ", "Honestly, ", "You know what? ", "Right, so: "]), text);
-      if (r < 0.75 && !SAD.test(text) && text.split(/\s+/).length >= 6 && spend(budget, "flair")) return suffix(text, " Anyway!");
+      // A lead-in on something they're saying about themselves or what they think, not on an answer or a refusal.
+      if (r < 0.45 && /^(I|I'm|I've|It|It's|That|That's|This|My|We)\b/.test(text) && !/\?$/.test(text) && !negative && spend(budget, "flair"))
+        return prefix(pickBy(seed, ["Oh! ", "Honestly, ", "You know what? ", "Oh, and "]), text);
       return text;
     case "sarcastic": {
       // Sarcasm needs something to bite on: a gripe about their own lot, or
       // a bit of good news about themselves they pretend is a surprise.
       if (r >= 0.4 || /\?$/.test(text)) return text;
       const aboutOthers = text.split(/\W+/).some((w) => NAMES.has(w) && w !== listener?.name);
-      if ((negative || SAD.test(text)) && !aboutOthers && !NEWSY.test(text) && spend(budget, "flair")) return prefix(pickBy(seed, ["Oh, wonderful. ", "Great. ", "Fantastic. "]), text);
+      if (SAD.test(text) && /^(I|I'm|I've|My|It's been)\b/.test(text) && !aboutOthers && !NEWSY.test(text) && spend(budget, "flair")) return prefix(pickBy(seed, ["Oh, wonderful. ", "Great. ", "Fantastic. "]), text);
       if (!negative && /^(I|I'm|I've|Really|Great|Brilliant|Not bad|Pretty good|Never better)\b/.test(text) && /\b(good|great|brilliant|well|lucky|won|better|best)\b/i.test(text) && spend(budget, "flair")) return suffix(text, pickBy(seed, [" Shocking, I know.", " Who'd have thought."]));
       return text;
     }
     case "warm":
-      if (r < 0.3 && listener && !text.includes(listener.name) && spend(budget, "flair")) return prefix(`${listener.name}, `, text);
+      if (r < 0.3 && listener && !text.includes(listener.name) && !/^(Ha|Huh|Oh|Ooh|Ugh|Eh|Hm|Blimey|Wow|Nah|Well|Aw|No|Yes|Yeah)\b/.test(text) && spend(budget, "flair")) return prefix(`${listener.name}, `, text);
       if (r < 0.5 && /[.!]$/.test(text) && !/\?/.test(text) && spend(budget, "flair")) return `${text.slice(0, -1)}${pickBy(seed, [", love.", ", pet.", ", mate."])}`;
       return text;
     case "nervous":
-      if (r < 0.45 && spend(budget, "flair")) return prefix(pickBy(seed, ["Um, ", "Sorry, ", "I just... ", "Er, "]), text);
+      if (r < 0.45 && text.split(/\s+/).length >= 4 && spend(budget, "flair"))
+        return prefix(/^(I need|Could|Can I|Would you|I'm short|I hate to ask)/.test(text) ? pickBy(seed, ["Sorry, ", "Um, sorry, "]) : pickBy(seed, ["Um, ", "Er, ", "Oh, um, "]), text);
       return text;
   }
 }
@@ -149,19 +152,19 @@ export function inVoice(c: Citizen, text: string, seed: string, listener?: Citiz
       if (r < 0.3 && !sad && leadOk && !/^(Ha|Oh|Huh|Eh|Hm|Ooh|Ugh|Blimey|Wow)\b/.test(t) && /!|\b(good|great|brilliant|love|nice|pleased|lucky|best|glad)\b/i.test(t) && spend(budget, "mood")) t = prefix("Ha! ", t);
       break;
     case "fear":
-      if (r < 0.35 && leadOk && aboutSelf && !/worr/i.test(t) && spend(budget, "mood")) t = prefix("I'm worried, ", t);
+      // Worry shows as trailing off, on something worrying.
+      if (r < 0.35 && sad && /[.!]$/.test(t) && spend(budget, "mood")) t = t.replace(/[.!]$/, "...");
       break;
     case "shame":
-      if (r < 0.3 && leadOk && aboutSelf && spend(budget, "mood")) t = prefix("This is embarrassing, but ", t);
+      if (r < 0.3 && leadOk && aboutSelf && /\b(need|short|owe|borrow|money|rent|£)\b/i.test(t) && spend(budget, "mood")) t = prefix("This is embarrassing, but ", t);
       break;
     case "envy":
-      if (r < 0.3 && listener && listener.money + listener.savings > c.money + c.savings && !sad && spend(budget, "mood")) t = suffix(t, " Must be nice.");
       break;
     case "loneliness":
       if (r < 0.3 && spend(budget, "mood")) t = `It's good to talk to someone. ${t}`;
       break;
     case "pride":
-      if (r < 0.25 && !NEGATIVE_WORDS.test(t) && !sad && spend(budget, "mood")) t = suffix(t, " Not bad, eh?");
+      if (r < 0.25 && /^(I|I'm|I've|My)\b/.test(t) && /\b(good|great|well|best|made|won|£)\b/i.test(t) && !NEGATIVE_WORDS.test(t) && !sad && spend(budget, "mood")) t = suffix(t, " Not bad, eh?");
       break;
   }
   return t.length > 220 ? text : t;
@@ -190,14 +193,15 @@ export function memoryCallback(c: Citizen, other: Citizen, moment: "refuse" | "a
   const m = keyMemory(c, other.id);
   if (!m) return null;
   const d = dayOf(m.t);
-  // "on Day 12" / "yesterday" / "today", and the bare noun ("Day 12", "yesterday", "earlier").
-  const on = d === today ? "today" : d === today - 1 ? "yesterday" : `on Day ${d}`;
-  const then = d === today ? "earlier" : d === today - 1 ? "yesterday" : `Day ${d}`;
+  // How people say when it was: "today", "yesterday", "the other day", "last week", "a while back".
+  const ago = today < 0 ? 99 : today - d;
+  const on = ago <= 0 ? "today" : ago === 1 ? "yesterday" : ago < 7 ? "the other day" : ago < 14 ? "last week" : "a while back";
+  const then = ago <= 0 ? "earlier" : ago === 1 ? "yesterday" : ago < 7 ? "the other day" : ago < 14 ? "last week" : "that time";
   const amount = m.text.match(/£[\d,.]+/)?.[0];
   const bad = m.valence < 0;
   if (moment === "refuse" && bad) {
     if (amount && (m.kind === "betrayal" || m.kind === "loan")) {
-      return d >= today - 1 ? `You still owe me that ${amount}. Why would I help you now?` : `You never paid back that ${amount} from Day ${d}. Why would I help you now?`;
+      return ago <= 1 ? `You still owe me that ${amount}. Why would I help you now?` : `You never paid back that ${amount} from ${on}. Why would I help you now?`;
     }
     return pickBy(seed, [`After what you did ${on}? No chance.`, `I haven't forgotten what happened ${on}. The answer's no.`, `Not after ${d === today ? "today" : then}, ${other.name}.`]);
   }
@@ -213,7 +217,7 @@ export function memoryCallback(c: Citizen, other: Citizen, moment: "refuse" | "a
   }
   if (moment === "argue" && bad) {
     if (d === today) return pickBy(seed, ["And after what you pulled earlier, too.", "And after today? Unbelievable."]);
-    return pickBy(seed, [`And don't think I've forgotten what you did ${on}.`, `${then[0].toUpperCase()}${then.slice(1)}. Remember that?`]);
+    return pickBy(seed, [`And don't think I've forgotten what you did ${on}.`, `Remember ${then}? Because I do.`]);
   }
   return null;
 }

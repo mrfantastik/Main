@@ -16,7 +16,7 @@ import { voiceConversation } from "../mind/voice";
 import { chance, rand, type RngHolder } from "../rng";
 import { dayOf } from "../time";
 import type { Citizen, Conversation, ConversationTopic, ConvValue, EventCategory, Loan, WorldState } from "../types";
-import { clamp, money, newId, pct, pushRing, round2 } from "../util";
+import { clamp, inDays, money, newId, pct, pushRing, round2 } from "../util";
 import { hotNews, knows } from "../town/happenings";
 import { applyNotes, improvise } from "./improv";
 import { talkIn } from "./talk";
@@ -246,7 +246,7 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
         const loan = createPeerLoan(world, b, a, num(o.amount), num(o.rate), num(o.days, 7), String(conv.terms.purpose ?? "get by"));
         if (!loan) return null;
         conv.summary = `${b.name} lent ${a.name} ${money(loan.principal)} at ${pct(loan.rate)} to ${loan.purpose}.`;
-        setThought(world, a, `${b.name} came through with ${money(loan.principal)}. I owe ${money(loan.totalDue)} by Day ${dayOf(loan.dueT)}.`, 3, llm);
+        setThought(world, a, `${b.name} came through with ${money(loan.principal)}. I owe ${money(loan.totalDue)}, due ${inDays((loan.dueT - world.time) / 1440)}.`, 3, llm);
         return news(`💸 ${a.name} borrowed ${money(loan.principal)} from ${b.name} at ${pct(loan.rate)} interest (to ${loan.purpose}).`, "finance", 4);
       }
       conv.summary = `${b.name} turned down ${a.name}'s request for ${money(num(conv.terms.requested))}.`;
@@ -677,12 +677,12 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
   // Seeing each other brings back how they feel about each other.
   recallPerson(world, a, b.id);
   recallPerson(world, b, a.id);
-  const was = talkIn((world.talkRecent ??= []));
+  const was = talkIn((world.talkRecent ??= []), world.time);
   let prepared: ReturnType<(typeof handlers)[typeof topic]["prepare"]>;
   try {
     prepared = handlers[topic].prepare(world, conv, a, b, world);
   } finally {
-    talkIn(was);
+    talkIn(was, world.time);
   }
   if (!prepared) return null;
   prepared.lines = voiceConversation(conv.id, topic === "chat" ? "improv" : topic, a, b, prepared.lines, typeof prepared.outcome.agreed === "boolean" ? prepared.outcome.agreed : null, dayOf(world.time));

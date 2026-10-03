@@ -60,3 +60,25 @@ test("bad news gets a reply to it, not small talk", () => {
   }
   assert.equal(answered, 6);
 });
+
+test("conversations make sense: no answers to unasked questions, hanging questions, wrong-sized reactions or voice tics", async () => {
+  const { ChatAudit } = await import("../src/sim/social/coherence");
+  const audit = new ChatAudit();
+  for (const seed of [42, 7]) {
+    const w = newWorld(seed);
+    const seen = new Set<number>();
+    for (let h = 0; h < 6 * 24; h++) {
+      advance(w, 60);
+      for (const c of w.conversationLog) {
+        if (c.status !== "done" || seen.has(c.id)) continue;
+        seen.add(c.id);
+        audit.add(w, c);
+      }
+    }
+  }
+  const n = (k: string) => audit.counts.get(k as never) ?? 0;
+  const show = [...audit.examples.values()].flat().slice(0, 3).join("\n\n");
+  assert.ok(audit.chats > 300, `only ${audit.chats} chats`);
+  for (const k of ["unasked answer", "day number", "voice tic", "wrong time of day", "unanswered goodbye", "wrong opinion"]) assert.equal(n(k), 0, `${k}:\n${show}`);
+  assert.ok(audit.total() / audit.chats < 0.01, `${audit.total()} problems in ${audit.chats} chats:\n${show}`);
+});

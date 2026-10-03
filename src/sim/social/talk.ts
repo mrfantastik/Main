@@ -15,12 +15,22 @@ const MEMORY = 120;
 /** How many the town as a whole remembers (they're used much less often while they're fresh). */
 const TOWN_MEMORY = 300;
 
+/** The last few things said, word for word: nobody echoes the line they've just heard. */
+const lastLines: string[] = [];
+function spoken(text: string): void {
+  lastLines.push(text);
+  if (lastLines.length > 16) lastLines.shift();
+}
+
 /** The town's recent wordings (the world's list), set while a conversation is being made up, and a quick lookup of them. */
 let town: string[] | null = null;
 let townSet = new Set<string>();
 
-/** Use the world's list of recent wordings while making up conversations (null to stop). Returns the one it replaces. */
-export function talkIn(recent: string[] | null): string[] | null {
+/** Use the world's list of recent wordings while making up conversations (null to stop), at game time `now`. Returns the list it replaces. */
+export function talkIn(recent: string[] | null, now: number | null = null): string[] | null {
+  clock = recent ? now : null;
+  // A new conversation starts with nothing just said (so a day skipped plays out exactly like one watched).
+  if (recent && !town) lastLines.length = 0;
   const was = town;
   if (recent !== town) townSet = new Set(recent ?? []);
   town = recent;
@@ -112,20 +122,15 @@ const B: Record<string, Bank> = {
     warm: ["Hello, {you}, love.", "Hiya {you}! You alright?"],
     nervous: ["Oh, hi {you}. Um, hello.", "Hi! It's {you}, isn't it? Sorry."],
   },
-  greetPub: { all: ["{you}! What are you drinking?", "Fancy seeing you in here, {you}.", "{you}! Pull up a stool.", "First one's on me, {you}. Joking. Mostly.", "Thirsty work, is it, {you}?"] },
-  greetPark: { all: ["Lovely day for it, {you}.", "{you}! Getting some fresh air?", "{you}! Out for a stroll?", "Nice out here, isn't it, {you}?"] },
-  greetDiner: { all: ["{you}! What's good today?", "Grabbing a bite too?", "{you}! Don't have the soup.", "Lunch break, {you}?"] },
-  greetCafe: { all: ["{you}! Caffeine break?", "{you}! Need a coffee as much as I do?", "Morning brew, {you}?"] },
-  greetMarket: { all: ["{you}! Bargain hunting?", "{you}! Found anything good?", "Spending money again, {you}?", "{you}! Don't buy the last of the cheap stuff."] },
-  greetWork: { all: ["{you}! Busy?", "Hard at it, {you}?", "{you}! Don't let me keep you.", "Working hard or hardly working, {you}?", "Got a minute, {you}?", "{you}! Quick word?", "Sorry to interrupt, {you}.", "Don't mind me, {you}. Just saying hello.", "{you}! They've got you busy today."] },
-  // Answers to a greeting that asks something about the place or the moment.
-  ansPub: { all: ["Just the one. Honest.", "The usual. It's been that sort of day.", "Don't mind if I do.", "Whatever's on tap.", "Something strong, please."] },
-  ansPark: { all: ["Clearing my head.", "Making the most of it while it lasts.", "Just walking. It's free.", "Needed some air, to be honest."] },
-  ansDiner: { all: ["Whatever's cheapest.", "The fry-up. Always the fry-up.", "Ha! Noted.", "I'm too hungry to care."] },
-  ansCafe: { all: ["Desperately.", "My third today. Don't judge.", "Always. It's basically my blood.", "Go on then, I'll have one."] },
-  ansMarket: { all: ["Window shopping, mostly.", "Looking for a bargain. Found nothing yet.", "Just browsing.", "Spending money I don't have."] },
-  ansWork: { all: ["Rushed off my feet.", "Always. Go on, quickly.", "Never too busy for you.", "Flat out. What's up?", "I've got a minute."] },
-  askHowAnyway: { all: ["How are you, anyway?", "So how are you doing?", "How's things otherwise?", "And how are you keeping?", "Anyway, how are you?"] },
+  askHowAnyway: {
+    all: ["How are you, anyway?", "So how are you doing?", "How's things otherwise?", "And how are you keeping?", "Anyway, how are you?", "How's life treating you, anyway?", "But how are you, really?", "How's everything with you?", "And how have you been?"],
+    formal: ["And how are you keeping?", "But how are you, otherwise?"],
+    blunt: ["You alright, though?", "How's things?"],
+    warm: ["And how are you, love?", "How are you doing, anyway, pet?"],
+    nervous: ["Um, how are you, anyway?", "Sorry. How are you?"],
+    chatty: ["Anyway! How are you? How's everything?", "But never mind that, how are you?"],
+    sarcastic: ["Still alive, then?", "How's life in the fast lane, anyway?"],
+  },
   greetCold: {
     all: ["Oh. It's you.", "{you}.", "Well, well. {you}.", "Didn't expect to see you here.", "Oh, great."],
     formal: ["{you}.", "Good {daypart}. I suppose."],
@@ -136,6 +141,29 @@ const B: Record<string, Bank> = {
   coldNeutral: { all: ["Alright, {you}.", "Hello to you too.", "Nice to see you too.", "Charming as ever.", "Lovely greeting, that."] },
 
   // ------------------------------------------------- how are you
+  // Asking, when the hello didn't.
+  askHow: {
+    all: ["How are you?", "How's things?", "How are you doing?", "How's it going?", "How have you been?", "You alright?", "How's your {daypart} going?", "How's life?"],
+    formal: ["How are you keeping?", "I trust you're well?"],
+    blunt: ["How's it going?", "Alright?"],
+    chatty: ["How are you? How's everything?", "How's things? Tell me everything!"],
+    sarcastic: ["Still surviving?", "How's life in the fast lane?"],
+    warm: ["How are you, love?", "You doing alright?"],
+    nervous: ["Um, how are you?", "How are you doing? Sorry, I'm rambling."],
+  },
+  // Saying hello back, when the hello wasn't a question.
+  greetBack: {
+    all: ["Hi {you}.", "Oh, hello {you}.", "{you}! Hi.", "Hiya.", "Alright, {you}.", "Hey, {you}.", "Oh, hi!", "Hello, you."],
+    formal: ["Good {daypart}, {you}.", "Hello, {you}."],
+    blunt: ["{you}.", "Alright."],
+    warm: ["Hello, love!", "Hiya, {you}!"],
+    nervous: ["Oh! Hi, {you}.", "Oh, um, hi!"],
+  },
+  // Coming out with how their day has gone, unasked.
+  newsLeadGood: { all: ["Guess what?", "You'll never guess what.", "Good news, actually.", "I've had a good day, as it goes.", "I've got to tell someone.", "Can I tell you something?"] },
+  newsLeadBad: { all: ["Ugh, what a day.", "I've had a rotten day, actually.", "You won't believe my day.", "Don't ask how I am.", "Can I have a moan?"] },
+  newsLeadSmall: { all: ["Little bit of good news, actually.", "Small win today.", "Nothing major, but", "Had a nice surprise, actually."] },
+  newsLeadSmallBad: { all: ["Bit of an annoying day.", "Minor disaster today.", "Small thing, but it's bugging me.", "Not my day, in a small way."] },
   askBack: { all: ["You?", "And you?", "How about you?", "What about you?", "How are you doing?", "You alright?", "And yourself?", "How's things with you?"], formal: ["And yourself?", "And how are you?"], warm: ["How are you, love?"], blunt: ["You?"] },
   sameHere: { all: ["Same, actually.", "Ha. Same here.", "Snap.", "Much the same.", "Same as you, really.", "Same old.", "Can't say different."] },
   howFine: {
@@ -168,8 +196,11 @@ const B: Record<string, Bank> = {
   howTired: { all: ["Knackered, honestly.", "Shattered. Could sleep standing up.", "Running on fumes.", "Exhausted. I need my bed.", "Dead on my feet.", "Tired. So tired.", "Half asleep, to be honest."] },
   howHungry: { all: ["Starving, to be honest.", "Hungry. I could eat a horse.", "Ravenous. Haven't eaten all day.", "My stomach thinks my throat's been cut.", "Peckish. Very peckish."] },
   howWet: { all: ["Soaked to the skin.", "Drenched. Have you seen it out there?", "Wet. Very wet.", "Like a drowned rat.", "Dripping, thanks for asking."] },
-  howGoodDay: { all: ["Great, actually.", "Brilliant day.", "Not bad at all.", "Really good, as it goes.", "Best day in ages.", "Honestly? Fantastic."] },
+  howGoodDay: { all: ["Great, actually.", "Brilliant day.", "Really good, as it goes.", "Best day in ages.", "Honestly? Fantastic."] },
   howBadDay: { all: ["Not great.", "Rough day.", "Honestly? Awful.", "Bit of a nightmare, actually.", "Don't ask. Well, you asked.", "I've had better days."] },
+  // The same, when it's only a small thing.
+  howGoodSmall: { all: ["Not bad, actually.", "Pretty good, as it goes.", "Decent, thanks.", "Can't complain, actually.", "Good, thanks. Little bit of luck today."] },
+  howBadSmall: { all: ["Bit annoyed, actually.", "Could be better.", "Alright. Bit of a niggle today.", "Fine, mostly. One annoying thing."] },
   howSad: { all: ["Not great, honestly.", "I've had better weeks.", "Bit low, to be honest.", "Struggling a bit.", "Meh. Not my week."] },
   howAngry: { all: ["Don't ask.", "Fuming, if I'm honest.", "Ready to scream, frankly.", "Wound up. Very wound up.", "Spitting feathers."] },
   howScared: { all: ["Bit on edge, to be honest.", "Worried, mostly.", "Anxious. Can't settle.", "Nervous. Long story.", "Not sleeping well, put it that way."] },
@@ -181,24 +212,26 @@ const B: Record<string, Bank> = {
   howAshamed: { all: ["Oh, you know. Getting by.", "Bit embarrassed about something, but fine."] },
 
   // ---------------------------------------------- answering news they mention
+  // After they've said what happened (so no "what happened?").
   sympathy: {
     all: [
-      "Oh no. What happened?",
+      "Oh no. I'm sorry.",
       "That sounds awful. Are you alright?",
       "Oh, I'm sorry. Do you want to talk about it?",
-      "What? Tell me everything.",
       "Oh no. You poor thing.",
       "That's rotten luck. How are you holding up?",
       "Blimey. Are you OK?",
       "Oh dear. Is there anything I can do?",
+      "That's awful.",
     ],
-    formal: ["I'm very sorry to hear that. What happened?", "How dreadful. Are you all right?"],
-    blunt: ["That's rubbish. What happened?", "Bad luck. You alright?"],
-    chatty: ["Oh no no no. What happened? Tell me everything!", "Oh my goodness, are you alright?!"],
+    formal: ["I'm very sorry to hear that.", "How dreadful. Are you all right?"],
+    blunt: ["That's rubbish. You alright?", "That's grim."],
+    chatty: ["Oh no no no. That's awful! Are you alright?", "Oh my goodness, are you alright?!"],
     sarcastic: ["Well, that's the universe for you. You alright, though?", "Course it is. Seriously though, you OK?"],
     warm: ["Oh, love. Come here. What happened?", "Oh sweetheart, I'm so sorry."],
     nervous: ["Oh no, um, are you OK? Sorry. That's awful.", "Oh gosh. Is there anything I can do?"],
   },
+  sympathySmall: { all: ["Ah, that's annoying.", "Oh, bad luck.", "Ugh, that's a pain.", "Oh no. Not the end of the world, though.", "That's irritating.", "Ah, rubbish."], blunt: ["Annoying."], warm: ["Oh, that's a nuisance, love."] },
   gloat: { all: ["Can't say I'm crying about it.", "Shame. Well. These things happen.", "Hm. Karma, maybe.", "Oh dear. How sad."] },
   congrats: {
     all: [
@@ -218,10 +251,14 @@ const B: Record<string, Bank> = {
     warm: ["Oh, love, that's wonderful. I'm so happy for you.", "Aw, that's brilliant. You deserve it."],
     nervous: ["Oh wow, that's, um, really great! Well done!", "Oh! That's amazing. Congratulations!"],
   },
+  congratsSmall: { all: ["Nice.", "Every little helps.", "Ooh, nice one.", "Not bad at all.", "That'll buy a few lunches.", "I'll take a bit of that.", "Small wins, eh?", "Good for you."], formal: ["How nice."], sarcastic: ["Big spender."], warm: ["Aw, lovely."], nervous: ["Oh, nice! That's nice."] },
+  envySmall: { all: ["Alright for some.", "Don't spend it all at once.", "Lucky you.", "Some people have all the luck."] },
   envyReply: { all: ["Must be nice.", "Alright, no need to rub it in.", "Some of us aren't so lucky.", "Lucky you. Really.", "Wish I had your luck.", "Good for you. I suppose."] },
   tellMore: { all: ["Go on.", "What happened?", "Uh oh. What is it?", "Tell me.", "Oh? Go on then.", "I'm all ears.", "That sounds ominous."], warm: ["What is it, love?"], blunt: ["Spit it out."] },
   elaborateBad: { all: ["I'm still a bit shaken, to be honest.", "It's been one of those days.", "I don't really know what to do about it yet.", "I'll be alright. I just needed to say it out loud.", "I keep going over it in my head."] },
   elaborateGood: { all: ["I'm still buzzing.", "I keep pinching myself.", "Honestly, I needed that.", "I've been grinning all day.", "I didn't see it coming at all."] },
+  elaborateGoodSmall: { all: ["Only small, but it all adds up.", "Nothing life-changing, but I'll take it.", "It's a start.", "Beats a kick in the teeth.", "Not exactly retiring on it.", "Every bit counts."] },
+  elaborateBadSmall: { all: ["It's not the end of the world.", "I'll live.", "Just one of those things.", "It'll sort itself out.", "Annoying more than anything."] },
   comfort: {
     all: [
       "You'll get through it. You always do.",
@@ -259,7 +296,7 @@ const B: Record<string, Bank> = {
   unkind: { all: ["Maybe cut back on the café lunches, then.", "Everyone's skint. Join the club.", "We've all got bills.", "Should've saved, shouldn't you?", "Welcome to the real world."] },
   saveAdvice: { all: ["Put a bit aside every day. That's what I do now.", "Little and often. That's the trick.", "Pay yourself first. Changed my life, that.", "Keep a pot just for rent. Trust me."] },
   supportive: {
-    all: ["I'm sorry. You can always talk to me.", "That sounds hard. Want to grab a drink later?", "Come here. It'll be alright.", "Thanks for telling me. Really.", "You don't have to carry that on your own.", "That's a lot to deal with. I'm here, alright?", "No wonder you're feeling it."],
+    all: ["I'm sorry. You can always talk to me.", "That sounds hard. Drinks on me sometime.", "Come here. It'll be alright.", "Thanks for telling me. Really.", "You don't have to carry that on your own.", "That's a lot to deal with. I'm here, alright?", "No wonder you're feeling it."],
     warm: ["Oh, love. Come here.", "You poor thing. Let me buy you a cuppa."],
     blunt: ["That's rough. Shout if you need a hand."],
     nervous: ["Oh no. Um, is there anything I can do?"],
@@ -311,12 +348,76 @@ const B: Record<string, Bank> = {
     warm: ["Look after yourself, love.", "Take care of yourself, won't you?"],
     nervous: ["Um, I should probably go. Sorry. Bye!", "Right, sorry, I'll let you get on."],
   },
-  byeClose: { all: ["Good talking to you.", "Let's catch up properly soon.", "Right, I'd better get on. Take care.", "Don't be a stranger.", "Always a pleasure.", "Text me later.", "Same time tomorrow?", "Love you, mean it. Bye."] },
-  byeBack: { all: ["See you.", "Take care.", "Bye now.", "Cheers.", "Later.", "See ya.", "Bye!", "You too.", "Mind how you go.", "Ta-ra."], formal: ["Goodbye."], warm: ["Bye, love."] },
+  byeClose: { all: ["Good talking to you.", "Let's catch up properly soon.", "Right, I'd better get on. Take care.", "Don't be a stranger.", "Always a pleasure.", "Text me later.", "Same time tomorrow?", "Look after yourself."] },
+  byeBack: { all: ["See you.", "Take care.", "Bye now.", "Cheers.", "Later.", "See ya.", "Bye!", "Mind how you go.", "Ta-ra."], formal: ["Goodbye."], warm: ["Bye, love."] },
+  // Only after "take care", "good to see you" and the like.
+  byeBackToo: { all: ["You too.", "And you.", "Same to you."] },
   byeCold: { all: ["Right. I'm off.", "Anyway.", "Well. This has been fun.", "I'll leave you to it.", "Don't let me hold you up."] },
 };
 
 const ALL_STYLES = ["formal", "blunt", "chatty", "sarcastic", "warm", "nervous"] as const;
+
+/**
+ * Hellos that fit the place (or being at work), each with the replies that
+ * answer it. The replies don't say how the person is: they get asked that next.
+ */
+export const PLACE_GREETS: Record<string, [string, string[]][]> = {
+  pub: [
+    ["{you}! What are you drinking?", ["Just the one. Honest.", "Whatever's on tap.", "The usual.", "Surprise me."]],
+    ["Fancy seeing you in here, {you}.", ["I could say the same about you.", "Couldn't resist.", "Just the one, honest."]],
+    ["{you}! Pull up a stool.", ["Don't mind if I do.", "Go on then."]],
+    ["First one's on me, {you}. Joking. Mostly.", ["I'll hold you to that.", "I heard 'first one's on me'. No take-backs."]],
+    ["Thirsty work, is it, {you}?", ["You have no idea.", "Something like that."]],
+  ],
+  park: [
+    ["{you}! Getting some fresh air?", ["Needed it, honestly.", "Clearing my head.", "Trying to."]],
+    ["{you}! Out for a stroll?", ["Just walking. It's free.", "Stretching my legs.", "Something like that."]],
+    ["Fancy meeting you here, {you}.", ["Great minds.", "I come here to think."]],
+  ],
+  diner: [
+    ["{you}! What's good today?", ["Whatever's cheapest.", "The fry-up. Always the fry-up.", "Not the soup."]],
+    ["Grabbing a bite too, {you}?", ["Can't think on an empty stomach.", "Starving. You?", "Just a quick one."]],
+    ["{you}! Don't have the soup.", ["Ha! Noted.", "Too late. Halfway through it.", "Thanks for the warning."]],
+  ],
+  cafe: [
+    ["{you}! Caffeine break?", ["Desperately.", "Always.", "Third one today. Don't judge."]],
+    ["{you}! Need a coffee as much as I do?", ["More.", "I'm running on it."]],
+  ],
+  market: [
+    ["{you}! Bargain hunting?", ["Window shopping, mostly.", "Looking. Found nothing yet.", "Always."]],
+    ["{you}! Found anything good?", ["Not yet.", "Nothing worth having.", "A couple of things."]],
+    ["Spending money again, {you}?", ["Just browsing. Honest.", "Spending money I don't have.", "Only a little."]],
+    ["{you}! Don't buy the last of the cheap stuff.", ["Too late!", "No promises."]],
+  ],
+  work: [
+    ["{you}! Busy?", ["Rushed off my feet.", "Flat out.", "Not too bad, actually."]],
+    ["Hard at it, {you}?", ["Always.", "Trying to be.", "Hardly."]],
+    ["Working hard or hardly working, {you}?", ["Hardly working, mostly.", "Ha. Bit of both."]],
+    ["Don't mind me, {you}. Just saying hello.", ["Hello yourself.", "Hi! Good to see you."]],
+    ["{you}! They've got you busy today.", ["It never ends.", "Tell me about it."]],
+  ],
+};
+
+/** The game time conversations are being made up at (set with talkIn), for words that only fit some hours. */
+let clock: number | null = null;
+
+/**
+ * Does a wording fit the time of day? "Lunch" only around lunchtime, "long day"
+ * and "all day" not first thing, "morning brew" in the morning, and so on.
+ */
+export function fitsTime(text: string, t: number | null = clock): boolean {
+  if (t === null) return true;
+  const h = Math.floor((t % 1440) / 60);
+  if (/\blunch\b/i.test(text) && (h < 11 || h >= 15)) return false;
+  if (/\bbreakfast\b/i.test(text) && (h < 5 || h >= 11)) return false;
+  if (/\bdinner\b/i.test(text) && (h < 16 || h >= 23)) return false;
+  if (/\bmorning\b(?! *\})/i.test(text.replace(/\{Daypart\}|\{daypart\}/g, "")) && !/tomorrow morning/i.test(text) && h >= 12) return false;
+  if (/\b(long day|all day)\b/i.test(text) && h < 13) return false;
+  if (/\b(day ahead|start of the day)\b/i.test(text) && h >= 12) return false;
+  if (/\bthis afternoon\b/i.test(text) && (h < 11 || h >= 17)) return false;
+  if (/\b(tonight|this evening)\b/i.test(text) && h >= 23) return false;
+  return true;
+}
 
 /** Fill {slots}: {me}, {you}, {daypart}/{Daypart} and any extras. */
 function fill(text: string, vars: Record<string, string>): string {
@@ -345,6 +446,10 @@ export function phrase(r: RngHolder, speaker: Citizen, listener: Citizen | null,
   ];
   const mine = speaker.said ?? [];
   const theirs = (listener?.said ?? []).slice(-40);
+  const fit = pool.filter((p) => fitsTime(p.text, now || clock));
+  if (fit.length) pool.splice(0, pool.length, ...fit);
+  const notEcho = pool.filter((p) => !lastLines.includes(p.text));
+  if (notEcho.length) pool.splice(0, pool.length, ...notEcho);
   const fresh = pool.filter((p) => !mine.includes(p.key) && !theirs.includes(p.key));
   const from = (fresh.length ? fresh : pool).map((p) => (townSet.has(p.key) ? { ...p, w: p.w * 0.15 } : p));
   let x = rand(r) * from.reduce((s, p) => s + p.w, 0);
@@ -358,6 +463,7 @@ export function phrase(r: RngHolder, speaker: Citizen, listener: Citizen | null,
   }
   remembered(speaker, chosen.key);
   heard(chosen.key);
+  spoken(chosen.text);
   const dp = daypart(now);
   return fill(chosen.text, { me: speaker.name, you: listener?.name ?? "", daypart: dp, Daypart: dp[0].toUpperCase() + dp.slice(1), ...vars });
 }
@@ -365,7 +471,9 @@ export function phrase(r: RngHolder, speaker: Citizen, listener: Citizen | null,
 /** Pick from a list of wordings without repeating what this speaker said lately (for lines built from real details). */
 export function choose(r: RngHolder, speaker: Citizen, key: string, options: string[]): string {
   const said = speaker.said ?? [];
-  const keyed = options.map((text, i) => ({ k: `${key}#${i}`, text }));
+  const all = options.map((text, i) => ({ k: `${key}#${i}`, text }));
+  const fit = all.filter((o) => fitsTime(o.text) && !lastLines.includes(o.text));
+  const keyed = fit.length ? fit : all;
   const fresh = keyed.filter((o) => !said.includes(o.k));
   // Fresh for this speaker, and not said around town lately, if there's any such.
   const unheard = (fresh.length ? fresh : keyed).filter((o) => !townSet.has(o.k));
@@ -373,7 +481,14 @@ export function choose(r: RngHolder, speaker: Citizen, key: string, options: str
   const chosen = from[Math.floor(rand(r) * from.length) % from.length];
   remembered(speaker, chosen.k);
   heard(chosen.k);
+  spoken(chosen.text);
   return chosen.text;
+}
+
+/** Every wording of a move (all styles), for tests and checks. */
+export function wordingsOf(move: string): string[] {
+  const bank = B[move];
+  return bank ? [...bank.all, ...ALL_STYLES.flatMap((st) => bank[st] ?? [])] : [];
 }
 
 /** How many wordings there are for a move (all styles), for tests. */

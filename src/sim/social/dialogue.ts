@@ -1,8 +1,7 @@
 import { type RngHolder } from "../rng";
 import { choose } from "./talk";
-import { dayOf } from "../time";
 import type { Citizen, ConversationLine, WorldState } from "../types";
-import { money, pct } from "../util";
+import { inDays, money, pct } from "../util";
 
 // Template dialogue. Used when Claude is off or out of budget, and as the
 // fallback if an AI reply is invalid. Lines are grounded in the actual
@@ -44,14 +43,14 @@ export function loanDialogue(
     L(
       b,
       t === "warm"
-        ? choose(r, b, "dlg:8", ["For you? Of course. What are the terms?", "I can help. When can you pay it back?", "Course I'll help. Just tell me when you'll pay it back.", "Go on, then. What do you need, exactly?"])
+        ? choose(r, b, "dlg:8", ["For you? Of course. What are the terms?", "I can help. When can you pay it back?", "Course I'll help. Just tell me when you'll pay it back."])
         : t === "sly"
           ? choose(r, b, "dlg:9", ["What's in it for me?", "Money isn't free, you know.", "And what do I get out of it?", "I'm not a charity. What are you offering?"])
           : choose(r, b, "dlg:10", ["Why should I lend it to you?", "How would you pay it back?", "How soon could you pay it back?", "Convince me."]),
     ),
   );
   const offerRate = Math.max(0, outcome.rate - 0.05);
-  lines.push(L(a, offerRate < 0.02 ? `I'll pay you back by Day ${dayOf(world.time) + outcome.days}, I promise.` : `I'll pay you ${pct(offerRate)} interest, back by Day ${dayOf(world.time) + outcome.days}.`));
+  lines.push(L(a, offerRate < 0.02 ? `I'll pay you back ${inDays(outcome.days)}, I promise.` : `I'll pay you ${pct(offerRate)} interest, and you'll have it back ${inDays(outcome.days)}.`));
   if (!outcome.agreed) {
     lines.push(L(b, `I'd need at least ${pct(terms.willing ? outcome.rate || 0.2 : 0.3)}. That's my offer.`));
     lines.push(L(a, "That's too steep. I'll find another way."));

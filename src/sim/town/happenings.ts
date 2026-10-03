@@ -229,7 +229,11 @@ export function learnNews(world: WorldState, c: Citizen, h: Happening, via: stri
   const teller = world.citizens[via];
   if (h.scale >= 2 || close > 0.4) {
     remember(world, c, {
-      text: teller ? `${teller.name} told me about ${h.about}.` : via === "saw" ? `I saw ${h.about} with my own eyes.` : `Read about ${h.about} in the paper.`,
+      text: teller
+        ? `${teller.name} told me about ${teller.id === h.subject ? h.about.replace(new RegExp(`^${teller.name}'s `), "their ") : h.about}.`
+        : via === "saw"
+          ? `I saw ${h.about} with my own eyes.`
+          : `Read about ${h.about} in the paper.`,
       kind: "world",
       importance: Math.min(9, 2 + h.scale + close * 2),
       valence: stance * 0.8,
@@ -493,7 +497,7 @@ export function createHappening(world: WorldState, kind: HappeningKind, opts: Ha
         scale: 2,
         tone: -0.5,
       });
-      remember(world, v, { text: `I got food poisoning from ${b.name}. Never again.`, kind: "deal", importance: 7, valence: -0.8, people: owner ? [owner.id] : [], feel: { anger: 18, sadness: 10 } });
+      remember(world, v, { text: `I got food poisoning from ${b.name}. Never again.`, kind: "world", importance: 7, valence: -0.8, people: owner ? [owner.id] : [], feel: { anger: 18, sadness: 10 } });
       if (owner) {
         remember(world, owner, { text: `${v.name} got food poisoning from ${b.name}. We had to shut for a deep clean.`, kind: "business", importance: 8, valence: -0.8, people: [v.id], feel: { shame: 25, fear: 15 } });
         witnesses.add(owner.id);
