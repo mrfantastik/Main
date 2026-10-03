@@ -31,23 +31,25 @@ This makes `dist/ai-hustle-city.html`, a single file that runs the whole city in
 
 ### Who does the thinking and talking
 
-Citizens run on the built-in **utility AI** (needs, money, personality, memories, relationships). On top of that, a **free public AI** (no account, no key, no cost) writes:
+Citizens run on the built-in **utility AI** (needs, money, personality, memories, relationships). On top of that, in the browser game, **the town's brain**, a small open-source language model running **on your own computer**, writes:
 
-- **what they say**: every chat, deal, favour and argument it has room for, written fresh from who the two people are, how they feel, what they've heard and what they remember about each other;
-- **what they're thinking**: the person you're looking at first, then everyone else in turn;
-- **their tough decisions**: close calls with real stakes (careers, businesses, money).
+- **what they're thinking**: whoever you're looking at first, then everyone else in turn;
+- **what they say**: chats, deals, favours and arguments, rewritten in their own voices from the scene's beats and a rough draft, with who they are, how they feel, what they've heard and what they remember;
+- **their tough decisions**: close calls with real stakes.
 
-The town still decides what happens (who lends what, who gets the job, which news gets passed on), so a smaller model can't break the economy. Whatever the AI can't get to in time, or anything during a skip-ahead, the built-in AI improvises. AI-written lines have a gold border.
+The brain is [SmolLM2](https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct) by Hugging Face (Apache 2.0), run with [onnxruntime-web](https://onnxruntime.ai): on your graphics card if your browser has WebGPU (Chrome, Edge), otherwise on your processor. Nothing is sent anywhere; it's free. Click **🧠 Wake the town's brain** (top bar or the 🧠 AI panel). The first time, the model downloads (about 300 MB) and is kept in your browser's cache; after that it starts from there. On a processor it's slower, so it sticks to thoughts and the conversations of whoever you're watching.
 
-**Which AI:** free services come and go and rate-limit anonymous users, so several are tried in turn and the first that answers is used: [Pollinations](https://pollinations.ai) (OpenAI-style endpoint), [LLM7](https://llm7.io), then Pollinations' plain GET endpoint. If a service rejects the model name, the game asks it for its model list and picks a small chat model. In the **🧠 AI** panel you can see which services answer, test the connection, switch it off, or add **your own endpoint** (any OpenAI-style URL, e.g. a free key from a provider, or Ollama / LM Studio on your own machine). Your endpoint is tried first.
+The town still decides what happens (who lends what, who gets the job, which news gets passed on), so a small model can't break the economy. Whatever it can't get to in time, or anything during a skip-ahead, the built-in AI improvises. AI-written lines have a gold border.
 
-> **Playing on claude.ai?** Pages published there aren't allowed to reach the internet, so no outside AI can be called from them; the game notices, says so, and the built-in AI does all the thinking and talking. Download the game file (`npm run build:standalone` → `dist/ai-hustle-city.html`) and open it in your browser, or run `npm start`, to play with the free AI.
+**Where the model comes from:**
+- **The single-file game** (`dist/ai-hustle-city.html`, opened in your browser): straight from Hugging Face, the first time you wake it.
+- **A published copy** (e.g. on claude.ai, where pages can't reach the internet): the model has to be published with the page. `npm run fetch-brain` downloads it into `models/brain`, and `npm run build:standalone` then splits it into parts under 15 MB in `dist/artifact/brain/` (with the onnxruntime WebAssembly binary and a manifest). A page published on claude.ai can carry about 256 MB, so the model has to fit in that.
 
-**What gets sent:** the made-up townsfolk's names, personalities, feelings, memories and town news (Pollinations requests are marked private, so they stay out of its public feed). Nothing about you.
+**The server version** (`npm start`) can't use the in-page brain; there, free web AI services write the conversations instead (no account or key: Pollinations, then LLM7, tried in turn; or any OpenAI-style endpoint you add in the 🧠 AI panel, such as Ollama on your machine). What gets sent there: the made-up townsfolk's names, personalities, feelings, memories and town news.
 
 | Setting (server) | Default | What it does |
 |---|---|---|
-| `AI_PROVIDER` | `free` | `free`: the free AI services. `claude`: Claude with an API key (below). `off`: built-in AI only. |
+| `AI_PROVIDER` | `free` | `free`: the free web AI services. `claude`: Claude with an API key (below). `off`: built-in AI only. |
 | `FREE_AI_URL` | *(the built-in list)* | Use only this OpenAI-style endpoint. |
 | `FREE_AI_INTERVAL_MS` | `2500` | Minimum gap between calls. |
 
@@ -165,6 +167,8 @@ src/
     anthropic.ts       Claude client (structured JSON output, AI_PROVIDER=claude)
   client/              Browser: React panels + city views
     render/            2D canvas view, shared interpolation and overlay text
+    brain/             The town's brain: a small open-source model in a Web Worker
+                       (onnxruntime-web + tokenizer + generation loop), and its page-side client
     render3d/          3D views (merged static city, instanced citizens): the dreamscape
                        (dream/: sky, mirror floor, mannequins) and the retro town; effects.ts
                        draws happenings (flames, rain, festival lights…)

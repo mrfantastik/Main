@@ -49,9 +49,20 @@ export function TopBar() {
           {connected ? "Live" : "Offline"}
           {connected && st?.savedAt ? <span className="muted"> · 💾 {clock(st.savedAt)}</span> : null}
         </span>
-        {ai && (
+        {ai?.brain && (ai.brain.state === "off" || ai.brain.state === "error") && (
+          <button className="tool" title="Run an open-source AI on your computer so people think and talk for themselves" onClick={() => store.send({ type: "ai", brain: "load" })}>
+            🧠 Wake the town's brain
+          </button>
+        )}
+        {ai && !(ai.brain && (ai.brain.state === "off" || ai.brain.state === "error")) && (
           <span className={`chip ${ai.mode === "llm" ? "llm" : ""}`} title="AI decision engine">
-            {ai.mode === "llm"
+            {ai.brain
+              ? ai.brain.state === "ready"
+                ? `🧠 Town brain · ${ai.brain.device === "webgpu" ? "GPU" : "CPU"}`
+                : ai.brain.state === "loading"
+                  ? `🧠 Waking… ${ai.brain.total ? Math.round((ai.brain.loaded / ai.brain.total) * 100) : 0}%`
+                  : "🧠 Built-in AI"
+              : ai.mode === "llm"
               ? ai.free
                 ? ai.connection?.connected
                   ? `🌐 Free AI · ${ai.connection.active}`

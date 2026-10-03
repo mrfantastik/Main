@@ -1,6 +1,7 @@
 import { describeSkip, type AIStatusDTO, type ClientMsg, type HelloMsg, type ServerMsg } from "../../shared/protocol";
 import { newWorld as createWorld } from "../../sim";
 import { AIDirector } from "../../sim/ai/director";
+import { BrainClient } from "../brain/client";
 import { createFreeAIClient } from "../../sim/ai/freeai";
 import { applyGodCommand, GodError } from "../../sim/god";
 import { prepareLoadedWorld } from "../../sim/migrate";
@@ -58,6 +59,7 @@ async function writeSave(json: string): Promise<boolean> {
 }
 
 const AI_PREF = "hustle.ai";
+const BRAIN_PREF = "hustle.brain";
 const AI_ENDPOINT = "hustle.ai.endpoint";
 
 type Endpoint = { url: string; model?: string; key?: string };
@@ -93,6 +95,9 @@ export class LocalHost {
   private runner!: SimRunner;
   private readonly director: AIDirector;
   private endpoint: Endpoint | null = null;
+  /** The town's brain: an open-source model running in this page (the default AI here). */
+  private readonly brain: BrainClient | null;
+  private lastBrainPush = 0;
   private selected: { kind: "citizen" | "business"; id: string } | null = null;
   private dashboardOpen = false;
   private lastEventId = 0;
@@ -103,8 +108,25 @@ export class LocalHost {
 
   constructor(private deliver: (msg: ServerMsg) => void) {
     const url = freeAIUrl();
-    this.endpoint = url === null ? null : savedEndpoint();
-    this.director = new AIDirector(url === null ? null : createFreeAIClient({ url, custom: this.endpoint }), { total: () => 0, add: () => undefined }, { maxConcurrent: 2, minIntervalMs: 2500, timeoutMs: 45_000 });
+    const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
+    if (url === undefined) {
+      // The default: a small open-source model running right here, on the player's computer.
+      this.brain = new BrainClient();
+      this.brain.forced = params.get("brain") === "forced";
+      this.brain.onChange = () => {
+        // Download progress arrives often; the panel doesn't need every byte.
+        if (Date.now() - this.lastBrainPush > 300 || this.brain!.status.state !== "loading") {
+          this.lastBrainPush = Date.now();
+          this.pushState();
+        }
+      };
+      this.director = new AIDirector(this.brain, { total: () => 0, add: () => undefined }, { maxConcurrent: 1, minIntervalMs: 0, timeoutMs: 120_000 });
+    } else {
+      // ?freeai=<url> (tests, or a model server of your own): a free OpenAI-style endpoint instead.
+      this.brain = null;
+      this.endpoint = url === null ? null : savedEndpoint();
+      this.director = new AIDirector(url === null ? null : createFreeAIClient({ url, custom: this.endpoint }), { total: () => 0, add: () => undefined }, { maxConcurrent: 2, minIntervalMs: 2500, timeoutMs: 45_000 });
+    }
     this.director.attach();
   }
 
@@ -131,10 +153,19 @@ export class LocalHost {
     };
     this.sendHello();
     this.runner.start();
-    // Find a free AI service that answers from here (or learn that none can).
-    if (this.director.available && this.world.ai.mode === "llm")
+    if (this.brain) {
+      // Woken before: wake it again (the download is cached by the browser).
+      let auto = false;
+      try {
+        auto = localStorage.getItem(BRAIN_PREF) === "on";
+      } catch {
+        auto = false;
+      }
+      if (auto && this.world.ai.mode === "llm") this.wakeBrain();
+    } else if (this.director.available && this.world.ai.mode === "llm")
+      // Find a free AI service that answers from here (or learn that none can).
       void this.director.probe().then((st) => {
-        if (st?.blocked) this.toast("🧠 This page can't reach the internet (pages published on claude.ai can't), so the built-in AI is doing the thinking and talking. Download the game file and open it in your browser to use the free AI. More in the 🧠 AI panel.", "error");
+        if (st?.blocked) this.toast("🧠 This page can't reach the internet, so the built-in AI is doing the thinking and talking.", "error");
         else if (st?.connected) this.toast(`🌐 Free AI connected (${st.active}): it's writing thoughts and conversations.`);
         this.pushState();
       });
@@ -155,6 +186,28 @@ export class LocalHost {
     const w = createWorld(s);
     w.id = `w${s.toString(36)}-${Date.now().toString(36)}`;
     return w;
+  }
+
+  private wakeBrain(): void {
+    const b = this.brain;
+    if (!b || b.status.state === "loading" || b.status.state === "ready") return;
+    try {
+      localStorage.setItem(BRAIN_PREF, "on");
+    } catch {
+      // a private window: it'll ask again next time
+    }
+    this.toast("🧠 Waking the town's brain: an open-source AI that runs on your computer. The first time it downloads (about once); after that it starts from your browser's cache.");
+    b.load().then(
+      () => {
+        const s = b.status;
+        this.toast(`🧠 The town's brain is awake (${s.name}, ${s.device === "webgpu" ? "on your graphics card" : "on your processor"}). People are thinking and talking for themselves now.`);
+        this.pushState();
+      },
+      (err: Error) => {
+        this.toast(`🧠 The brain couldn't start here: ${err.message}. The built-in AI carries on.`, "error");
+        this.pushState();
+      },
+    );
   }
 
   private configureAI(world: WorldState): void {
@@ -178,8 +231,9 @@ export class LocalHost {
       reason: this.director.available ? null : "the free AI is switched off for this page.",
       writer: this.director.writer,
       free: true,
-      connection: this.director.freeStatus(),
+      connection: this.brain ? null : this.director.freeStatus(),
       endpoint: this.endpoint ? { url: this.endpoint.url, model: this.endpoint.model } : null,
+      brain: this.brain ? { ...this.brain.status } : null,
     };
   }
 
@@ -262,6 +316,23 @@ export class LocalHost {
         }
         break;
       case "ai":
+        if (msg.brain === "load") {
+          if (w.ai.mode !== "llm") w.ai.mode = "llm";
+          this.wakeBrain();
+          this.pushState();
+          break;
+        }
+        if (msg.brain === "unload") {
+          this.brain?.unload();
+          try {
+            localStorage.setItem(BRAIN_PREF, "off");
+          } catch {
+            // fine
+          }
+          this.toast("🧠 The brain is asleep. The built-in AI does the thinking and talking.");
+          this.pushState();
+          break;
+        }
         if (msg.endpoint !== undefined) {
           this.endpoint = msg.endpoint && msg.endpoint.url ? { url: msg.endpoint.url.trim(), model: msg.endpoint.model?.trim() || undefined, key: msg.endpoint.key?.trim() || undefined } : null;
           try {

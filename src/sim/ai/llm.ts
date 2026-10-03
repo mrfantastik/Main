@@ -9,12 +9,15 @@ import { EMOTIONS, type Citizen, type Conversation, type Memory, type Reflection
 import { money } from "../util";
 import { relLabel } from "../social/relationships";
 import { situation } from "./situation";
+import type { SmallPrompt } from "./small";
 
 export interface LLMRequest {
   system: string;
   user: string;
   schema: Record<string, unknown>;
   maxTokens: number;
+  /** For a small in-page model: the same request, as a short prompt in a plain format. */
+  small?: SmallPrompt;
 }
 
 export interface LLMResponse {
@@ -30,6 +33,12 @@ export interface LLMClient {
   readonly free?: boolean;
   /** What the player sees ("Free AI (Pollinations)"); defaults to "Claude (model)". */
   readonly label?: string;
+  /** A small model running in the page: send `small` prompts, one at a time, nothing too ambitious. */
+  readonly small?: boolean;
+  /** False while it can't take requests yet (e.g. the in-page model is still loading). */
+  ready?(): boolean;
+  /** Slow (an in-page model on a processor): keep it for what the player is watching. */
+  slow?(): boolean;
   complete(req: LLMRequest): Promise<LLMResponse>;
 }
 

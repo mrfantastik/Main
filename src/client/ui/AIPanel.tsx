@@ -15,7 +15,7 @@ export function AIPanel() {
   return (
     <Shell title="🧠 AI engine">
       <div className="grid2">
-        {ai.free ? <FreeAIBox ai={ai} /> : (
+        {ai.brain ? <BrainBox ai={ai} /> : ai.free ? <FreeAIBox ai={ai} /> : (
         <div className="box">
           <h3>How citizens think</h3>
           <p style={{ marginTop: 0 }}>
@@ -223,6 +223,99 @@ function FreeAIBox({ ai }: { ai: AIStatusDTO }) {
       <p className="muted" style={{ fontSize: 11 }}>
         Services tried in turn: Pollinations, LLM7, Pollinations (simple). What's sent: the made-up townsfolk's names, personalities, feelings,
         memories and town news. Running the server with AI_PROVIDER=claude and an API key uses Claude instead.
+      </p>
+    </div>
+  );
+}
+
+const mb = (n: number) => `${Math.round(n / 1e6)} MB`;
+
+/** The town's brain: an open-source model running on the player's computer. */
+export function BrainBox({ ai }: { ai: AIStatusDTO }) {
+  const b = ai.brain!;
+  const on = ai.mode === "llm";
+  const pct = b.total ? Math.min(100, Math.round((b.loaded / b.total) * 100)) : 0;
+  return (
+    <div className="box">
+      <h3>The town's brain</h3>
+      <p style={{ marginTop: 0 }}>
+        An open-source AI (<b>SmolLM2</b> by Hugging Face, free under the Apache 2.0 licence) that runs <b>here, on your computer</b>: on your graphics
+        card if your browser has WebGPU, otherwise on your processor. Nothing is sent anywhere. Once it's awake it writes what people{" "}
+        <b>think</b> (whoever you're looking at first), what they <b>say</b> to each other, and their <b>tough decisions</b>, from who they are, how
+        they feel, what they've heard and what they remember.
+      </p>
+      <p>
+        The town still decides what happens (who lends what, what news gets passed on), so the brain can't break the economy. It's a small model, so
+        it's quick but not a genius: when it's busy, or anything during a skip, the built-in AI improvises. Lines it wrote have a gold border.
+      </p>
+      <div className="kv">
+        <span className="k">Status</span>
+        <span>
+          {b.state === "ready" ? (
+            <span className="chip good">🧠 Awake · {b.device === "webgpu" ? "graphics card" : "processor"}</span>
+          ) : b.state === "loading" ? (
+            <span className="chip">{b.stage === "compile" ? "Starting up…" : `Downloading ${pct}%`}</span>
+          ) : b.state === "error" ? (
+            <span className="chip bad">Couldn't start</span>
+          ) : (
+            <span className="chip">Asleep</span>
+          )}
+        </span>
+        {b.name && (
+          <>
+            <span className="k">Model</span>
+            <span>
+              {b.name} {b.from === "page" ? "(comes with this page)" : b.from === "huggingface" ? "(from Hugging Face)" : ""}
+            </span>
+          </>
+        )}
+        {b.state === "loading" && b.total > 0 && (
+          <>
+            <span className="k">Download</span>
+            <span>
+              {mb(b.loaded)} of {mb(b.total)}
+            </span>
+          </>
+        )}
+        {b.state === "ready" && (
+          <>
+            <span className="k">Speed</span>
+            <span>
+              {b.speed ? `${b.speed.toFixed(0)} words-ish a second` : "warming up"} · {b.replies} replies so far
+            </span>
+          </>
+        )}
+        <span className="k">Cost</span>
+        <span>Free, and private</span>
+      </div>
+      {b.state === "loading" && (
+        <div className="bar" style={{ margin: "8px 0" }}>
+          <div style={{ width: `${b.stage === "compile" ? 100 : pct}%`, background: "#d4a017" }} />
+        </div>
+      )}
+      {b.state === "error" && (
+        <div className="item" style={{ borderColor: "#e5484d", margin: "8px 0" }}>
+          {b.error}
+        </div>
+      )}
+      <div className="god-row">
+        {b.state === "ready" || b.state === "loading" ? (
+          <button className="btn" onClick={() => store.send({ type: "ai", brain: "unload" })}>
+            😴 Let it sleep (built-in AI only)
+          </button>
+        ) : (
+          <button className="btn unscripted" onClick={() => store.send({ type: "ai", brain: "load" })}>
+            🧠 Wake the town's brain{b.total ? ` (${mb(b.total)} download, once)` : ""}
+          </button>
+        )}
+        {b.state === "ready" && (
+          <button className="btn" onClick={() => store.send({ type: "ai", mode: on ? "off" : "llm" })}>
+            {on ? "⏸ Pause it" : "▶ Use it"}
+          </button>
+        )}
+      </div>
+      <p className="muted" style={{ fontSize: 11 }}>
+        Calls so far: {ai.calls} · {ai.pending} in progress. A graphics card makes it much quicker; on a processor each reply takes a few seconds.
       </p>
     </div>
   );

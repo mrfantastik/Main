@@ -6,6 +6,7 @@ import type { AILogEntry, Citizen, Conversation, ConvValue, Reflection, WorldSta
 import { newId, pushRing, round2 } from "../util";
 import { scoreOf } from "./decision";
 import { setThought } from "./decision";
+import { smallChoicePrompt, smallConversationPrompt, smallThoughtPrompt, type SmallPrompt } from "./small";
 import type { FreeAIClient, FreeAIStatus } from "./freeai";
 import { CONVERSATION_SYSTEM, conversationPrompt, costUsd, FREE_CONVERSATION_SYSTEM, freeConversationPrompt, REFLECTION_SYSTEM, reflectionPrompt, STRATEGY_SYSTEM, strategyPrompt, THOUGHT_SYSTEM, thoughtPrompt, type LLMClient } from "./llm";
 import { applyStrategy, setStrategyHook, strategyOptions, type StrategyOption } from "./strategy";
@@ -102,6 +103,11 @@ export class AIDirector {
     return !!this.client?.free;
   }
 
+  /** A small model running in the page: short prompts, nothing too ambitious. */
+  get small(): boolean {
+    return !!this.client?.small;
+  }
+
   /** Who writes the words, as the player sees it (null: nobody). */
   get writer(): string | null {
     return this.available ? (this.client!.label ?? `Claude (${this.model})`) : null;
@@ -152,6 +158,7 @@ export class AIDirector {
   private canCall(world: WorldState): boolean {
     const ai = world.ai;
     if (!this.available || ai.mode !== "llm") return false;
+    if (this.client?.ready && !this.client.ready()) return false;
     if (Date.now() < this.backoffUntil) return false;
     if (!this.free && this.ledger.total() >= ai.budgetUsd) {
       if (!ai.log.some((l) => l.note === "budget")) {
@@ -182,7 +189,8 @@ export class AIDirector {
     const { user, schema } = strategyPrompt(world, c, top.map((o) => ({ id: o.id, label: o.label })));
     c.cooldowns.llmStrategy = world.time;
     c.awaitingAI = true;
-    this.send(world, { kind: "strategy", citizenId: c.id, fallbackId: fallback.id }, STRATEGY_SYSTEM, user, schema);
+    const small = this.small ? smallChoicePrompt(world, c, top.map((o) => ({ id: o.id, label: o.label }))) : undefined;
+    this.send(world, { kind: "strategy", citizenId: c.id, fallbackId: fallback.id }, STRATEGY_SYSTEM, user, schema, small);
     return true;
   }
 
@@ -192,8 +200,11 @@ export class AIDirector {
     if (this.free) {
       // Free: voice every conversation there's room for.
       if ((conv.topic !== "chat" && !CONVERSATION_TOPICS.has(conv.topic)) || !this.canCall(world)) return false;
+      // A slow in-page model only voices the conversations the player is watching (nobody waits long).
+      if (this.client?.slow?.() && conv.a !== this.focus && conv.b !== this.focus) return false;
       const { user, schema } = freeConversationPrompt(world, conv, brief);
-      this.send(world, { kind: "conversation", citizenId: conv.a, convId: conv.id }, FREE_CONVERSATION_SYSTEM, user, schema);
+      const small = this.small ? smallConversationPrompt(world, conv, brief) : undefined;
+      this.send(world, { kind: "conversation", citizenId: conv.a, convId: conv.id }, FREE_CONVERSATION_SYSTEM, user, schema, small);
       return true;
     }
     if (conv.topic === "chat") {
@@ -239,9 +250,9 @@ export class AIDirector {
             .sort((x, y) => since(y) - since(x))[0];
     if (!c) return;
     c.cooldowns.llmThought = world.time;
-    this.nextThoughtAt = Date.now() + 10_000;
+    this.nextThoughtAt = Date.now() + (this.small ? 6_000 : 10_000);
     const { user, schema } = thoughtPrompt(world, c);
-    this.send(world, { kind: "thought", citizenId: c.id }, THOUGHT_SYSTEM, user, schema);
+    this.send(world, { kind: "thought", citizenId: c.id }, THOUGHT_SYSTEM, user, schema, this.small ? smallThoughtPrompt(world, c) : undefined);
   }
 
   private applyThoughtResult(world: WorldState, d: Done): void {
@@ -261,6 +272,7 @@ export class AIDirector {
 
   /** Reword one strongly felt night's lessons per game day (the effects already happened). */
   private reflectionHook(world: WorldState, c: Citizen, learned: Reflection[]): void {
+    if (this.small) return; // rewording lessons as JSON is too much for a small model
     const day = dayOf(world.time);
     if (this.reflectedDay === day) return;
     const intensity = Math.max(...Object.values(c.emotions));
@@ -297,7 +309,9 @@ export class AIDirector {
     if (!this.canCall(world)) return `${this.who} is busy${this.free ? "" : " or out of budget"} right now. Try again in a moment.`;
     const p = unscriptedPrompt(world, convId);
     if (typeof p === "string") return p;
-    this.send(world, { kind: "unscripted", citizenId: p.conv.a, convId }, UNSCRIPTED_SYSTEM, p.prompt, UNSCRIPTED_SCHEMA);
+    // A small model rewrites what was said rather than starting from nothing.
+    const small = this.small ? smallConversationPrompt(world, { ...p.conv, fallback: { lines: p.conv.lines, outcome: {} } }, p.conv.summary) : undefined;
+    this.send(world, { kind: "unscripted", citizenId: p.conv.a, convId }, UNSCRIPTED_SYSTEM, p.prompt, UNSCRIPTED_SCHEMA, small);
     return null;
   }
 
@@ -306,6 +320,7 @@ export class AIDirector {
     if (!this.available) return `The AI isn't available: ${this.unavailableReason ?? "no AI configured"}`;
     if (world.ai.mode !== "llm") return "The AI is switched off. Turn it on in the 🧠 AI panel.";
     if (!this.canCall(world)) return `${this.who} is busy${this.free ? "" : " or out of budget"} right now. Try again in a moment.`;
+    if (this.small) return "Making up events needs a bigger AI than the one running in your browser. Pick one from the list instead.";
     if (inventableKinds(world).length === 0) return "Nothing can happen right now. Try at another time of day.";
     this.send(world, { kind: "invent", citizenId: world.citizenOrder[0] }, INVENT_SYSTEM, inventPrompt(world, idea), INVENT_SCHEMA);
     return null;
@@ -336,15 +351,15 @@ export class AIDirector {
 
   // ---------------------------------------------------------- calls
 
-  private send(world: WorldState, p: Omit<Pending, "id" | "world" | "startedAt" | "prompt">, system: string, user: string, schema: Record<string, unknown>): void {
-    const pending: Pending = { ...p, id: this.seq++, world, startedAt: Date.now(), prompt: user };
+  private send(world: WorldState, p: Omit<Pending, "id" | "world" | "startedAt" | "prompt">, system: string, user: string, schema: Record<string, unknown>, small?: SmallPrompt): void {
+    const pending: Pending = { ...p, id: this.seq++, world, startedAt: Date.now(), prompt: small ? `${small.system}\n\n${small.user}\n\n${small.prefill}` : user };
     this.inFlight.set(pending.id, pending);
     this.lastCallAt = Date.now();
     world.ai.calls++;
     world.ai.callsToday++;
     const client = this.client!;
     client
-      .complete({ system, user, schema, maxTokens: 3000 })
+      .complete({ system, user, schema, maxTokens: 3000, small })
       .then((res) => {
         const cost = client.free ? 0 : costUsd(res.model, res.inputTokens, res.outputTokens);
         if (cost) this.ledger.add(cost);
@@ -420,7 +435,8 @@ export class AIDirector {
     const fallback = options.find((o) => o.id === d.pending.fallbackId) ?? options[0];
     const reply = d.json as { choice?: unknown; thought?: unknown } | null;
     const chosen = reply && typeof reply.choice === "string" ? options.find((o) => o.id === reply.choice) : undefined;
-    const thought = reply && typeof reply.thought === "string" ? reply.thought.slice(0, 240) : "";
+    // A small model may pick well but explain badly: then they think the option's own thought.
+    const thought = reply && typeof reply.thought === "string" && reply.thought ? reply.thought.slice(0, 240) : this.small && chosen ? chosen.thought : "";
     if (!chosen || !thought) {
       this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : "invalid or stale choice — used utility AI");
       applyStrategy(world, c, options, fallback, d.error ? "utility" : "llm-rejected", fallback.thought);

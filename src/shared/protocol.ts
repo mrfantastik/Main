@@ -161,6 +161,21 @@ export interface AIStatusDTO {
   } | null;
   /** Free AI: the player's own endpoint, if set (no key shown). */
   endpoint?: { url: string; model?: string } | null;
+  /** The town's brain: an open-source model running on the player's own computer. */
+  brain?: BrainDTO | null;
+}
+
+export interface BrainDTO {
+  state: "off" | "loading" | "ready" | "error";
+  name: string;
+  from: "page" | "huggingface" | null;
+  device: "webgpu" | "wasm" | null;
+  stage: "download" | "compile" | null;
+  loaded: number;
+  total: number;
+  error: string | null;
+  speed: number;
+  replies: number;
 }
 
 /** A town happening, for the top bar, the map and the feed. */
@@ -390,6 +405,8 @@ export type ClientMsg =
       probe?: boolean;
       /** Free AI: the player's own OpenAI-style endpoint (null clears it). */
       endpoint?: { url: string; model?: string; key?: string } | null;
+      /** The town's brain (a model running in the page): wake it up or switch it off. */
+      brain?: "load" | "unload";
     }
   | { type: "save" }
   | { type: "skip"; minutes: number }
