@@ -1,4 +1,4 @@
-import { SPEEDS } from "../../shared/protocol";
+import { SKIPS, SPEEDS } from "../../shared/protocol";
 import { store, useStore } from "../net/store";
 import { clock, day } from "./format";
 
@@ -12,8 +12,8 @@ export function TopBar() {
   const ai = st?.ai;
   return (
     <header className="topbar">
-      <div className="brand">
-        🏙️ AI <span>Hustle</span> City
+      <div className="brand" title="AI Hustle City">
+        🏙️<span className="brand-words"> AI <span>Hustle</span> City</span>
       </div>
       <div className="clock" title="Game time">
         <span>{icon}</span>
@@ -30,20 +30,30 @@ export function TopBar() {
           </button>
         ))}
       </div>
+      <div className="speeds skips" role="group" aria-label="Skip ahead">
+        <span className="skip-icon" aria-hidden>
+          ⏩
+        </span>
+        {SKIPS.map((k) => (
+          <button key={k.minutes} title={`Skip ahead ${k.title} instantly`} aria-label={`Skip ahead ${k.title}`} disabled={!connected} onClick={() => store.send({ type: "skip", minutes: k.minutes })}>
+            {k.label}
+          </button>
+        ))}
+      </div>
       {st?.economy.mode && st.economy.mode !== "normal" && (
         <span className={`chip ${st.economy.mode === "boom" ? "good" : "bad"}`}>{st.economy.mode === "boom" ? "📈 BOOM" : "📉 CRASH"}</span>
       )}
       <div className="toolbar">
-        <span className={`chip ${connected ? "good" : "bad"}`}>
+        <span className={`chip ${connected ? "good" : "bad"}`} title={st?.savedAt ? "Running · last autosave" : undefined}>
           <i className="dot" style={{ background: connected ? "#2fbf71" : "#e5484d" }} />
           {connected ? "Live" : "Offline"}
+          {connected && st?.savedAt ? <span className="muted"> · 💾 {clock(st.savedAt)}</span> : null}
         </span>
         {ai && (
           <span className={`chip ${ai.mode === "llm" ? "llm" : ""}`} title="AI decision engine">
             🧠 {ai.mode === "llm" ? `Claude · $${ai.spentUsd.toFixed(3)} / $${ai.budgetUsd}` : "Utility AI"}
           </span>
         )}
-        {st?.savedAt && <span className="chip" title="Last autosave">💾 saved {clock(st.savedAt)}</span>}
         <button className={`tool ${panel === "dashboard" ? "on" : ""}`} onClick={() => store.setPanel("dashboard")}>
           📊 Dashboard
         </button>

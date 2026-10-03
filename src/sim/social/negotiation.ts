@@ -1,7 +1,7 @@
 import { situation } from "../ai/situation";
 import { maxBankLoan } from "../economy/bank";
-import { valuation } from "../economy/business";
-import { netWorth } from "../economy/valuation";
+import { MIN_OWNER_SHARE, valuation } from "../economy/business";
+import { netWorth, ownerShare } from "../economy/valuation";
 import { recallAbout, rememberBetrayal } from "../memory/memory";
 import type { Business, Citizen, WorldState } from "../types";
 import { clamp, round2 } from "../util";
@@ -96,7 +96,9 @@ export function investmentTerms(world: WorldState, owner: Citizen, investor: Cit
   const willing = amount >= 30 && !rememberBetrayal(investor, owner.id) && returns * (0.5 + investor.traits.risk) + rel.trust / 150 + rel.affinity / 250 + investor.traits.ambition * 0.2 > 0.35;
   const fair = amount / (val + amount);
   const minShare = round2(clamp(fair * (1 + investor.traits.greed * 0.4), 0.02, 0.6));
-  const maxShare = round2(clamp(fair * (1.5 - owner.traits.greed * 0.5) + (b.cash < 60 ? 0.05 : 0), 0.02, 0.49));
+  const forSale = round2(ownerShare(b) - MIN_OWNER_SHARE);
+  const maxShare = round2(Math.min(forSale, clamp(fair * (1.5 - owner.traits.greed * 0.5) + (b.cash < 60 ? 0.05 : 0), 0.02, 0.49)));
+  if (forSale < 0.02) return { amount, willing: false, minShare, maxShare: 0, why: `${owner.name} has already sold most of the business` };
   return {
     amount,
     willing,

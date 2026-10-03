@@ -22,12 +22,19 @@ export class GodError extends Error {}
 const BOOM_DAYS = 5;
 const CRASH_DAYS = 6;
 
+/** Money amounts typed into God Mode: a positive number, capped at £1m. */
+function validAmount(raw: unknown): number {
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v < 1) throw new GodError("Enter an amount of at least £1");
+  return round2(Math.min(v, 1_000_000));
+}
+
 export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
   switch (cmd.cmd) {
     case "give_money": {
       const c = world.citizens[cmd.citizenId];
       if (!c) throw new GodError("No such citizen");
-      const amount = round2(clamp(cmd.amount, 1, 1_000_000));
+      const amount = validAmount(cmd.amount);
       transfer(world, externalAcc("god"), citizenAcc(c.id), amount, "god", "A gift from the heavens");
       logEvent(world, "god", `⚡ A mysterious benefactor gave ${c.name} ${money(amount)}!`, 5, [c.id]);
       remember(world, c, { text: `${money(amount)} appeared in my account out of nowhere!`, kind: "financial", importance: 9, valence: 1, people: [] });
@@ -38,7 +45,7 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
     case "take_money": {
       const c = world.citizens[cmd.citizenId];
       if (!c) throw new GodError("No such citizen");
-      const want = round2(clamp(cmd.amount, 1, 1_000_000));
+      const want = validAmount(cmd.amount);
       const fromSavings = Math.min(c.savings, Math.max(0, want - c.money));
       c.savings = round2(c.savings - fromSavings);
       c.money = round2(c.money + fromSavings);
@@ -76,7 +83,8 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       const p = world.products[cmd.productId];
       const m = world.market[cmd.productId];
       if (!p || !m) throw new GodError("No such product");
-      const price = round2(clamp(cmd.price, 0.1, 100_000));
+      if (!(Number(cmd.price) > 0) || !Number.isFinite(Number(cmd.price))) throw new GodError("Enter a price above £0");
+      const price = round2(clamp(Number(cmd.price), 0.1, 100_000));
       const ratio = price / p.baseCost;
       p.baseCost = price;
       p.baseRetail = round2(p.baseRetail * ratio);

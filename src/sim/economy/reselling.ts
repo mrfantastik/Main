@@ -110,9 +110,11 @@ export function sellPossessions(world: WorldState, c: Citizen): string {
     const p = world.products[pid];
     if (!p || p.category === "essential" || it.qty <= 0) continue;
     const price = round2(refPrice(world, pid) * 0.6);
-    removeStock(c.inventory, pid, it.qty);
-    addListing(world, c.id, pid, it.qty, price, it.avgCost);
-    sold.push(`${it.qty}× ${p.name} at ${money(price)}`);
+    // Read these before removeStock() empties the (shared) inventory item.
+    const { qty, avgCost } = it;
+    removeStock(c.inventory, pid, qty);
+    addListing(world, c.id, pid, qty, price, avgCost);
+    sold.push(`${qty}× ${p.name} at ${money(price)}`);
   }
   if (sold.length) {
     logEvent(world, "life", `${c.name} is selling their belongings at the Marketplace to make ends meet.`, 3, [c.id]);

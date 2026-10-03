@@ -15,7 +15,8 @@
     "sim": "tsx scripts/headless.ts",
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "diagnose": "tsx scripts/diagnose.ts"
+    "diagnose": "tsx scripts/diagnose.ts",
+    "build:standalone": "vite build --mode standalone && tsx scripts/standalone.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",

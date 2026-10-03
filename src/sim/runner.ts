@@ -1,6 +1,6 @@
-import { MS_PER_GAME_MINUTE, SPEEDS } from "../shared/protocol";
-import { step } from "../sim/engine";
-import type { WorldState } from "../sim/types";
+import { MAX_SKIP_MINUTES, MS_PER_GAME_MINUTE, SPEEDS } from "../shared/protocol";
+import { step } from "./engine";
+import type { WorldState } from "./types";
 
 /**
  * Runs the simulation in real time. Game time advances in fixed 1-minute
@@ -12,7 +12,7 @@ export class SimRunner {
   paused = false;
   private acc = 0;
   private last = performance.now();
-  private timer: NodeJS.Timeout | null = null;
+  private timer: ReturnType<typeof setInterval> | null = null;
   /** Called after each batch of steps (used by the AI director). */
   afterSteps: ((world: WorldState) => void) | null = null;
 
@@ -27,6 +27,26 @@ export class SimRunner {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  /**
+   * Jump ahead instantly. Runs the same fixed steps as normal play (so the
+   * outcome is identical to watching it), with Claude paused meanwhile so a
+   * skip never burns API budget. Returns how many events happened.
+   */
+  skip(minutes: number): number {
+    const n = Math.max(1, Math.min(MAX_SKIP_MINUTES, Math.round(minutes)));
+    const before = this.world.events[this.world.events.length - 1]?.id ?? 0;
+    const mode = this.world.ai.mode;
+    this.world.ai.mode = "off";
+    try {
+      for (let i = 0; i < n; i++) step(this.world);
+    } finally {
+      this.world.ai.mode = mode;
+    }
+    this.acc = 0;
+    this.afterSteps?.(this.world);
+    return this.world.events.filter((e) => e.id > before).length;
   }
 
   setSpeed(speed: number): void {

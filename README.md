@@ -19,6 +19,14 @@ Then open **http://localhost:3000**.
 
 That's it. The city starts at 6am on Day 1 and keeps running on the server — refresh the page, close the tab, even restart the server, and it carries on where it left off.
 
+### No install: play in the browser
+
+```bash
+npm run build:standalone
+```
+
+This makes `dist/ai-hustle-city.html`, a single file that runs the whole city inside your browser (no server, nothing to install for whoever opens it). It saves itself in that browser. It uses the built-in utility AI only, because Claude needs the API key on a server.
+
 ### Turning on Claude (optional)
 
 Without an API key the citizens run on the built-in **utility AI** (free, and fully reproducible).
@@ -48,6 +56,7 @@ In practice the city makes **~2–3 Claude calls per game day** (≈ $0.03/day w
 | **Inspect a citizen** | Click them on the map or in the list. Tabs: Overview, 🧠 Mind (why they did things), Social (relationships, memories, conversations), Money |
 | **Inspect a business** | Click a shop |
 | **Speed** | ⏸ 1× 5× 20× 50× (1× = one game hour every 15 s) |
+| **Skip ahead** | ⏩ +1h, +1d, +1w: jumps instantly (same result as watching it; Claude is paused during a skip so it costs nothing) |
 | **📊 Dashboard** | Money supply, wealth, inequality, unemployment, businesses, prices, richest/poorest, top businesses… |
 | **⚡ God Mode** | Give/take money, shortages, surpluses, set prices, assign jobs, spawn/close businesses, booms and crashes, save/export, new world |
 | **🧠 AI** | Claude status, spend, call log, recent conversations |
@@ -79,7 +88,11 @@ npm run sim -- --days 10 --seed 42                 # run 10 days, print the stor
 npm run sim -- --days 5 --seed 42 --explain Jake   # every decision Jake made, and why
 npm run diagnose -- --days 20 --seed 42            # money flows, businesses, earnings by job
 npm test                                           # determinism, money conservation, systems
+npm run soak -- --days 365 --seeds 42,7,2024       # play whole years, checking dozens of rules every game hour
+npm run soak -- --days 150 --god                   # …while randomly using God Mode
 ```
+
+The soak test checks, every game hour: money only enters or leaves town through recorded flows; nobody has negative or NaN money; jobs, businesses, homes and loans agree with each other; nobody is stuck doing one thing. Every day it checks the whole world for NaN and builds every UI panel. Every 30 days it saves, reloads and checks both copies play out identically.
 
 The same seed always produces the same story (with Claude off), so bugs are reproducible. In the browser console, `hustle.store.s` holds everything the UI knows.
 
@@ -88,7 +101,7 @@ The same seed always produces the same story (with Claude off), so bugs are repr
 ## Data
 
 - `data/hustle.db` — SQLite: world snapshots (last 5), full event and transaction history, Claude spend.
-- **⚡ God Mode → 💾 Save now / ⬇️ Download world** for manual saves/exports. `GET /api/history?limit=100` returns older events.
+- **⚡ God Mode → 💾 Save now / ⬇️ Download world / 📂 Load a save** for manual saves, exports and imports (saves move between the server and browser versions). `GET /api/history?limit=100` returns older events.
 - To start fresh: God Mode → *Start over*, or delete the `data` folder.
 - `npm run serve` builds the client and runs in production mode.
 
@@ -116,8 +129,9 @@ src/
     persistence/       SQLite store (node:sqlite) with JSON-file fallback
     anthropic.ts       Claude client (structured JSON output)
   client/              Browser: React panels + canvas renderer
+    net/local.ts       Standalone build: runs the sim in the browser (same messages as the server)
   shared/protocol.ts   Messages between server and browser
-scripts/               Headless runner and diagnostics
+scripts/               Headless runner, diagnostics, soak test, standalone packer
 tests/                 node:test suites
 ```
 

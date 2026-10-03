@@ -155,9 +155,13 @@ export class Renderer {
     const st = store.s.state;
     for (const b of this.map?.buildings ?? []) {
       if (w.x >= b.x && w.x <= b.x + b.w && w.y >= b.y && w.y <= b.y + b.h) {
-        const biz = st?.businesses.find((x) => x.open && x.buildingId === b.id);
-        if (biz && b.type === "shop_unit") {
-          store.select({ kind: "business", id: biz.id });
+        // Shops hold one business; the marketplace and cowork hold several:
+        // clicking again moves on to the next one there.
+        const here = st?.businesses.filter((x) => x.open && x.buildingId === b.id) ?? [];
+        if (here.length) {
+          const sel = store.s.selection;
+          const i = sel?.kind === "business" ? here.findIndex((x) => x.id === sel.id) : -1;
+          store.select({ kind: "business", id: here[(i + 1) % here.length].id });
           return;
         }
       }
@@ -436,10 +440,17 @@ export class Renderer {
     }
   }
 
-  private label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, color: string) {
+  private label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, color: string, maxWidth = Infinity) {
     ctx.font = "600 11px Inter, system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
+    // Keep names inside their building so neighbours' labels don't collide.
+    if (ctx.measureText(text).width + 8 > maxWidth) {
+      if (maxWidth < 34) return;
+      let t = text;
+      while (t.length > 1 && ctx.measureText(`${t}…`).width + 8 > maxWidth) t = t.slice(0, -1);
+      text = `${t.trimEnd()}…`;
+    }
     const w = ctx.measureText(text).width + 8;
     ctx.fillStyle = "rgba(15,20,30,0.72)";
     ctx.beginPath();
@@ -529,7 +540,7 @@ export class Renderer {
       }
       if (!name) continue;
       const p = this.cam.worldToScreen(b.x + b.w / 2, b.y);
-      this.label(ctx, name, p.x, p.y - 17, "#ffe9b0");
+      this.label(ctx, name, p.x, p.y - 17, "#ffe9b0", (b.w + 1.6) * this.cam.scale);
     }
   }
 

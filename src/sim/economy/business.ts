@@ -528,7 +528,12 @@ export function closeBusiness(world: WorldState, b: Business, reason: string, fo
 }
 
 /** Bring an investor into a business. */
+/** Founders always keep at least this much of their business. */
+export const MIN_OWNER_SHARE = 0.3;
+
 export function addPartner(world: WorldState, b: Business, investor: Citizen, amount: number, share: number): boolean {
+  // Shares are fractions of the whole business, so they come out of what the founder still owns.
+  if (!(share > 0) || share > ownerShare(b) - MIN_OWNER_SHARE + 1e-6) return false;
   if (!transfer(world, citizenAcc(investor.id), businessAcc(b.id), amount, "investment", `Investment in ${b.name}`)) return false;
   const existing = b.partners.find((p) => p.citizenId === investor.id);
   if (existing) {

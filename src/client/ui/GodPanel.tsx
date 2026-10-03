@@ -8,6 +8,23 @@ function god(command: GodCommand) {
   store.send({ type: "god", command });
 }
 
+function copySave() {
+  const json = store.exportWorld();
+  if (!json) return;
+  navigator.clipboard
+    .writeText(json)
+    .then(() => store.toast(`📋 Save copied (${Math.round(json.length / 1024)} KB). Paste it into a .json file to keep it.`))
+    .catch(() => store.toast("Your browser blocked copying. Use the full version to download saves.", "error"));
+}
+
+function loadSave(file: File | undefined) {
+  if (!file) return;
+  file
+    .text()
+    .then((text) => store.send({ type: "import", world: JSON.parse(text) }))
+    .catch(() => store.toast("That file isn't an AI Hustle City save.", "error"));
+}
+
 export function GodPanel() {
   const st = useStore((s) => s.state);
   const selection = useStore((s) => s.selection);
@@ -22,6 +39,10 @@ export function GodPanel() {
   const [kind, setKind] = useState("shop");
   const [bid, setBid] = useState("");
   const [seed, setSeed] = useState("");
+  const [confirmReset, setConfirmReset] = useState(false);
+  const amt = Number(amount.replace(/[£,\s]/g, ""));
+  const amountOk = Number.isFinite(amt) && amt >= 1;
+  const badAmount = () => store.toast("Type an amount of money first (e.g. 1000).", "error");
   const citizen = cid || citizens[0]?.id || "";
   const business = bid || businesses[0]?.id || "";
 
@@ -44,10 +65,10 @@ export function GodPanel() {
           <input style={{ maxWidth: 90 }} value={amount} onChange={(e) => setAmount(e.target.value)} />
         </div>
         <div className="god-row">
-          <button className="btn good" onClick={() => god({ cmd: "give_money", citizenId: citizen, amount: Number(amount) || 1000 })}>
-            🎁 Give £{Number(amount) || 1000}
+          <button className="btn good" onClick={() => (amountOk ? god({ cmd: "give_money", citizenId: citizen, amount: amt }) : badAmount())}>
+            🎁 Give £{amountOk ? amt.toLocaleString() : "?"}
           </button>
-          <button className="btn danger" onClick={() => god({ cmd: "take_money", citizenId: citizen, amount: Number(amount) || 1000 })}>
+          <button className="btn danger" onClick={() => (amountOk ? god({ cmd: "take_money", citizenId: citizen, amount: amt }) : badAmount())}>
             💸 Take money
           </button>
         </div>
@@ -160,12 +181,24 @@ export function GodPanel() {
           <button className="btn" onClick={() => store.send({ type: "save" })}>
             💾 Save now
           </button>
-          <a className="btn" href="/api/export" download style={{ textDecoration: "none" }}>
-            ⬇️ Download world (JSON)
-          </a>
+          {store.standalone ? (
+            <button className="btn" onClick={copySave}>
+              📋 Copy save
+            </button>
+          ) : (
+            <a className="btn" href="/api/export" download style={{ textDecoration: "none" }}>
+              ⬇️ Download world (JSON)
+            </a>
+          )}
+          <label className="btn" style={{ cursor: "pointer" }}>
+            📂 Load a save…
+            <input type="file" accept=".json,application/json,text/plain" hidden onChange={(e) => loadSave(e.target.files?.[0])} />
+          </label>
         </div>
         <div className="muted" style={{ fontSize: 11 }}>
-          The world autosaves every 30 seconds and when the server stops. Restart the server and it carries on where it left off.
+          {store.standalone
+            ? "This city lives in your browser and saves itself every 15 seconds. Copy the save to keep a backup or move it to the full version."
+            : "The world autosaves every 30 seconds and when the server stops. Restart the server and it carries on where it left off."}
         </div>
       </div>
 
@@ -173,15 +206,28 @@ export function GodPanel() {
         <h4>🔄 New world</h4>
         <div className="god-row">
           <input placeholder="Seed (optional)" value={seed} onChange={(e) => setSeed(e.target.value)} />
-          <button
-            className="btn danger"
-            onClick={() => {
-              if (confirm("Start a brand-new city? The current one will be replaced.")) store.send({ type: "reset", seed: seed ? Number(seed) : undefined });
-            }}
-          >
-            Start over
-          </button>
+          {confirmReset ? (
+            <>
+              <button
+                className="btn danger"
+                onClick={() => {
+                  setConfirmReset(false);
+                  store.send({ type: "reset", seed: seed && Number.isFinite(Number(seed)) ? Math.abs(Math.round(Number(seed))) : undefined });
+                }}
+              >
+                Yes, replace this city
+              </button>
+              <button className="btn" onClick={() => setConfirmReset(false)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button className="btn danger" onClick={() => setConfirmReset(true)}>
+              Start over
+            </button>
+          )}
         </div>
+        {confirmReset && <div className="neg" style={{ fontSize: 12, marginBottom: 6 }}>The current city will be replaced and can't be brought back (unless you copied a save).</div>}
         <div className="muted" style={{ fontSize: 11 }}>
           The same seed always produces the same city and the same story (with Claude switched off).
         </div>

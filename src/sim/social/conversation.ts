@@ -17,7 +17,7 @@ import type { Citizen, Conversation, ConversationTopic, ConvValue, EventCategory
 import { clamp, money, newId, pct, pushRing, round2 } from "../util";
 import { argueDialogue, chatDialogue, helpDialogue, investDialogue, jobDialogue, loanDialogue, repaymentDialogue, tipDialogue } from "./dialogue";
 import { compatibility } from "./encounters";
-import { helpTerms, investmentTerms, jobTerms, loanTerms, lookWealthy, MAX_STAFF, settleLoan } from "./negotiation";
+import { helpTerms, investmentTerms, jobTerms, loanTerms, lookWealthy as lookWealthyRaw, MAX_STAFF, settleLoan } from "./negotiation";
 import { adjustRel, getRel, peekRel } from "./relationships";
 
 // Conversations. Citizens have agendas (need a loan, want a job, want their
@@ -68,6 +68,13 @@ export function agendasFor(world: WorldState, c: Citizen): Agenda[] {
   const s = situation(world, c);
   const out: Agenda[] = [];
   const others = world.citizenOrder.filter((id) => id !== c.id).map((id) => world.citizens[id]);
+  // Net worth is costly; nothing changes while we plan, so work it out once per person.
+  const worthCache = new Map<string, number>();
+  const lookWealthy = (_w: WorldState, o: Citizen): number => {
+    let v = worthCache.get(o.id);
+    if (v === undefined) worthCache.set(o.id, (v = lookWealthyRaw(world, o)));
+    return v;
+  };
 
   // Money trouble: ask someone for a loan.
   const short = Math.max(s.rent + c.rentArrears + s.dailyCost * 2 - s.liquid, 0);

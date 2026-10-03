@@ -3,7 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { AIStatusDTO, ClientMsg, HelloMsg, ServerMsg } from "../shared/protocol";
+import { describeSkip, type AIStatusDTO, type ClientMsg, type HelloMsg, type ServerMsg } from "../shared/protocol";
 import { newWorld as createWorld } from "../sim";
 import { applyGodCommand, GodError } from "../sim/god";
 import * as snap from "../sim/snapshot";
@@ -15,7 +15,7 @@ import { createClaudeClient } from "./anthropic";
 import { openJsonStore } from "./persistence/jsonStore";
 import { openSqliteStore } from "./persistence/sqliteStore";
 import type { WorldStore } from "./persistence/store";
-import { SimRunner } from "./runner";
+import { SimRunner } from "../sim/runner";
 
 // AI Hustle City server: runs the simulation continuously and streams it to
 // any number of browser clients over a WebSocket.
@@ -178,10 +178,39 @@ function handle(client: Client, msg: ClientMsg): void {
       if (msg.maxCallsPerDay !== undefined && msg.maxCallsPerDay >= 0) world.ai.maxCallsPerDay = Math.round(msg.maxCallsPerDay);
       break;
     }
+    case "skip": {
+      const minutes = Number(msg.minutes);
+      if (!Number.isFinite(minutes) || minutes <= 0) break;
+      const events = runner.skip(minutes);
+      broadcastState();
+      for (const c of clients) send(c.ws, { type: "toast", text: `⏩ Skipped ${describeSkip(minutes)} — ${events} things happened. It's now ${snap.describeTime(world.time)}.`, level: "info" });
+      break;
+    }
     case "save":
       saveWorld("manual");
       send(client.ws, { type: "toast", text: "💾 World saved.", level: "info" });
       break;
+    case "import": {
+      const loaded = prepareLoadedWorld(msg.world);
+      if (!loaded) {
+        send(client.ws, { type: "toast", text: "That file isn't an AI Hustle City save.", level: "error" });
+        break;
+      }
+      saveWorld("before import");
+      configureAI(loaded);
+      runner.world = loaded;
+      savedEventId = loaded.events[loaded.events.length - 1]?.id ?? 0;
+      savedTxId = loaded.transactions[loaded.transactions.length - 1]?.id ?? 0;
+      saveWorld("imported");
+      for (const c of clients) {
+        c.lastEventId = Math.max(0, loaded.events[loaded.events.length - 41]?.id ?? 0);
+        c.lastTxId = 0;
+        c.selected = null;
+        send(c.ws, hello(loaded));
+        send(c.ws, { type: "toast", text: `📂 Loaded ${loaded.name} at ${snap.describeTime(loaded.time)}.`, level: "info" });
+      }
+      break;
+    }
     case "reset": {
       saveWorld("before reset");
       runner.world = newWorld(msg.seed);

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 // Small inline-SVG charts for a dark UI. Specs: 2px lines, hairline solid
 // grid, 10% area wash, end dot r=4 with a 2px surface ring, legend for 2+
@@ -85,6 +85,19 @@ export function Sparkline({
   );
 }
 
+/** Track an element's pixel width so charts draw text at its real size. */
+function useWidth(fallback: number): [number, (el: HTMLDivElement | null) => void] {
+  const [el, setEl] = useState<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(fallback);
+  useEffect(() => {
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setWidth(Math.max(220, Math.round(e.contentRect.width))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return [width, setEl];
+}
+
 export interface Series {
   name: string;
   values: number[];
@@ -94,7 +107,7 @@ export interface Series {
 export function LineChart({
   series,
   xLabels,
-  height = 170,
+  height = 150,
   format,
   zeroBase = false,
 }: {
@@ -106,7 +119,7 @@ export function LineChart({
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const ref = useRef<SVGSVGElement>(null);
-  const W = 560;
+  const [W, wrapRef] = useWidth(560);
   const H = height;
   const left = 44;
   const right = 12;
@@ -122,7 +135,12 @@ export function LineChart({
     const t = niceTicks(lo, hi);
     return { ticks: t, min: Math.min(lo, t[0]), max: Math.max(hi, t[t.length - 1]) };
   }, [all.join(","), zeroBase]);
-  if (n < 2) return <div className="empty">Collecting data… (charts fill in as the hours pass)</div>;
+  if (n < 2)
+    return (
+      <div className="empty" ref={wrapRef}>
+        Collecting data… (charts fill in as the hours pass)
+      </div>
+    );
   const x = (i: number) => left + (i / (n - 1)) * (W - left - right);
   const y = (v: number) => top + (1 - (v - min) / (max - min)) * (H - top - bottom);
   const onMove = (e: React.PointerEvent) => {
@@ -130,9 +148,9 @@ export function LineChart({
     const px = ((e.clientX - r.left) / r.width) * W;
     setHover(Math.max(0, Math.min(n - 1, Math.round(((px - left) / (W - left - right)) * (n - 1)))));
   };
-  const labelEvery = Math.max(1, Math.ceil(n / 6));
+  const labelEvery = Math.max(1, Math.ceil(n / Math.max(3, Math.floor(W / 90))));
   return (
-    <div className="chart-wrap" style={{ position: "relative" }}>
+    <div className="chart-wrap" style={{ position: "relative" }} ref={wrapRef}>
       {series.length > 1 && (
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, color: TEXT_2, marginBottom: 4 }}>
           {series.map((s, i) => (
@@ -145,7 +163,7 @@ export function LineChart({
           ))}
         </div>
       )}
-      <svg ref={ref} className="plot" viewBox={`0 0 ${W} ${H}`} style={{ height: "auto" }} onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
+      <svg ref={ref} className="plot" viewBox={`0 0 ${W} ${H}`} style={{ height: H }} onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
         {ticks.map((t) => (
           <g key={t}>
             <line x1={left} x2={W - right} y1={y(t)} y2={y(t)} stroke={GRID} strokeWidth={1} />

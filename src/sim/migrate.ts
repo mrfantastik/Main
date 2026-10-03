@@ -7,8 +7,18 @@ import { WORLD_VERSION } from "./world";
  * (in-flight Claude requests). Returns null if the save is unusable.
  */
 export function prepareLoadedWorld(raw: unknown): WorldState | null {
+  try {
+    return migrate(raw);
+  } catch {
+    return null;
+  }
+}
+
+function migrate(raw: unknown): WorldState | null {
   const w = raw as WorldState;
   if (!w || typeof w !== "object" || !w.citizens || !w.map || typeof w.time !== "number") return null;
+  if (!Array.isArray(w.citizenOrder) || !Array.isArray(w.businessOrder) || !Array.isArray(w.productOrder) || !w.economy || !w.ai || !w.market || !w.stats) return null;
+  if (w.citizenOrder.some((id) => !w.citizens[id])) return null;
   if ((w.version ?? 0) > WORLD_VERSION) return null;
   w.id ??= `w${(w.seed ?? 0).toString(36)}-legacy`;
   w.conversationLog ??= [];

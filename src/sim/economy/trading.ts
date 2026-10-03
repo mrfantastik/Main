@@ -17,6 +17,32 @@ import { addStock, removeStock } from "./market";
 
 export const SPREAD = 0.01;
 
+/**
+ * How many units the Exchange absorbs before the price moves ~10%. Big orders
+ * move the price against the trader *as they fill*, so nobody can buy a
+ * mountain of stock, push the price up and sell into their own pump.
+ */
+export function marketDepth(world: WorldState, pid: string): number {
+  return Math.max(3, world.products[pid].externalDemand * 5);
+}
+const IMPACT = 0.1;
+
+/** Fill an order: returns the average price paid/received and moves the market. */
+function fill(world: WorldState, pid: string, qty: number, side: "buy" | "sell"): number {
+  const m = world.market[pid];
+  const p = world.products[pid];
+  const move = (IMPACT * qty) / marketDepth(world, pid);
+  const dir = side === "buy" ? 1 : -1;
+  const avg = m.wholesale * (1 + dir * SPREAD) * (1 + (dir * move) / 2);
+  m.wholesale = round2(Math.min(p.baseCost * 4, Math.max(p.baseCost * 0.35, m.wholesale * (1 + dir * move))));
+  return round2(Math.max(0.01, avg));
+}
+
+/** Largest position a trader will hold in one product. */
+export function maxPosition(world: WorldState, c: Citizen, pid: string): number {
+  return Math.floor(marketDepth(world, pid) * (0.4 + c.traits.risk * 0.6));
+}
+
 function mean(values: number[]): number {
   return values.reduce((a, b) => a + b, 0) / Math.max(1, values.length);
 }
@@ -77,11 +103,11 @@ export function runTradingSession(world: WorldState, c: Citizen): string {
     if (!sell) continue;
     const qty = it.qty;
     const unitCost = removeStock(c.inventory, sig.pid, qty);
-    const total = round2(price * qty);
+    const fillPrice = fill(world, sig.pid, qty, "sell");
+    const total = round2(fillPrice * qty);
     transfer(world, externalAcc("exchange"), citizenAcc(c.id), total, "trade", `Sold ${qty}× ${world.products[sig.pid].name} on the Exchange`);
-    const profit = round2((price - unitCost) * qty);
+    const profit = round2((fillPrice - unitCost) * qty);
     creditOccupation(world, c.id, profit);
-    m.traderPressure -= qty / (world.products[sig.pid].externalDemand * 6);
     notes.push(`${profit >= 0 ? "made" : "lost"} ${money(Math.abs(profit))} on ${world.products[sig.pid].name}`);
     if (Math.abs(profit) >= 60) {
       logEvent(world, "finance", `${profit >= 0 ? "📈" : "📉"} ${c.name} ${profit >= 0 ? "made" : "lost"} ${money(Math.abs(profit))} trading ${world.products[sig.pid].name}.`, 3, [c.id]);
@@ -96,16 +122,20 @@ export function runTradingSession(world: WorldState, c: Citizen): string {
     const price = round2(m.wholesale * (1 + SPREAD));
     options.push({ id: `buy:${sig.pid}`, label: `Buy ${world.products[sig.pid].name} at ${money(price)}`, factors: sig.factors, payload: null, thought: "" });
     if (sig.signal < buyThreshold || budget < price) continue;
-    const qty = Math.floor(Math.min(budget * 0.6, budget) / price);
+    const room = maxPosition(world, c, sig.pid) - (c.inventory[sig.pid]?.qty ?? 0);
+    const qty = Math.min(room, Math.floor((budget * 0.6) / price));
     if (qty <= 0) continue;
-    const total = round2(price * qty);
-    if (!ensureCash(c, total)) continue;
+    // Quote the whole order (including its price impact) before committing.
+    const move = (IMPACT * qty) / marketDepth(world, sig.pid);
+    const quote = round2(price * (1 + move / 2) * qty);
+    if (quote > budget || !ensureCash(c, quote)) continue;
+    const fillPrice = fill(world, sig.pid, qty, "buy");
+    const total = round2(fillPrice * qty);
     if (!transfer(world, citizenAcc(c.id), externalAcc("exchange"), total, "trade", `Bought ${qty}× ${world.products[sig.pid].name} on the Exchange`)) continue;
-    addStock(c.inventory, sig.pid, qty, price);
+    addStock(c.inventory, sig.pid, qty, fillPrice);
     budget -= total;
-    m.traderPressure += qty / (world.products[sig.pid].externalDemand * 6);
     const why = sig.factors.insight ? "my research tip says it's about to boom" : sig.factors.momentum > sig.factors.dip ? "the price has momentum" : "it's below its usual price";
-    notes.push(`bought ${qty}× ${world.products[sig.pid].name} at ${money(price)} because ${why}`);
+    notes.push(`bought ${qty}× ${world.products[sig.pid].name} at ${money(fillPrice)} because ${why}`);
   }
   c.skills.trading = Math.min(100, c.skills.trading + 0.4);
 

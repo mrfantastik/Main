@@ -22,6 +22,17 @@ import type {
 export const SPEEDS = [1, 5, 20, 50] as const;
 /** Real milliseconds per game minute at 1x speed (1 game hour = 15 s). */
 export const MS_PER_GAME_MINUTE = 250;
+/** Time-skip buttons (game minutes). */
+export const SKIPS = [
+  { minutes: 60, label: "+1h", title: "an hour" },
+  { minutes: 1440, label: "+1d", title: "a day" },
+  { minutes: 7 * 1440, label: "+1w", title: "a week" },
+] as const;
+export const MAX_SKIP_MINUTES = 30 * 1440;
+export function describeSkip(minutes: number): string {
+  if (minutes % 1440 === 0) return minutes === 1440 ? "a day" : minutes === 7 * 1440 ? "a week" : `${minutes / 1440} days`;
+  return minutes === 60 ? "an hour" : `${Math.round(minutes / 60)} hours`;
+}
 
 export interface ProductDTO {
   id: string;
@@ -310,6 +321,9 @@ export type ClientMsg =
   | { type: "god"; command: GodCommand }
   | { type: "reset"; seed?: number }
   | { type: "ai"; mode?: "off" | "llm"; budgetUsd?: number; maxCallsPerDay?: number }
-  | { type: "save" };
+  | { type: "save" }
+  | { type: "skip"; minutes: number }
+  /** Replace the city with a saved one (the JSON from "Download world" / "Copy save"). */
+  | { type: "import"; world: unknown };
 
 export type { ConversationLine };

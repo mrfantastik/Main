@@ -33,7 +33,7 @@ function Help() {
           <b>Click a shop</b> to inspect a business.
         </li>
         <li>
-          <b>Speed</b>: ⏸ 1× 5× 20× 50× in the top bar.
+          <b>Speed</b>: ⏸ 1× 5× 20× 50× in the top bar. <b>Skip ahead</b> an hour, a day or a week instantly with ⏩.
         </li>
         <li>
           <b>📊 Dashboard</b>: the whole economy. <b>⚡ God Mode</b>: interfere. <b>🧠 AI</b>: Claude usage and decision log.
@@ -44,7 +44,10 @@ function Help() {
         bubbles are live conversations (gold border = written by Claude); green "+£" shows money landing.
       </p>
       <p>
-        <b>Persistence:</b> the city lives on the server and autosaves. Refresh, close the tab or restart the server — it carries on.
+        <b>Persistence:</b>{" "}
+        {store.standalone
+          ? "the city runs and saves inside your browser. Refresh or come back later and it carries on (in the same browser)."
+          : "the city lives on the server and autosaves. Refresh, close the tab or restart the server — it carries on."}
       </p>
       <p className="muted">Everything you see emerges from the simulation. Nothing is scripted.</p>
     </Shell>

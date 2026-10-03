@@ -4,7 +4,8 @@ import { round2 } from "../util";
 /** Value goods at a conservative resale price (between wholesale and retail). */
 export function inventoryValue(world: WorldState, inv: Inventory): number {
   let v = 0;
-  for (const [pid, item] of Object.entries(inv)) {
+  for (const pid in inv) {
+    const item = inv[pid];
     const m = world.market[pid];
     if (!m || item.qty <= 0) continue;
     v += item.qty * (m.wholesale * 0.6 + m.retail * 0.4) * 0.85;

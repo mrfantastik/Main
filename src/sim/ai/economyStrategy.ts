@@ -1,6 +1,6 @@
 import { CONFIG } from "../config";
 import { activeLoans, deposit, maxBankLoan, outstanding, repay, takeBankLoan } from "../economy/bank";
-import { addPartner, closeBusiness, createBusiness, KIND_INFO, openBusinesses, valuation } from "../economy/business";
+import { addPartner, closeBusiness, createBusiness, KIND_INFO, MIN_OWNER_SHARE, openBusinesses, valuation } from "../economy/business";
 import { leaveJob } from "../economy/jobs";
 import { planBusiness, productOpportunity, type BusinessPlan } from "../economy/opportunity";
 import { logEvent } from "../events";
@@ -8,6 +8,7 @@ import { remember, rememberBetrayal } from "../memory/memory";
 import { MAX_STAFF } from "../social/negotiation";
 import { adjustRel, peekRel } from "../social/relationships";
 import type { Business, BusinessKind, Citizen, WorldState } from "../types";
+import { ownerShare } from "../economy/valuation";
 import { money, pct, round2 } from "../util";
 import { occupationBelief } from "./beliefs";
 import { changeCareer, registerCareer } from "./careers";
@@ -330,6 +331,8 @@ function moneyOptions(world: WorldState, c: Citizen, s: Situation): StrategyOpti
 export function proposeInvestment(world: WorldState, investor: Citizen, b: Business, amount: number, share: number): boolean {
   const owner = world.citizens[b.ownerId];
   if (!owner || !b.open) return false;
+  share = round2(Math.min(share, ownerShare(b) - MIN_OWNER_SHARE));
+  if (share < 0.01) return false;
   const rel = peekRel(owner, investor.id);
   const factors: Record<string, number> = {
     needCash: b.cash < 150 ? 0.4 : 0,

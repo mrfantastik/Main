@@ -53,7 +53,10 @@ class Store {
   lastFrameAt = 0;
   private listeners = new Set<() => void>();
   private ws: WebSocket | null = null;
+  private local: import("./local").LocalHost | null = null;
   private toastId = 1;
+  /** True in the single-file build that runs the whole city in the browser. */
+  readonly standalone = import.meta.env.MODE === "standalone";
 
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
@@ -67,6 +70,15 @@ class Store {
   }
 
   connect() {
+    if (this.standalone) {
+      void import("./local").then(async ({ LocalHost }) => {
+        const host = new LocalHost((msg) => this.onMessage(msg));
+        this.local = host;
+        await host.start();
+        this.set({ connected: true });
+      });
+      return;
+    }
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
     this.ws = ws;
@@ -83,16 +95,32 @@ class Store {
   }
 
   send(msg: ClientMsg) {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+    if (this.local) this.local.handle(msg);
+    else if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+  }
+
+  /** Standalone build only: the current world as JSON. */
+  exportWorld(): string | null {
+    return this.local?.exportJson() ?? null;
+  }
+
+  /** Standalone build only: save straight away (e.g. before the page is replaced). */
+  saveNow(): void {
+    void this.local?.save();
   }
 
   private onMessage(msg: ServerMsg) {
     switch (msg.type) {
-      case "hello":
+      case "hello": {
         this.frames = [];
-        this.set({ hello: msg, events: [], detail: null });
+        // A different city (new world / imported save): close whatever was open.
+        const otherCity = !!this.s.hello && this.s.hello.seed !== msg.seed;
+        this.set({ hello: msg, events: [], detail: null, ...(otherCity ? { selection: null } : {}) });
         break;
+      }
       case "frame":
+        // After a time skip, old frames would make people glide across town.
+        if (this.frames.length && msg.t - this.frames[this.frames.length - 1].t > 120) this.frames = [];
         this.frames.push(msg);
         if (this.frames.length > 40) this.frames.splice(0, this.frames.length - 40);
         this.lastFrameAt = performance.now();

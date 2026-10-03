@@ -188,6 +188,9 @@ function defaultLoan(world: WorldState, l: Loan): void {
  *    people pay if they can; greedy people with weak ties might not...
  */
 export function loansDaily(world: WorldState): void {
+  // Forget loans that were settled a while ago (everything that matters about
+  // them lives on in memories, credit scores and relationships).
+  world.loans = world.loans.filter((l) => l.status === "active" || world.time - Math.max(l.dueT, l.startT) < 14 * 1440);
   for (const l of world.loans) {
     if (l.status !== "active") continue;
     const b = world.citizens[l.borrower];

@@ -4,6 +4,7 @@ import { LineChart } from "./charts";
 
 export function BusinessPanel() {
   const d = useStore((s) => (s.detail?.kind === "business" ? s.detail : null));
+  const all = useStore((s) => s.state?.businesses);
   if (!d) {
     return (
       <div className="side-body">
@@ -12,6 +13,7 @@ export function BusinessPanel() {
     );
   }
   const b = d.summary;
+  const neighbours = (all ?? []).filter((x) => x.open && x.buildingId === b.buildingId && x.id !== b.id);
   return (
     <>
       <div className="side-head">
@@ -30,6 +32,19 @@ export function BusinessPanel() {
         </button>
       </div>
       <div className="side-body">
+        {neighbours.length > 0 && (
+          <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+            Also here:{" "}
+            {neighbours.map((x, i) => (
+              <span key={x.id}>
+                {i > 0 && ", "}
+                <span className="who" style={{ color: "var(--accent-2)", cursor: "pointer" }} onClick={() => store.select({ kind: "business", id: x.id })}>
+                  {x.name}
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
         {!b.open && (
           <div className="item" style={{ borderColor: "var(--bad)", marginBottom: 8 }}>
             🔒 Closed {b.closedT ? when(b.closedT) : ""} — {d.closedReason}

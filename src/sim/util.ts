@@ -24,7 +24,9 @@ export function newId(world: WorldState): number {
 
 export function pushRing<T>(arr: T[], item: T, limit: number): void {
   arr.push(item);
-  if (arr.length > limit) arr.splice(0, arr.length - limit);
+  // Big logs (events, transactions) trim in batches: dropping one item from
+  // the front of a 5,000-item array on every push is surprisingly slow.
+  if (arr.length > limit && (limit < 500 || arr.length > limit + (limit >> 4))) arr.splice(0, arr.length - limit);
 }
 
 export function sum(values: number[]): number {
