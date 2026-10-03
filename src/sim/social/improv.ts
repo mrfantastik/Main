@@ -47,6 +47,12 @@ function lowerStart(world: WorldState, s: string): string {
   return s[0].toLowerCase() + s.slice(1);
 }
 
+/** A memory retold to the person in it: "Grace told me" -> "you told me", "Grace's" -> "your". */
+function toYou(text: string, listener: Citizen | undefined): string {
+  if (!listener) return text;
+  return text.replace(new RegExp(`\\b${listener.name}'s\\b`, "g"), "your").replace(new RegExp(`\\b${listener.name}\\b`, "g"), "you");
+}
+
 function firstSentence(text: string): string {
   const m = text.match(/^.+?[.!?](\s|$)/);
   return (m ? m[0] : text).trim();
@@ -82,6 +88,26 @@ function causeOf(c: Citizen, e: Emotion, now: number): Memory | null {
 }
 
 // ---------------------------------------------------- reactions to news
+
+/** Reacting to someone's news about themselves, to their face. */
+function reactionToYou(r: RngHolder, h: Happening, s: number): string {
+  switch (h.kind) {
+    case "fire":
+      return s < -0.35 ? pick(r, ["Oh no! Are you alright?", "That's awful. I'm so sorry."]) : s > 0.1 ? "Well. These things happen, don't they?" : "Blimey. What a day you've had.";
+    case "burglary":
+      return s < -0.3 ? pick(r, ["That's horrible. Are you OK?", "In your own home? That's awful."]) : "These things happen, I suppose.";
+    case "lottery":
+      return s > 0.3 ? pick(r, ["Brilliant! Couldn't happen to a nicer person.", "Ha! You lucky devil."]) : s < -0.1 ? pick(r, ["Typical. Some people get all the luck.", "Must be nice."]) : "Well, good for you.";
+    case "celebrity":
+      return s > 0.3 ? pick(r, ["Brilliant! You deserve it.", "Good for you. That'll be great for business."]) : pick(r, ["Lucky you.", "Probably just passing through."]);
+    case "food_poisoning":
+      return s < -0.2 ? pick(r, ["Oh no. That must have been awful for you.", "Ouch. You'll bounce back."]) : "Can't say I'm surprised.";
+    case "party":
+      return s > 0.3 ? pick(r, ["Ooh, count me in!", "I'll be there."]) : "Not really my thing, parties. Have a good one.";
+    default:
+      return s < -0.2 ? "Oh no. I'm sorry." : s > 0.2 ? "Good for you!" : "Huh. Fancy that.";
+  }
+}
 
 function reaction(r: RngHolder, world: WorldState, h: Happening, s: number): string {
   const subj = h.subject ? (world.citizens[h.subject]?.name ?? "them") : "them";
@@ -226,11 +252,11 @@ function todaysNews(c: Citizen, now: number): Memory | null {
 }
 
 /** "How are you?", answered from their actual day: the weather, a big moment, tiredness, hunger, or how they feel. */
-function howTheyAre(r: RngHolder, world: WorldState, c: Citizen, short = false): string {
+function howTheyAre(r: RngHolder, world: WorldState, c: Citizen, listener?: Citizen, short = false): string {
   const storm = world.happenings.some((h) => h.kind === "storm" && !h.ended && world.time >= h.t && world.time < h.until);
   if (storm && !c.insideId) return pick(r, ["Soaked to the skin.", "Drenched. Have you seen it out there?", "Wet. Very wet."]);
   const m = todaysNews(c, world.time);
-  if (m) return `${m.valence > 0 ? pick(r, ["Great, actually.", "Brilliant day.", "Not bad at all."]) : pick(r, ["Not great.", "Rough day.", "Honestly? Awful."])} ${sentence(m.text)}`;
+  if (m) return `${m.valence > 0 ? pick(r, ["Great, actually.", "Brilliant day.", "Not bad at all."]) : pick(r, ["Not great.", "Rough day.", "Honestly? Awful."])} ${sentence(toYou(m.text, listener))}`;
   const s = situation(world, c);
   if (s.tired > 0.78 && chance(r, 0.5)) return pick(r, ["Knackered, honestly.", "Shattered. Could sleep standing up.", "Running on fumes."]);
   if (s.hungry > 0.75 && chance(r, 0.4)) return pick(r, ["Starving, to be honest.", "Hungry. I could eat a horse."]);
@@ -299,7 +325,7 @@ function workAnswer(r: RngHolder, world: WorldState, x: Citizen, avg: number): {
     case "researcher":
       return { answer: x.research.breakthroughs > 0 ? pick(r, ["Working on the next big thing.", "One breakthrough down. Chasing another."]) : x.research.points > 50 ? pick(r, ["I think I'm close to something.", "Getting somewhere, I think. Slowly."]) : pick(r, ["Slow. Science is slow.", "Lots of dead ends."]), good: false };
     case "freelancer":
-      return { answer: today > 15 ? `${money(today)} from clients so far today. Not bad.` : pick(r, ["Feast or famine, freelancing.", "Waiting on clients. Always waiting."]), good: false };
+      return { answer: today > 15 ? `${money(today)} from clients so far today. Not bad.` : pick(r, ["Feast or famine, freelancing.", "Waiting on clients. Always waiting."]), good: today > 25 };
     case "reseller":
     case "trader": {
       const deal = x.memories.short.find((m) => m.t >= dayStart(world.time) && m.kind === "deal" && /£/.test(m.text) && /\b(I|my)\b/.test(m.text));
@@ -425,11 +451,11 @@ export function improvise(world: WorldState, conv: Conversation, a: Citizen, b: 
     };
     const greetings = close ? [`${b.name}! There you are.`, `Alright ${b.name}? How's things?`, `${b.name}! Long day?`, `Hey, ${b.name}. How are you?`] : [`${hello}, ${b.name}.`, `Alright ${b.name}?`, `${hello}! How are you doing?`, `Oh, hi ${b.name}. How's it going?`];
     say(a, cb ?? pick(r, [...greetings, ...((where && here[where]) || [])]));
-    const fine = howTheyAre(r, world, b);
+    const fine = howTheyAre(r, world, b, a);
     const askBack = !close || chance(r, 0.5);
     say(b, askBack ? `${fine} You?` : fine);
     if (askBack) {
-      const mine = howTheyAre(r, world, a);
+      const mine = howTheyAre(r, world, a, b);
       say(a, mine === fine ? pick(r, ["Same, actually.", "Ha. Same here.", "Snap."]) : mine);
     }
     const d = dominantEmotion(b);
@@ -467,7 +493,7 @@ export function improvise(world: WorldState, conv: Conversation, a: Citizen, b: 
             } else {
               say(x, pick(r, [`Have you heard? ${firstSentence(h.text)}`, `Big news: ${lowerStart(world, firstSentence(h.text))}`, `You'll never guess. ${firstSentence(h.text)}`]));
             }
-            say(y, reaction(r, world, h, sy));
+            say(y, h.subject === x.id ? reactionToYou(r, h, sy) : reaction(r, world, h, sy));
             const qa = question(r, world, h);
             if (qa && room(2) && chance(r, 0.65)) {
               say(y, qa[0]);
@@ -595,7 +621,7 @@ export function improvise(world: WorldState, conv: Conversation, a: Citizen, b: 
           };
           say(x, line[d.emotion] ?? "I've not been myself lately.");
           const cause = causeOf(x, d.emotion, world.time);
-          if (cause && room(1)) say(x, `Ever since ${lowerStart(world, cause.text.replace(/[.!]+$/, ""))}.`);
+          if (cause && room(1)) say(x, `Ever since ${lowerStart(world, toYou(cause.text, y).replace(/[.!]+$/, ""))}.`);
           const supportive = y.personality.big5.agreeableness > 0.5 || closeness(y, x.id) > 0.5;
           say(y, supportive ? pick(r, ["I'm sorry. You can always talk to me.", "That sounds hard. Want to grab a drink later?", "Come here. It'll be alright."]) : pick(r, ["Chin up. Could be worse.", "Hm. We've all got problems."]));
           if (supportive) notes.push({ t: "feel", who: x.id, e: { [d.emotion]: -6, loneliness: -5 } }, { t: "rel", who: x.id, about: y.id, affinity: 4, trust: 2 });
@@ -664,9 +690,9 @@ export function improvise(world: WorldState, conv: Conversation, a: Citizen, b: 
     }
     // What they're working towards.
     const plan = planLine(world, x);
-    if (plan && !used.has(`plan:${x.id}`) && closeness(x, y.id) > 0.1 && !(x.goal.kind === "beat_rival" && x.goal.label.includes(y.name))) {
+    if (plan && !used.has("plans") && closeness(x, y.id) > 0.1 && !(x.goal.kind === "beat_rival" && x.goal.label.includes(y.name))) {
       out.push({
-        key: `plan:${x.id}`,
+        key: "plans",
         weight: 0.4,
         run: () => {
           if (chance(r, 0.5)) say(x, pick(r, ["I've made up my mind about something.", "Can I tell you what I'm up to?", "I've got a plan, you know."]));
@@ -676,6 +702,15 @@ export function improvise(world: WorldState, conv: Conversation, a: Citizen, b: 
           if (target && room(2) && have < target && /save|savings|net worth|deposit|rent/i.test(x.goal.label)) say(x, `I'm at ${money(have)} so far.`);
           const saver = y.reflections.some((l) => l.key === "money:save");
           const rival = y.traits.competitiveness > 0.65 && x.goal.kind === "get_rich";
+          if (y.goal.label === x.goal.label && room(2)) {
+            say(y, pick(r, ["Me too! We should keep each other honest.", "Same here, believe it or not."]));
+            const theirs = Math.round(y.money + y.savings);
+            if (x.goal.target && theirs < x.goal.target) say(y, theirs > have ? `I'm at ${money(theirs)}. Race you.` : `I'm only at ${money(theirs)}.`);
+            notes.push({ t: "rel", who: x.id, about: y.id, affinity: 3, trust: 1 }, { t: "rel", who: y.id, about: x.id, affinity: 3, trust: 1 });
+            topics.push("saving up");
+            brief.push(`${X} and ${Y} find they're both trying to ${lowerStart(world, x.goal.label)}.`);
+            return;
+          }
           const warm = saver || y.personality.big5.agreeableness > 0.6 || y.personality.big5.conscientiousness > 0.6;
           say(
             y,

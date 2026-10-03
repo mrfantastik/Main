@@ -41,6 +41,11 @@ function suffix(t: string, tag: string): string {
 }
 
 const FORMAL: [RegExp, string][] = [
+  // Tag questions first ("isn't it?" -> "is it not?", never "is not it?").
+  [/\bisn't it\b/g, "is it not"],
+  [/\bdon't you\b/g, "do you not"],
+  [/\bdidn't (you|they)\b/g, "did $1 not"],
+  [/\bcan't you\b/g, "can you not"],
   [/\bI'm\b/g, "I am"],
   [/\bcan't\b/g, "cannot"],
   [/\bdon't\b/g, "do not"],
@@ -87,7 +92,8 @@ function styled(style: SpeakingStyle, text: string, seed: string, listener: Citi
     case "formal": {
       let t = text;
       for (const [re, rep] of FORMAL) t = t.replace(re, rep);
-      return r < 0.25 && !negative && !t.includes("?") && spend(budget, "flair") ? prefix("I must say, ", t) : t;
+      // "I must say" goes in front of an opinion, not an answer to a question.
+      return r < 0.25 && !negative && !t.includes("?") && /^(It|That|This|They|You|Such|Quite|What a)\b/.test(t) && spend(budget, "flair") ? prefix("I must say, ", t) : t;
     }
     case "blunt": {
       let t = text.replace(SOFT_START, "");
@@ -98,8 +104,8 @@ function styled(style: SpeakingStyle, text: string, seed: string, listener: Citi
       return t;
     }
     case "chatty":
-      if (r < 0.45 && !/^(Anyway|Right|Well|So)\b/.test(text) && spend(budget, "flair")) return prefix(pickBy(seed, ["Oh! ", "Honestly, ", "You know what? ", "Right, so: "]), text);
-      if (r < 0.75 && !SAD.test(text) && spend(budget, "flair")) return suffix(text, pickBy(seed, [" Anyway!", " Honestly."]));
+      if (r < 0.45 && !/^(Anyway|Right|Well|So)\b/.test(text) && !/\?$/.test(text) && spend(budget, "flair")) return prefix(pickBy(seed, ["Oh! ", "Honestly, ", "You know what? ", "Right, so: "]), text);
+      if (r < 0.75 && !SAD.test(text) && text.split(/\s+/).length >= 6 && spend(budget, "flair")) return suffix(text, " Anyway!");
       return text;
     case "sarcastic": {
       // Sarcasm needs something to bite on: a gripe about their own lot, or
@@ -107,7 +113,7 @@ function styled(style: SpeakingStyle, text: string, seed: string, listener: Citi
       if (r >= 0.4 || /\?$/.test(text)) return text;
       const aboutOthers = text.split(/\W+/).some((w) => NAMES.has(w) && w !== listener?.name);
       if ((negative || SAD.test(text)) && !aboutOthers && !NEWSY.test(text) && spend(budget, "flair")) return prefix(pickBy(seed, ["Oh, wonderful. ", "Great. ", "Fantastic. "]), text);
-      if (!negative && /^(I|I'm|I've|Really|Great|Brilliant|Not bad|Pretty good|Never better)\b/.test(text) && spend(budget, "flair")) return suffix(text, pickBy(seed, [" Shocking, I know.", " Who'd have thought."]));
+      if (!negative && /^(I|I'm|I've|Really|Great|Brilliant|Not bad|Pretty good|Never better)\b/.test(text) && /\b(good|great|brilliant|well|lucky|won|better|best)\b/i.test(text) && spend(budget, "flair")) return suffix(text, pickBy(seed, [" Shocking, I know.", " Who'd have thought."]));
       return text;
     }
     case "warm":
@@ -129,6 +135,9 @@ export function inVoice(c: Citizen, text: string, seed: string, listener?: Citiz
   const sad = SAD.test(t);
   // Lead-ins like "Look, " only go in front of plain statements.
   const leadOk = !NEWSY.test(t) && !/\?$/.test(t);
+  // "I'm worried, ..." and "This is embarrassing, but ..." go in front of
+  // something said about themselves or the situation, not advice.
+  const aboutSelf = /^(I|I'm|I've|It|It's|We|There|This|That|My)\b/.test(t);
   switch (d.emotion) {
     case "anger":
       if (!/\?$/.test(t) && spend(budget, "mood")) t = r < 0.35 && leadOk ? prefix("Look, ", t.replace(/\.$/, "!")) : t.replace(/\.$/, "!");
@@ -137,13 +146,13 @@ export function inVoice(c: Citizen, text: string, seed: string, listener?: Citiz
       if (r < 0.4 && spend(budget, "mood")) t = t.replace(/[.!]$/, "...");
       break;
     case "joy":
-      if (r < 0.3 && !sad && !/^(Ha|Oh)\b/.test(t) && /!|\b(good|great|brilliant|love|nice|pleased|lucky|best|glad)\b/i.test(t) && spend(budget, "mood")) t = prefix("Ha! ", t);
+      if (r < 0.3 && !sad && leadOk && !/^(Ha|Oh|Huh|Eh|Hm|Ooh|Ugh|Blimey|Wow)\b/.test(t) && /!|\b(good|great|brilliant|love|nice|pleased|lucky|best|glad)\b/i.test(t) && spend(budget, "mood")) t = prefix("Ha! ", t);
       break;
     case "fear":
-      if (r < 0.35 && leadOk && !/worr/i.test(t) && spend(budget, "mood")) t = prefix("I'm worried, ", t);
+      if (r < 0.35 && leadOk && aboutSelf && !/worr/i.test(t) && spend(budget, "mood")) t = prefix("I'm worried, ", t);
       break;
     case "shame":
-      if (r < 0.3 && leadOk && spend(budget, "mood")) t = prefix("This is embarrassing, but ", t);
+      if (r < 0.3 && leadOk && aboutSelf && spend(budget, "mood")) t = prefix("This is embarrassing, but ", t);
       break;
     case "envy":
       if (r < 0.3 && listener && listener.money + listener.savings > c.money + c.savings && !sad && spend(budget, "mood")) t = suffix(t, " Must be nice.");
@@ -220,9 +229,10 @@ export function voiceConversation(convId: number, topic: string, a: Citizen, b: 
   const out = lines.map((l, i) => {
     const speaker = l.speaker === a.id ? a : b;
     const listener = speaker === a ? b : a;
-    // Hellos, goodbyes, quick replies and hard facts (numbers) stay plain;
+    // Hellos (and "you?"), goodbyes (the last two lines), quick replies and hard facts
+    // (numbers) stay plain;
     // the personality shows in the rest.
-    const plain = i < 2 || l.text.split(/\s+/).length <= 3 || /[£%\d]/.test(l.text);
+    const plain = i < 3 || i >= lines.length - 2 || l.text.split(/\s+/).length <= 3 || /[£%\d]/.test(l.text);
     const budget = budgets ? (plain ? { flair: 0, mood: 0 } : budgets.get(speaker.id)) : undefined;
     return { ...l, text: inVoice(speaker, l.text, `${convId}:${i}`, listener, budget) };
   });
