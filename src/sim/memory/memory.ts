@@ -1,4 +1,5 @@
-import type { Citizen, CitizenId, Memory, MemoryKind, WorldState } from "../types";
+import { feel, impulsesFor, memoriesChanged, type FeelContext } from "../mind/emotions";
+import type { Citizen, CitizenId, Emotions, Memory, MemoryKind, WorldState } from "../types";
 import { clamp, newId } from "../util";
 
 // Memory system.
@@ -12,6 +13,8 @@ import { clamp, newId } from "../util";
 //   piling up, which keeps memory small while making patterns stronger.
 // - When long-term memory is full, the weakest memory is forgotten:
 //   retention = importance x strength x (1 + |emotion|).
+// - Remembering something stirs feelings (see mind/emotions). The feelings
+//   are stored on the memory, so recalling a person brings them back.
 
 export const SHORT_LIMIT = 14;
 export const LONG_LIMIT = 40;
@@ -25,6 +28,26 @@ export interface MemoryInput {
   people: CitizenId[];
   /** Memories with the same key are merged/reinforced. */
   key?: string;
+  /** The feelings it stirs (otherwise worked out from kind and valence). */
+  feel?: Partial<Emotions>;
+  feelCtx?: FeelContext;
+}
+
+/**
+ * Store the feelings a memory stirred. When the same thing happens again the
+ * feeling deepens, but with diminishing returns, so a run of small slights
+ * becomes a grudge rather than an ever-growing fury.
+ */
+function addFeelings(m: Memory, applied: Partial<Emotions>): void {
+  const keys = Object.keys(applied) as (keyof Emotions)[];
+  if (!keys.length) return;
+  m.emotions ??= {};
+  for (const e of keys) {
+    const old = m.emotions[e] ?? 0;
+    const v = applied[e]!;
+    const add = Math.sign(v) === Math.sign(old) ? v * Math.max(0.15, 1 - Math.abs(old) / 50) : v;
+    m.emotions[e] = clamp(Math.round((old + add) * 10) / 10, -100, 100);
+  }
 }
 
 function retention(m: Memory): number {
@@ -35,7 +58,10 @@ export function remember(world: WorldState, c: Citizen, input: MemoryInput): Mem
   const key = input.key ?? `${input.kind}:${input.people.join(",")}:${input.text}`;
   const importance = clamp(input.importance, 1, 10);
   const existing = c.memories.long.find((m) => m.key === key) ?? c.memories.short.find((m) => m.key === key);
+  const applied = feel(c, input.feel ?? impulsesFor(input.kind, importance, input.valence, input.people.length > 0), input.feelCtx);
+  memoriesChanged(c);
   if (existing) {
+    addFeelings(existing, applied);
     existing.count++;
     existing.t = world.time;
     existing.strength = 1;
@@ -57,6 +83,7 @@ export function remember(world: WorldState, c: Citizen, input: MemoryInput): Mem
     count: 1,
     key,
   };
+  addFeelings(m, applied);
   c.memories.short.push(m);
   if (c.memories.short.length > SHORT_LIMIT) c.memories.short.shift();
   promote(c, m);
@@ -78,6 +105,7 @@ function promote(c: Citizen, m: Memory): void {
 
 /** Daily fading. Important and emotional memories last much longer. */
 export function decayMemories(c: Citizen): void {
+  memoriesChanged(c);
   for (const m of c.memories.long) {
     const rate = 0.06 / (m.importance * (1 + Math.abs(m.valence)));
     m.strength = clamp(m.strength - rate, 0, 1);

@@ -1,3 +1,5 @@
+import { situation } from "../ai/situation";
+import { emotionTargets, settleEmotions } from "../mind/emotions";
 import type { Citizen, WorldState } from "../types";
 import { clamp } from "../util";
 
@@ -37,16 +39,22 @@ export function updateNeeds(c: Citizen): void {
   n.fun = clamp(n.fun, 0, 100);
 }
 
-/** Hourly mood update from needs, money worries and job status. */
+/**
+ * Hourly: feelings drift towards targets set by circumstances (needs, money
+ * worries, job, home, friends) and personality; mood is derived from them.
+ */
 export function updateMood(world: WorldState, c: Citizen): void {
   const n = c.needs;
   const cash = c.money + c.savings;
   const comfort = clamp(cash / 150, 0, 1.4);
-  let target = n.energy * 0.2 + n.hunger * 0.2 + n.social * 0.15 + n.fun * 0.15 + comfort * 25;
-  if (c.occupation === "unemployed") target -= 8;
-  if (c.rentArrears > 0) target -= 10;
-  if (c.homeless) target -= 15;
-  const debts = world.loans.filter((l) => l.borrower === c.id && l.status === "active");
-  if (debts.length) target -= 4 * debts.length;
-  c.mood = clamp(c.mood * 0.7 + target * 0.3, 0, 100);
+  let wellbeing = n.energy * 0.2 + n.hunger * 0.2 + n.social * 0.15 + n.fun * 0.15 + comfort * 25;
+  if (c.occupation === "unemployed") wellbeing -= 8;
+  if (c.rentArrears > 0) wellbeing -= 10;
+  if (c.homeless) wellbeing -= 15;
+  const s = situation(world, c);
+  let closeBonds = 0;
+  for (const r of Object.values(c.relationships)) if (r.affinity >= 60 || (r.roles.includes("family") && r.affinity > 0)) closeBonds++;
+  const earned = c.finance.occupationEarnings[c.finance.occupationEarnings.length - 1] ?? 0;
+  const believed = c.beliefs.occupationIncome[c.occupation]?.value ?? 30;
+  settleEmotions(c, emotionTargets(c, { wellbeing, pressure: s.pressure, closeBonds, doingWell: earned > believed * 1.1 && earned > 15 }));
 }

@@ -2,6 +2,7 @@ import { registerAction } from "../ai/actions";
 import { inventionSeed } from "../data/products";
 import { logEvent } from "../events";
 import { remember } from "../memory/memory";
+import { workMood } from "../mind/emotions";
 import { chance, pick } from "../rng";
 import { dayOf } from "../time";
 import type { Citizen, Product, WorldState } from "../types";
@@ -34,7 +35,7 @@ export function registerResearchActions(): void {
         transfer(world, externalAcc("institute"), citizenAcc(c.id), grant, "grant", `Research grant (${hours.toFixed(1)}h)`);
         creditOccupation(world, c.id, grant);
       }
-      c.research.points += hours * (0.4 + c.skills.research / 100) * (0.6 + c.traits.diligence * 0.8) * 1.6;
+      c.research.points += hours * (0.4 + c.skills.research / 100) * (0.6 + c.traits.diligence * 0.8) * 1.6 * workMood(c);
       c.skills.research = Math.min(100, c.skills.research + hours * 0.1);
       if (c.research.points >= breakthroughThreshold(c)) breakthrough(world, c);
     },

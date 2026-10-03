@@ -30,7 +30,7 @@ import type { CityMap } from "../../sim/types";
 import { TILE_ROAD } from "../../sim/types";
 import { store } from "../net/store";
 import { FrameInterpolator } from "../render/interpolation";
-import { ACTIVITY_ICON, darkness, drawBubble, drawLabel, drawMoneyPopup, moneyText } from "../render/overlay";
+import { ACTIVITY_ICON, darkness, drawBubble, drawEmotion, drawLabel, drawMoneyPopup, moneyText, showFeelingOnMap } from "../render/overlay";
 import type { CityRenderer, Pos } from "../render/types";
 import { OCC_COLORS } from "../ui/format";
 import { buildDecor, decorKey, type BusinessDecor } from "./businesses";
@@ -902,8 +902,11 @@ export class Renderer3D implements CityRenderer {
       const isHover = this.hover === id;
       const showIcon = s > 26 || isSel || isHover;
       const showName = isSel || isHover || s > 44;
-      if (!showIcon && !showName) continue;
+      const meta = this.citizenMeta.get(id);
+      const feeling = meta?.emotion && (showFeelingOnMap(meta.emotion) || isSel || isHover) && (s > 16 || isSel || isHover) ? meta.emotion : null;
+      if (!showIcon && !showName && !feeling) continue;
       if (!this.project(v.hx, v.hy, v.hz)) continue;
+      if (feeling) drawEmotion(ctx, feeling.emoji, this.sp.x - 9, this.sp.y - 6, Math.max(11, Math.min(17, s * 0.42)));
       const p = this.interp.positions.get(id);
       if (showIcon && p) {
         const icon = ACTIVITY_ICON[p.kind];

@@ -1,5 +1,6 @@
 import { CONFIG } from "../config";
 import { registerAction } from "../ai/actions";
+import { setThought } from "../ai/decision";
 import { getBuildingIndexed } from "../city/lookup";
 import type { Citizen, WorldState } from "../types";
 import { clamp } from "../util";
@@ -52,7 +53,10 @@ export function registerLivingActions(): void {
       } else {
         const b = world.businesses[venue];
         if (b) ate = buyFromBusiness(world, b, c, "food", 1, true) > 0;
-        if (b && !ate) b.missedToday++;
+        if (b && !ate) {
+          b.missedToday++;
+          setThought(world, c, `Nobody was serving at ${b.name}. Wasted trip.`, 2);
+        }
       }
       if (!ate && eatAtHome(c)) ate = true;
       if (ate) {

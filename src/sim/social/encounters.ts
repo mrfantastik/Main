@@ -2,6 +2,7 @@ import { getBuildingIndexed } from "../city/lookup";
 import { logEvent } from "../events";
 import { placeName } from "../places";
 import { remember } from "../memory/memory";
+import { feelingsToward, recallPerson } from "../mind/emotions";
 import { chance, randRange } from "../rng";
 import type { ActivityKind, Citizen, WorldState } from "../types";
 import { clamp } from "../util";
@@ -40,6 +41,11 @@ export function compatibility(a: Citizen, b: Citizen): number {
   if (a.traits.competitiveness > 0.7 && b.traits.competitiveness > 0.7) v -= 0.15;
   if (a.occupation === b.occupation && a.occupation !== "unemployed") v += 0.1;
   if (getRel(a, b.id).roles.includes("rival")) v -= 0.5;
+  // Kindred spirits: shared values and two agreeable people get on.
+  const shared = a.personality.values.filter((x) => b.personality.values.includes(x)).length;
+  v += shared * 0.08;
+  if (a.personality.big5.agreeableness > 0.6 && b.personality.big5.agreeableness > 0.6) v += 0.08;
+  if (a.personality.big5.agreeableness < 0.3 && b.personality.big5.agreeableness < 0.3) v -= 0.1;
   return clamp(v, -1, 1);
 }
 
@@ -86,9 +92,13 @@ export function encountersHourly(world: WorldState): void {
           const r = getRel(x, y.id);
           const before = relLabel(r);
           const firstMeeting = r.familiarity < 3;
+          // Old feelings come back on seeing them, and colour how it goes.
+          recallPerson(world, x, y.id);
+          const f = feelingsToward(x, y.id);
+          const feelings = ((f.gratitude ?? 0) + (f.love ?? 0) - (f.anger ?? 0) - (f.envy ?? 0) * 0.5) / 100;
           adjustRel(world, x, y.id, {
             familiarity: randRange(world, 2, 5),
-            affinity: compatibility(x, y) * 3.2 + (x.mood - 50) / 60 + randRange(world, -1.2, 1.2),
+            affinity: compatibility(x, y) * 3.2 + (x.mood - 50) / 60 + randRange(world, -1.2, 1.2) + clamp(feelings, -1, 1) * 1.5,
             trust: 0.4,
           });
           if (firstMeeting) remember(world, x, { text: `Met ${y.name} at ${place}.`, kind: "social", importance: 2, valence: 0.2, people: [y.id], key: `met:${y.id}` });

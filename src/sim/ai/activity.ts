@@ -6,6 +6,7 @@ import { travelMinutes } from "../systems/movement";
 import { friendsAt } from "../social/encounters";
 import { MIN_PER_DAY, startOfDay } from "../time";
 import type { Citizen, Occupation, PlannedAction, WorldState } from "../types";
+import { tiltActivities } from "../mind/behaviour";
 import { money } from "../util";
 import { makeAction } from "./actions";
 import type { Option } from "./decision";
@@ -283,5 +284,6 @@ export function activityOptions(world: WorldState, c: Citizen): ActivityOption[]
   const out = needsOptions(world, c, s);
   for (const p of workProviders.get(c.occupation) ?? []) out.push(...p(world, c, s));
   for (const p of extraProviders) out.push(...p(world, c, s));
+  tiltActivities(c, out);
   return out;
 }

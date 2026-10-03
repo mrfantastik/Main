@@ -861,3 +861,13 @@ button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+.feelings .barrow.standout span:first-child {
+  color: var(--text);
+  font-weight: 700;
+}
+.backstory {
+  margin: 0 0 6px;
+  line-height: 1.45;
+  font-style: italic;
+}

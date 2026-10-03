@@ -4,6 +4,7 @@ import { restockBusiness } from "./economy/business";
 import { hireAtCorp } from "./economy/jobs";
 import { addStock } from "./economy/market";
 import { planBusiness } from "./economy/opportunity";
+import { generatePersonality } from "./mind/personality";
 import { pick, randInt } from "./rng";
 import type { BusinessKind, WorldState } from "./types";
 import { citizensList } from "./world";
@@ -16,6 +17,9 @@ import { citizensList } from "./world";
  */
 export function setupStartingEconomy(world: WorldState): void {
   const citizens = citizensList(world);
+  // Who they are: personalities from the seed (their own random stream, so
+  // the rest of the city is generated exactly as before).
+  for (const c of citizens) c.personality = generatePersonality(world.seed, c);
   for (const c of citizens) {
     if (c.occupation === "employee") hireAtCorp(world, c);
   }

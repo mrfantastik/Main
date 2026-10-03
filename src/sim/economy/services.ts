@@ -2,6 +2,7 @@ import { CONFIG } from "../config";
 import { randRange } from "../rng";
 import { hourOf } from "../time";
 import type { Citizen, WorldState } from "../types";
+import { workMood } from "../mind/emotions";
 import { round2 } from "../util";
 
 // The services market: outside clients want design/dev/marketing work done.
@@ -10,7 +11,8 @@ import { round2 } from "../util";
 // a crowded freelance scene pushes people into other careers.
 
 export function providerCapacity(c: Citizen): number {
-  return CONFIG.serviceRateCap * (0.35 + c.skills.tech / 100) * (0.7 + c.traits.diligence * 0.6);
+  // workMood: sad people get less done; happy ones a little more.
+  return CONFIG.serviceRateCap * (0.35 + c.skills.tech / 100) * (0.7 + c.traits.diligence * 0.6) * workMood(c);
 }
 
 export interface ServiceHour {

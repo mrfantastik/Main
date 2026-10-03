@@ -1,3 +1,5 @@
+import { neutralEmotions } from "./mind/emotions";
+import { generatePersonality } from "./mind/personality";
 import type { WorldState } from "./types";
 import { WORLD_VERSION } from "./world";
 
@@ -36,6 +38,12 @@ function migrate(raw: unknown): WorldState | null {
     c.thoughtT ??= 0;
     c.thoughtPriority ??= 0;
     c.awaitingAI = false;
+    // Saves from before personalities: generate one (deterministic from the
+    // seed and citizen) and start them calm.
+    c.personality ??= generatePersonality(w.seed ?? 0, c);
+    c.emotions ??= neutralEmotions();
+    c.reflections ??= [];
+    c.lastReflectionDay ??= 0;
   }
   for (const pid of w.productOrder) {
     const m = w.market[pid];

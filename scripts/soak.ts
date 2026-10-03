@@ -103,6 +103,10 @@ function run(seed: number): RunSummary {
   let money = internalMoney(w);
   let lastTx = w.transactions[w.transactions.length - 1]?.id ?? 0;
   const lastActivityChange = new Map<string, { key: string; t: number }>();
+  const wasHomeless = new Set<string>();
+  let evictions = 0;
+  let homelessHours = 0;
+  let unemployedHours = 0;
   const longest: Record<string, { mins: number; who: string }> = {};
   const dayMs: number[] = [];
   const sizes: string[] = [];
@@ -162,6 +166,12 @@ function run(seed: number): RunSummary {
 
     for (const id of w.citizenOrder) {
       const c = w.citizens[id];
+      if (c.homeless && !wasHomeless.has(id)) evictions++;
+      if (c.homeless) {
+        wasHomeless.add(id);
+        homelessHours++;
+      } else wasHomeless.delete(id);
+      if (c.occupation === "unemployed") unemployedHours++;
       // 2. Balances and bounded values.
       if (!(c.money >= -0.001) || !(c.savings >= -0.001)) problem(seed, w, `${c.name} has money ${c.money} savings ${c.savings}`);
       for (const [k, v] of Object.entries(c.needs)) if (!(v >= 0 && v <= 100)) problem(seed, w, `${c.name} need ${k}=${v}`);
@@ -300,6 +310,8 @@ function run(seed: number): RunSummary {
   const nw = people.map((c) => netWorth(w, c)).sort((a, b) => a - b);
   console.log(`  ⏱  ${secs.toFixed(1)}s (${firstWeek.toFixed(0)} → ${lastWeek.toFixed(0)} ms per game day) · world size ${sizes.join(" ")}`);
   console.log(`  💷 avg £${s.avgWealth.toFixed(0)} · median £${s.medianWealth.toFixed(0)} · poorest £${nw[0].toFixed(0)} · richest £${nw[nw.length - 1].toFixed(0)} · gini ${s.gini} · rent ×${w.economy.rentIndex}`);
+  const hours = DAYS * 24 * people.length;
+  console.log(`  🏦 money supply £${s.totalMoney.toFixed(0)} · evictions ${evictions} · time spent homeless ${((homelessHours / hours) * 100).toFixed(1)}% · time unemployed ${((unemployedHours / hours) * 100).toFixed(1)}%`);
   console.log(`  🏪 ${s.businesses} open, ${closed} closed · bankruptcies ${people.reduce((a, c) => a + c.finance.bankruptcies, 0)} · homeless now ${people.filter((c) => c.homeless).length} · unemployed ${Math.round(s.unemployment * 100)}%`);
   console.log(`  🤝 peer loans ${peer.length} (${peer.filter((l) => l.status === "defaulted").length} defaulted) · bank loans ${bank.length} (${bank.filter((l) => l.status === "defaulted").length} defaulted) · loans kept in memory ${w.loans.length}`);
   console.log(`  👥 ${Object.entries(occ).map(([k, v]) => `${k} ${v}`).join(", ")}`);

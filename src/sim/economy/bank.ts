@@ -151,7 +151,8 @@ function settle(world: WorldState, l: Loan): void {
     removeRole(b, lender.id, "creditor");
     adjustRel(world, lender, b.id, { affinity: 8, trust: 15 });
     adjustRel(world, b, lender.id, { affinity: 5 });
-    remember(world, lender, { text: `${b.name} paid back the ${money(l.principal)} I lent them, with interest.`, kind: "favor", importance: 6, valence: 0.7, people: [b.id], key: `repaid:${b.id}` });
+    // Being repaid is satisfying (and builds trust), but it isn't a favour they owe back.
+    remember(world, lender, { text: `${b.name} paid back the ${money(l.principal)} I lent them, with interest.`, kind: "favor", importance: 6, valence: 0.7, people: [b.id], key: `repaid:${b.id}`, feel: { joy: 8, pride: 4, fear: -3 } });
     remember(world, b, { text: `I paid ${lender.name} back in full.`, kind: "deal", importance: 5, valence: 0.5, people: [lender.id], key: `loan:${l.id}` });
     logEvent(world, "finance", `🤝 ${b.name} paid back ${lender.name} (${money(l.totalDue)}).`, 2, [b.id, lender.id]);
   } else {

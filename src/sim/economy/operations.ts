@@ -5,7 +5,7 @@ import { remember, rememberBetrayal } from "../memory/memory";
 import { chance } from "../rng";
 import { addRole, getRel, peekRel } from "../social/relationships";
 import type { Business, Citizen, WorldState } from "../types";
-import { money, round2 } from "../util";
+import { capitalise, money, round2 } from "../util";
 import { CONFIG } from "../config";
 import { expectedDailySales, priceFloor, restockBusiness, sellersOf } from "./business";
 import { hireAtBusiness } from "./jobs";
@@ -82,7 +82,7 @@ function reviewPrice(world: WorldState, b: Business, owner: Citizen, pid: string
           margin: under <= floor + 0.01 ? -0.3 : 0,
         },
         payload: under,
-        thought: `${cheapest.name} is selling ${pname.toLowerCase()} for ${money(cheapest.price)}. I'll go to ${money(under)}.`,
+        thought: `${capitalise(cheapest.name)} is selling ${pname.toLowerCase()} for ${money(cheapest.price)}. I'll go to ${money(under)}.`,
       });
     }
   }

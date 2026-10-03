@@ -2,6 +2,7 @@ import { CONFIG } from "../config";
 import { getBuildingIndexed } from "../city/lookup";
 import { logEvent } from "../events";
 import { remember } from "../memory/memory";
+import { workMood } from "../mind/emotions";
 import { chance, gauss, poisson, weightedPick } from "../rng";
 import { addRole, adjustRel } from "../social/relationships";
 import { hourOf } from "../time";
@@ -230,9 +231,12 @@ export function salesHourly(world: WorldState): void {
   const capLeft = new Map<string, number>();
   for (const b of openBusinesses(world)) {
     if (b.kind === "agency") continue;
-    const n = staffOnDuty(world, b).length;
+    const staff = staffOnDuty(world, b);
+    const n = staff.length;
     staffCount.set(b.id, n);
-    capLeft.set(b.id, capacityPerHour(b, n));
+    // A miserable shop assistant serves fewer customers.
+    const spirit = n ? staff.reduce((s, c) => s + workMood(c), 0) / n : 1;
+    capLeft.set(b.id, capacityPerHour(b, n) * spirit);
   }
   const marketIsOpen = marketOpen(world);
 
@@ -441,6 +445,20 @@ function spreadSuccess(world: WorldState, owner: Citizen, b: Business, profit: n
     const c = world.citizens[id];
     const fam = c.relationships[owner.id]?.familiarity ?? 0;
     if (chance(world, clamp(0.15 + fam / 100 + c.traits.sociability * 0.2, 0, 0.9))) hearStory(world, c, story, owner.name);
+    // Rivals (and competitive people earning far less) feel it.
+    const earned = c.finance.occupationEarnings[c.finance.occupationEarnings.length - 1] ?? 0;
+    const rival = c.relationships[owner.id]?.roles.includes("rival") ?? false;
+    if (rival || (c.traits.competitiveness > 0.6 && earned < profit / 3 && fam > 10)) {
+      remember(world, c, {
+        text: `${owner.name}'s ${b.name} made ${money(profit)} in a day.`,
+        kind: "business",
+        importance: 3,
+        valence: -0.3,
+        people: [owner.id],
+        key: `envy:${owner.id}`,
+        feel: { envy: Math.min(20, profit / 8) * (rival ? 1.3 : 1) },
+      });
+    }
   }
 }
 

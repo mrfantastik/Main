@@ -18,6 +18,8 @@ import { homeOrShelter, payWelfare, registerLivingActions } from "./economy/livi
 import { registerResearchActions } from "./economy/research";
 import { servicesHourly } from "./economy/services";
 import { decayMemories } from "./memory/memory";
+import { dailyMoneyFeelings } from "./mind/emotions";
+import { decayReflections, nightlyReflection } from "./mind/reflection";
 import { macroHourly } from "./god";
 import { conversationsTick, registerConversationActions, startOpportunisticConversations } from "./social/conversation";
 import { encountersHourly } from "./social/encounters";
@@ -117,6 +119,7 @@ function hourly(world: WorldState): void {
   world.economy.servicePool = round2(svc.pool);
   world.economy.serviceSupplied = round2(svc.supplied);
   for (const id of world.citizenOrder) updateMood(world, world.citizens[id]);
+  nightlyReflection(world);
   statsHourly(world);
 }
 
@@ -139,12 +142,15 @@ function daily(world: WorldState): void {
     const nw = netWorth(world, c);
     pushRing(c.finance.history, { day, income: c.finance.incomeToday, expenses: c.finance.expensesToday, netWorth: nw }, 60);
     pushRing(c.finance.occupationEarnings, c.finance.occToday, 7);
+    const recent = c.finance.history.slice(-6, -1);
+    dailyMoneyFeelings(c, c.finance.incomeToday - c.finance.expensesToday, recent.length ? recent.reduce((a, h) => a + h.income, 0) / recent.length : 30);
     c.finance.peakNetWorth = Math.max(c.finance.peakNetWorth, nw);
     c.finance.incomeToday = 0;
     c.finance.expensesToday = 0;
     c.finance.sourcesToday = {};
     c.finance.occToday = 0;
     decayMemories(c);
+    decayReflections(c);
     decayRelationships(world, c);
   }
   updateBeliefsDaily(world);

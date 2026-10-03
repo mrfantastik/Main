@@ -11,6 +11,8 @@ import { addStock, removeStock } from "../economy/market";
 import { logEvent } from "../events";
 import { placeName } from "../places";
 import { remember, rememberBetrayal } from "../memory/memory";
+import { feel, feelingsToward, recallPerson } from "../mind/emotions";
+import { voiceConversation } from "../mind/voice";
 import { chance, rand, type RngHolder } from "../rng";
 import { dayOf } from "../time";
 import type { Citizen, Conversation, ConversationTopic, ConvValue, EventCategory, Loan, WorldState } from "../types";
@@ -665,8 +667,12 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
     source: "template",
     endT: 0,
   };
+  // Seeing each other brings back how they feel about each other.
+  recallPerson(world, a, b.id);
+  recallPerson(world, b, a.id);
   const prepared = handlers[topic].prepare(world, conv, a, b, world);
   if (!prepared) return null;
+  prepared.lines = voiceConversation(conv.id, topic, a, b, prepared.lines, typeof prepared.outcome.agreed === "boolean" ? prepared.outcome.agreed : null, dayOf(world.time));
   conv.terms = prepared.terms;
   conv.fallback = { lines: prepared.lines, outcome: handlers[topic].validate(conv, prepared.outcome) };
   // Register first: interrupting their current activities must not start
@@ -713,9 +719,21 @@ function finish(world: WorldState, conv: Conversation): void {
   if (a && b && conv.outcome) {
     const item = handlers[conv.topic].apply(world, conv, a, b);
     if (item) logEvent(world, item.cat, item.text, item.importance, [a.id, b.id]).conversationId = conv.id;
+    const agreed = conv.outcome.agreed;
     if (conv.topic !== "chat" && conv.summary) {
-      const mem = conv.topic === "argue" ? -0.5 : conv.outcome.agreed === false ? -0.2 : 0.3;
-      remember(world, a, { text: `Talked with ${b.name}: ${conv.summary}`, kind: "conversation", importance: 3, valence: mem, people: [b.id] });
+      const mem = conv.topic === "argue" ? -0.5 : agreed === false ? -0.2 : 0.3;
+      // A "no" stings (and can rankle); a "yes" brings relief and gratitude.
+      const felt = conv.topic === "argue" ? { anger: 5 } : agreed === false ? { sadness: 5, anger: 6, shame: 3 } : agreed ? { joy: 8, gratitude: 10, fear: -5 } : { joy: 3 };
+      remember(world, a, { text: `Talked with ${b.name}: ${conv.summary}`, kind: "conversation", importance: 3, valence: mem, people: [b.id], feel: felt });
+      if (conv.topic === "argue") {
+        // Getting it off their chest takes the edge off; the other one is left fuming.
+        feel(a, { anger: -12 });
+        remember(world, b, { text: `${a.name} had a go at me.`, kind: "conversation", importance: 3, valence: -0.5, people: [a.id], key: `argued:${a.id}`, feel: { anger: 10 } });
+      }
+      else if (agreed) feel(b, { joy: 4, pride: 3 });
+    } else if (conv.topic === "chat") {
+      feel(a, { joy: 3, loneliness: -6 }, { social: true });
+      feel(b, { joy: 3, loneliness: -6 }, { social: true });
     }
     for (const [x, y] of [
       [a, b],
@@ -754,6 +772,7 @@ export function conversationsTick(world: WorldState): void {
 
 // --------------------------------------------- who talks to whom, when
 
+const ARGUE_COOLDOWN = 2 * 1440;
 const TALKATIVE: Partial<Record<string, number>> = { socialize: 2, eat: 1.2, rest: 1, work: 0.5, manage: 0.6, browse: 0.8, shop: 0.6, trade: 0.5, research: 0.4 };
 
 /** Every 10 minutes: people in the same place may strike up a conversation. */
@@ -778,14 +797,29 @@ export function startOpportunisticConversations(world: WorldState): void {
         startConversation(world, c, world.citizens[agenda.targetId], agenda.topic, agenda.params);
         continue;
       }
-      // Rivals and enemies sometimes have it out.
-      const foe = present.find((o) => {
+      // Rivals, enemies and anyone nursing a grudge sometimes have it out
+      // (the same two at most once every couple of days).
+      const feuding = (o: Citizen) => {
         const r = peekRel(c, o.id);
-        return r && (r.affinity < -40 || (r.roles.includes("rival") && r.affinity < 0)) && c.traits.competitiveness > 0.55;
+        return !!r && (r.affinity < -40 || (r.roles.includes("rival") && r.affinity < 0)) && c.traits.competitiveness > 0.55;
+      };
+      const foe = present.find((o) => {
+        if (!peekRel(c, o.id) || world.time - (c.cooldowns[`argue:${o.id}`] ?? -1e9) < ARGUE_COOLDOWN) return false;
+        const f = feelingsToward(c, o.id);
+        return feuding(o) || (f.anger ?? 0) > 35 || (f.envy ?? 0) > 40;
       });
-      if (foe && chance(world, 0.12 + (1 - c.mood / 100) * 0.1)) {
+      const feud = !!foe && feuding(foe);
+      if (foe && chance(world, (feud ? 0.12 : 0.06) + (1 - c.mood / 100) * 0.1 + (c.emotions.anger / 100) * 0.15)) {
         const r = peekRel(c, foe.id)!;
-        const reason = rememberBetrayal(c, foe.id) ? "You still owe me money!" : r.roles.includes("rival") ? "You're stealing my customers with those cut-price deals." : "I haven't forgotten what you did.";
+        const g = feelingsToward(c, foe.id);
+        c.cooldowns[`argue:${foe.id}`] = foe.cooldowns[`argue:${c.id}`] = world.time;
+        const reason = rememberBetrayal(c, foe.id)
+          ? "You still owe me money!"
+          : r.roles.includes("rival")
+            ? "You're stealing my customers with those cut-price deals."
+            : (g.envy ?? 0) > (g.anger ?? 0)
+              ? "Must be nice, raking it in while the rest of us scrape by."
+              : "I haven't forgotten what you did.";
         startConversation(world, c, foe, "argue", { reason });
         continue;
       }

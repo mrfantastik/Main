@@ -3,6 +3,7 @@ import { maxBankLoan } from "../economy/bank";
 import { MIN_OWNER_SHARE, valuation } from "../economy/business";
 import { netWorth, ownerShare } from "../economy/valuation";
 import { recallAbout, rememberBetrayal } from "../memory/memory";
+import { stanceToward } from "../mind/emotions";
 import type { Business, Citizen, WorldState } from "../types";
 import { clamp, round2 } from "../util";
 import { getRel } from "./relationships";
@@ -46,15 +47,21 @@ export function loanTerms(world: WorldState, borrower: Citizen, lender: Citizen,
   const betrayed = !!rememberBetrayal(lender, borrower.id);
   const history = goodHistory(lender, borrower.id);
   const surplus = Math.max(0, ls.liquid - ls.dailyCost * 5);
-  const maxLend = round2(surplus * (0.25 + lender.traits.generosity * 0.35 + lender.traits.risk * 0.15 + (family ? 0.2 : 0)));
+  // Feelings: gratitude/love make lenders kinder; anger/envy tougher; fear tight-fisted.
+  const st = stanceToward(lender, borrower.id);
+  const maxLend = round2(surplus * (0.25 + lender.traits.generosity * 0.35 + lender.traits.risk * 0.15 + (family ? 0.2 : 0)) * (1 - st.caution * 0.4) * (1 + Math.max(0, st.warmth) * 0.3));
   const willingness =
-    0.15 + (rel.trust + rel.affinity) / 220 + lender.traits.generosity * 0.4 - lender.traits.greed * 0.2 + (family ? 0.45 : 0) + history - (betrayed ? 1.5 : 0) + (bs.incomeAvg > 25 ? 0.1 : -0.1);
-  const minRate = clamp(round2(0.04 + lender.traits.greed * 0.22 + (1 - (rel.trust + 100) / 200) * 0.12 - (family ? 0.15 : 0) - rel.affinity / 1000), 0, 0.45);
-  const maxRate = clamp(round2(0.08 + bs.pressure * 0.2 + (1 - borrower.traits.frugality) * 0.08 + borrower.traits.risk * 0.06), 0.03, 0.5);
+    0.15 + (rel.trust + rel.affinity) / 220 + lender.traits.generosity * 0.4 - lender.traits.greed * 0.2 + (family ? 0.45 : 0) + history - (betrayed ? 1.5 : 0) + (bs.incomeAvg > 25 ? 0.1 : -0.1) + st.warmth * 0.4 - st.caution * 0.15;
+  const minRate = clamp(round2(0.04 + lender.traits.greed * 0.22 + (1 - (rel.trust + 100) / 200) * 0.12 - (family ? 0.15 : 0) - rel.affinity / 1000 + st.toughness * 0.06 - Math.max(0, st.warmth) * 0.04), 0, 0.45);
+  const maxRate = clamp(round2(0.08 + bs.pressure * 0.2 + (1 - borrower.traits.frugality) * 0.08 + borrower.traits.risk * 0.06 + (borrower.emotions.fear / 100) * 0.05), 0.03, 0.5);
   const willing = willingness >= 0.3 && maxLend >= Math.min(15, requested * 0.4);
   const why = betrayed
     ? "the borrower betrayed them before"
-    : !willing && maxLend < 15
+    : !willing && st.toughness > 0.45
+      ? "they're still angry with the borrower"
+      : willing && st.warmth > 0.35
+        ? "the borrower was good to them before"
+        : !willing && maxLend < 15
       ? "they can't spare the money"
       : !willing
         ? "they don't trust the borrower enough"
@@ -91,9 +98,10 @@ export function investmentTerms(world: WorldState, owner: Citizen, investor: Cit
   const rel = getRel(investor, owner.id);
   const val = valuation(world, b);
   const spare = Math.max(0, is.liquid - is.dailyCost * 6 - 40);
-  const amount = Math.floor(Math.min(ask, spare * (0.3 + investor.traits.risk * 0.4)));
+  const st = stanceToward(investor, owner.id);
+  const amount = Math.floor(Math.min(ask, spare * (0.3 + investor.traits.risk * 0.4) * (1 - st.caution * 0.4)));
   const returns = (Math.max(0, b.avgProfit) * 30) / Math.max(1, val);
-  const willing = amount >= 30 && !rememberBetrayal(investor, owner.id) && returns * (0.5 + investor.traits.risk) + rel.trust / 150 + rel.affinity / 250 + investor.traits.ambition * 0.2 > 0.35;
+  const willing = amount >= 30 && !rememberBetrayal(investor, owner.id) && returns * (0.5 + investor.traits.risk) + rel.trust / 150 + rel.affinity / 250 + investor.traits.ambition * 0.2 + st.warmth * 0.25 - st.caution * 0.25 > 0.35;
   const fair = amount / (val + amount);
   const minShare = round2(clamp(fair * (1 + investor.traits.greed * 0.4), 0.02, 0.6));
   const forSale = round2(ownerShare(b) - MIN_OWNER_SHARE);
@@ -142,13 +150,14 @@ export function jobTerms(world: WorldState, owner: Citizen, worker: Citizen, b: 
   const minWage = Math.round(Math.max(18, current * (1.02 + worker.traits.greed * 0.15) - ws.pressure * 8));
   const betrayed = !!rememberBetrayal(owner, worker.id);
   const need = needsStaff(world, b);
-  const willing = !betrayed && rel.affinity > -25 && maxWage >= 18 && need;
+  const st = stanceToward(owner, worker.id);
+  const willing = !betrayed && rel.affinity > -25 && st.warmth > -0.5 && maxWage >= 18 && need;
   return {
     businessId: b.id,
     maxWage,
     minWage,
     willing,
-    why: betrayed ? "the worker betrayed them before" : !need ? "they don't need more staff" : !willing ? "the business can't afford staff" : rel.affinity > 30 ? "they're friends" : "they need help",
+    why: betrayed ? "the worker betrayed them before" : !need ? "they don't need more staff" : st.warmth <= -0.5 ? "they can't stand the worker" : !willing ? "the business can't afford staff" : rel.affinity > 30 ? "they're friends" : "they need help",
   };
 }
 
@@ -162,8 +171,10 @@ export function helpTerms(world: WorldState, helper: Citizen, needy: Citizen): H
   const rel = getRel(helper, needy.id);
   const family = helper.family.includes(needy.id);
   const spare = Math.max(0, hs.liquid - hs.dailyCost * 4);
-  const gift = Math.floor(Math.min(35, spare * (0.05 + helper.traits.generosity * 0.2 + (family ? 0.15 : 0))));
-  const willing = gift >= 5 && !rememberBetrayal(helper, needy.id) && helper.traits.generosity * 0.6 + (rel.affinity + rel.trust) / 200 + (family ? 0.5 : 0) - helper.traits.greed * 0.3 > 0.35;
+  // Gratitude makes people generous to whoever helped them before.
+  const st = stanceToward(helper, needy.id);
+  const gift = Math.floor(Math.min(35 + Math.max(0, st.warmth) * 20, spare * (0.05 + helper.traits.generosity * 0.2 + (family ? 0.15 : 0) + Math.max(0, st.warmth) * 0.15)));
+  const willing = gift >= 5 && !rememberBetrayal(helper, needy.id) && helper.traits.generosity * 0.6 + (rel.affinity + rel.trust) / 200 + (family ? 0.5 : 0) - helper.traits.greed * 0.3 + st.warmth * 0.5 > 0.35;
   return { gift, willing };
 }
 

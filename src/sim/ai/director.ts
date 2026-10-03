@@ -1,15 +1,19 @@
 import { logEvent } from "../events";
+import { setReflectionHook } from "../mind/reflection";
 import { resolveConversationAI, setConversationAIHook } from "../social/conversation";
-import type { AILogEntry, Citizen, Conversation, ConvValue, WorldState } from "../types";
+import { dayOf } from "../time";
+import type { AILogEntry, Citizen, Conversation, ConvValue, Reflection, WorldState } from "../types";
 import { newId, pushRing, round2 } from "../util";
 import { scoreOf } from "./decision";
-import { CONVERSATION_SYSTEM, conversationPrompt, costUsd, STRATEGY_SYSTEM, strategyPrompt, type LLMClient } from "./llm";
+import { CONVERSATION_SYSTEM, conversationPrompt, costUsd, REFLECTION_SYSTEM, reflectionPrompt, STRATEGY_SYSTEM, strategyPrompt, type LLMClient } from "./llm";
 import { applyStrategy, setStrategyHook, strategyOptions, type StrategyOption } from "./strategy";
 
 // The AI Director decides WHEN it's worth asking Claude, and keeps costs
 // under control. Routine life never touches the LLM. Only:
 //   - genuine strategic dilemmas with real stakes (career, business, money),
-//   - conversations about money, jobs, debts and deals.
+//   - conversations about money, jobs, debts and deals,
+//   - at most one night a day: rewording the lessons of the citizen with
+//     the most emotional day in their own voice.
 // Requests are async; the simulation never waits. Replies are validated
 // against the engine's rules and fall back to the utility AI if invalid,
 // late, or failed. Spend is tracked per call against a hard budget.
@@ -27,7 +31,7 @@ export interface DirectorOptions {
 
 interface Pending {
   id: number;
-  kind: "strategy" | "conversation";
+  kind: "strategy" | "conversation" | "reflection";
   world: WorldState;
   citizenId: string;
   convId?: number;
@@ -52,6 +56,9 @@ export class AIDirector {
   private lastCallAt = 0;
   private disabledReason: string | null = null;
   private seq = 1;
+
+  /** Game day of the last reflection sent (one a night is plenty). */
+  private reflectedDay = -1;
 
   constructor(
     private client: LLMClient | null,
@@ -79,6 +86,7 @@ export class AIDirector {
   attach(): void {
     setStrategyHook((world, c, options, fallback) => this.strategyHook(world, c, options, fallback));
     setConversationAIHook((world, conv, brief, schema, stakes) => this.conversationHook(world, conv, brief, schema, stakes));
+    setReflectionHook((world, c, learned) => this.reflectionHook(world, c, learned));
   }
 
   private canCall(world: WorldState): boolean {
@@ -127,6 +135,37 @@ export class AIDirector {
     return true;
   }
 
+  // ------------------------------------------------------ reflections
+
+  /** Reword one strongly felt night's lessons per game day (the effects already happened). */
+  private reflectionHook(world: WorldState, c: Citizen, learned: Reflection[]): void {
+    const day = dayOf(world.time);
+    if (this.reflectedDay === day) return;
+    const intensity = Math.max(...Object.values(c.emotions));
+    if (intensity < 55 || !learned.some((r) => r.kind === "person" || r.kind === "work") || !this.canCall(world)) return;
+    this.reflectedDay = day;
+    const { user, schema } = reflectionPrompt(world, c, learned);
+    this.send(world, { kind: "reflection", citizenId: c.id }, REFLECTION_SYSTEM, user, schema);
+  }
+
+  private applyReflectionResult(world: WorldState, d: Done): void {
+    const c = world.citizens[d.pending.citizenId];
+    if (!c) return;
+    const reply = d.json as { lessons?: unknown } | null;
+    let changed = 0;
+    if (reply && Array.isArray(reply.lessons)) {
+      for (const item of reply.lessons as { key?: unknown; text?: unknown }[]) {
+        const r = c.reflections.find((x) => x.key === item.key);
+        const text = typeof item.text === "string" ? item.text.trim() : "";
+        if (!r || !text || text.length > 160) continue;
+        r.text = text;
+        r.source = "llm";
+        changed++;
+      }
+    }
+    this.log(world, d, changed ? "ok" : d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), changed ? `${c.name} put ${changed} lesson${changed > 1 ? "s" : ""} in their own words` : d.error ? `error: ${d.error}` : "invalid reply — template wording kept");
+  }
+
   // ---------------------------------------------------------- calls
 
   private send(world: WorldState, p: Omit<Pending, "id" | "world" | "startedAt" | "prompt">, system: string, user: string, schema: Record<string, unknown>): void {
@@ -169,6 +208,7 @@ export class AIDirector {
       if (d.pending.world !== world) continue; // world was reset meanwhile
       world.ai.spentUsd = round2((world.ai.spentUsd + d.costUsd) * 10000) / 10000;
       if (d.pending.kind === "strategy") this.applyStrategyResult(world, d);
+      else if (d.pending.kind === "reflection") this.applyReflectionResult(world, d);
       else this.applyConversationResult(world, d);
     }
   }

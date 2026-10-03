@@ -12,7 +12,11 @@ function mockClient(calls: LLMRequest[]): LLMClient {
     model: "claude-opus-5-5",
     async complete(req) {
       calls.push(req);
-      const props = req.schema.properties as Record<string, { enum?: string[] }>;
+      const props = req.schema.properties as Record<string, { enum?: string[]; items?: { properties: { key: { enum: string[] } } } }>;
+      if (props.lessons) {
+        const keys = props.lessons.items!.properties.key.enum;
+        return { json: { lessons: keys.map((key) => ({ key, text: `Mark my words: ${key}.` })) }, inputTokens: 400, outputTokens: 60, model: "claude-opus-5-5" };
+      }
       if (props.choice) {
         const ids = props.choice.enum!;
         return { json: { choice: ids[ids.length - 1], thought: "I've thought hard about this and I'm going for it." }, inputTokens: 600, outputTokens: 150, model: "claude-opus-5-5" };
@@ -72,4 +76,36 @@ test("AI director: calls Claude for important moments, validates, tracks spend",
   await new Promise((r) => setImmediate(r));
   director.pump(world);
   assert.equal(calls.length, before, "no calls after the budget is spent");
+});
+
+test("AI director: at most one reflection a night, reworded in the citizen's words, none while Claude is off", async () => {
+  const calls: LLMRequest[] = [];
+  let spent = 0;
+  const director = new AIDirector(mockClient(calls), { total: () => spent, add: (u) => (spent += u) }, { maxConcurrent: 4, minIntervalMs: 0, timeoutMs: 5000 });
+  director.attach();
+  const world = newWorld(11);
+  world.ai.mode = "llm";
+  world.ai.budgetUsd = 5;
+  world.ai.maxCallsPerDay = 40;
+  const days = 6;
+  for (let i = 0; i < days * 24 * 6; i++) {
+    advance(world, 10);
+    await new Promise((r) => setImmediate(r));
+    director.pump(world);
+  }
+  const isReflection = (r: LLMRequest) => "lessons" in (r.schema.properties as object);
+  const reflections = calls.filter(isReflection);
+  assert.ok(reflections.length > 0 && reflections.length <= days, `${reflections.length} reflection calls in ${days} days`);
+  const reworded = world.citizenOrder.flatMap((id) => world.citizens[id].reflections).filter((r) => r.source === "llm");
+  assert.ok(reworded.length > 0 && reworded.every((r) => r.text.startsWith("Mark my words")), "lessons reworded by Claude");
+  assert.ok(world.ai.log.some((l) => l.kind === "reflection" && l.status === "ok"));
+  // Skip-ahead turns Claude off for the duration: no reflection calls then.
+  const before = calls.length;
+  world.ai.mode = "off";
+  for (let i = 0; i < 3 * 24; i++) {
+    advance(world, 60);
+    await new Promise((r) => setImmediate(r));
+    director.pump(world);
+  }
+  assert.equal(calls.length, before, "no Claude calls while it's off");
 });

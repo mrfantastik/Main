@@ -4,7 +4,7 @@ import type { DecisionRecord } from "../../sim/types";
 import { renderer } from "../App";
 import { store, useStore } from "../net/store";
 import { Avatar } from "./CitizenList";
-import { gbp, KIND_LABEL, OCC_COLORS, OCC_LABEL, when } from "./format";
+import { EMOTION_UI, gbp, KIND_LABEL, OCC_COLORS, OCC_LABEL, VALUE_LABEL, when } from "./format";
 import { Sparkline } from "./charts";
 import { Transcript } from "./Transcript";
 
@@ -17,6 +17,67 @@ function Bar({ label, value, max = 100, color }: { label: string; value: number;
       </div>
       <span className="n">{Math.round(value)}</span>
     </div>
+  );
+}
+
+/** How they feel right now: ten bars, the standout feeling highlighted. */
+function Feelings({ d }: { d: CitizenDetail }) {
+  return (
+    <div className="feelings">
+      {EMOTION_UI.map((e) => (
+        <div key={e.key} className={`barrow ${d.emotion?.kind === e.key ? "standout" : ""}`} title={`${e.label} ${d.emotions[e.key]}/100`}>
+          <span>
+            {e.emoji} {e.label}
+          </span>
+          <div className="bar">
+            <div style={{ width: `${d.emotions[e.key]}%`, background: e.color }} />
+          </div>
+          <span className="n">{d.emotions[e.key]}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Who({ d }: { d: CitizenDetail }) {
+  const p = d.personality;
+  return (
+    <>
+      <p className="backstory">{p.backstory}</p>
+      <div className="muted" style={{ marginBottom: 6 }}>
+        {p.summary}
+      </div>
+      <div className="tags" style={{ marginBottom: 6 }}>
+        {p.values.map((v) => (
+          <span key={v} className="chip">
+            {VALUE_LABEL[v] ?? v}
+          </span>
+        ))}
+        <span className="chip">🗣️ {p.style}</span>
+        {d.archetypes.map((a) => (
+          <span key={a} className="chip">
+            {a}
+          </span>
+        ))}
+      </div>
+      <div className="kv">
+        <span className="k">Quirks</span>
+        <span>{p.quirks.join("; ") || "—"}</span>
+        <span className="k">Likes</span>
+        <span>{p.likes.join(", ") || "—"}</span>
+        <span className="k">Dislikes</span>
+        <span>{p.dislikes.join(", ") || "—"}</span>
+        <span className="k">Afraid of</span>
+        <span>{p.fear}</span>
+        <span className="k">Dreams of</span>
+        <span>{p.dream}</span>
+      </div>
+      <Bar label="Openness" value={p.big5.openness * 100} color="#a46cf5" />
+      <Bar label="Conscientious" value={p.big5.conscientiousness * 100} color="#4f8ef7" />
+      <Bar label="Extraversion" value={p.big5.extraversion * 100} color="#d65db1" />
+      <Bar label="Agreeable" value={p.big5.agreeableness * 100} color="#2fbf71" />
+      <Bar label="Neuroticism" value={p.big5.neuroticism * 100} color="#e5484d" />
+    </>
   );
 }
 
@@ -68,6 +129,10 @@ function Overview({ d }: { d: CitizenDetail }) {
         {d.thought}
         <span className="src">{d.thoughtSource === "llm" ? "🧠 Reasoned by Claude" : "⚙️ From the utility AI's current decision"}</span>
       </div>
+      <div className="section">
+        How {d.name} feels{d.emotion ? ` — mostly ${EMOTION_UI.find((e) => e.key === d.emotion!.kind)?.label.toLowerCase()} ${d.emotion.emoji}` : " — calm"}
+      </div>
+      <Feelings d={d} />
       <div className="section">Goal & activity</div>
       <div className="kv">
         <span className="k">Goal</span>
@@ -118,14 +183,9 @@ function Overview({ d }: { d: CitizenDetail }) {
           <Sparkline values={d.financeHistory.map((h) => h.netWorth)} height={38} format={(v) => gbp(v)} unit=" days" />
         </>
       )}
-      <div className="section">Personality</div>
-      <div className="tags" style={{ marginBottom: 6 }}>
-        {d.archetypes.map((a) => (
-          <span key={a} className="chip">
-            {a}
-          </span>
-        ))}
-      </div>
+      <div className="section">Who they are</div>
+      <Who d={d} />
+      <div className="section">Money habits</div>
       <Bar label="Ambition" value={d.traits.ambition * 100} color="#f2c94c" />
       <Bar label="Risk-taking" value={d.traits.risk * 100} color="#e5484d" />
       <Bar label="Diligence" value={d.traits.diligence * 100} color="#4f8ef7" />
@@ -181,6 +241,21 @@ function Mind({ d }: { d: CitizenDetail }) {
     <>
       <div className="section">Current thought</div>
       <div className={`thought ${d.thoughtSource === "llm" ? "llm" : ""}`}>{d.thought}</div>
+      <div className="section">Key insights (lessons from sleeping on it)</div>
+      {d.lessons.length === 0 ? (
+        <div className="empty">Nothing learned yet. They reflect on the day while they sleep.</div>
+      ) : (
+        <div className="list">
+          {d.lessons.map((r) => (
+            <div key={r.id} className="item" style={{ opacity: 0.45 + r.strength * 0.55 }}>
+              {r.valence >= 0 ? "💡" : "⚠️"} {r.text} {r.source === "llm" && <span className="chip llm">Claude</span>}
+              <div className="meta">
+                {when(r.t)} · {r.kind}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="section">Why? — recent decisions</div>
       <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
         Each decision lists the options the agent considered, their scores, and the factors behind them. Click to expand.
@@ -270,6 +345,14 @@ function Social({ d }: { d: CitizenDetail }) {
             {m.count > 1 && <span className="chip">×{m.count}</span>}
             <div className="meta">
               {when(m.t)} · {m.kind} · importance {m.importance.toFixed(0)}/10 · {m.valence >= 0.2 ? "😊" : m.valence <= -0.2 ? "😠" : "😐"}
+              {EMOTION_UI.filter((e) => (m.emotions?.[e.key] ?? 0) >= 4)
+                .slice(0, 3)
+                .map((e) => (
+                  <span key={e.key} title={`${e.label} +${Math.round(m.emotions![e.key]!)}`}>
+                    {" "}
+                    {e.emoji}
+                  </span>
+                ))}
             </div>
           </div>
         ))}

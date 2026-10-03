@@ -100,6 +100,56 @@ export interface Traits {
   frugality: number;
 }
 
+// ------------------------------------------------------------- the mind
+
+/** Big Five personality scores, 0..1. */
+export interface BigFive {
+  openness: number;
+  conscientiousness: number;
+  extraversion: number;
+  agreeableness: number;
+  neuroticism: number;
+}
+
+export type CoreValue = "family" | "status" | "freedom" | "security" | "fairness" | "wealth" | "community" | "knowledge";
+
+export type SpeakingStyle = "formal" | "blunt" | "chatty" | "sarcastic" | "warm" | "nervous";
+
+/** Who someone is, beyond their economic traits. Generated once, never changes. */
+export interface Personality {
+  big5: BigFive;
+  values: CoreValue[];
+  quirks: string[];
+  style: SpeakingStyle;
+  likes: string[];
+  dislikes: string[];
+  fear: string;
+  dream: string;
+  backstory: string;
+}
+
+export const EMOTIONS = ["joy", "sadness", "anger", "fear", "pride", "shame", "envy", "gratitude", "loneliness", "love"] as const;
+export type Emotion = (typeof EMOTIONS)[number];
+/** Each emotion 0..100. */
+export type Emotions = Record<Emotion, number>;
+
+/** A lesson someone drew from their day while sleeping on it. */
+export interface Reflection {
+  id: number;
+  t: number;
+  text: string;
+  kind: "person" | "work" | "money" | "social" | "self";
+  /** Person, occupation or product it's about. */
+  about: string | null;
+  /** -1..1 */
+  valence: number;
+  /** Fades unless the same lesson is learned again. */
+  strength: number;
+  /** Same key = same lesson (merged and reinforced). */
+  key: string;
+  source: "template" | "llm";
+}
+
 /** Skills 0..100. They improve with practice. */
 export interface Skills {
   sales: number;
@@ -248,6 +298,8 @@ export interface Memory {
   count: number;
   /** Used to merge repeated memories ("Sarah lent me money" x3). */
   key: string;
+  /** The feelings this memory stirred (and stirs again when recalled). */
+  emotions?: Partial<Emotions>;
 }
 
 export type RelRole =
@@ -390,6 +442,13 @@ export interface Citizen {
   spot: Vec | null;
 
   needs: Needs;
+  personality: Personality;
+  /** Current feelings; `mood` is derived from these. */
+  emotions: Emotions;
+  /** Long-term lessons from nightly reflection. */
+  reflections: Reflection[];
+  /** Day number of the last nightly reflection. */
+  lastReflectionDay: number;
   /** Daily "wants" for durable goods: 0..100. */
   wants: Record<ProductId, number>;
   mood: number;
@@ -766,7 +825,7 @@ export interface AILogEntry {
   id: number;
   t: number;
   citizenId: CitizenId | null;
-  kind: "strategy" | "conversation";
+  kind: "strategy" | "conversation" | "reflection";
   prompt: string;
   response: string;
   costUsd: number;
