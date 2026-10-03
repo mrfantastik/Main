@@ -483,7 +483,7 @@ export function improvise(world: WorldState, conv: Conversation, a: Citizen, b: 
             notes.push({ t: "news", from: x.id, to: y.id, id: h.id });
             topics.push(h.about);
             brief.push(`${X} tells ${Y} about ${h.about}${h.subject === x.id ? ` (it happened to ${X})` : ""} (${Y} hadn't heard, and is ${stanceWord(sy)}).`);
-            headline ??= h.subject === x.id ? `🗞️ ${x.name} told ${y.name} what happened to them: ${h.title.charAt(0).toLowerCase()}${h.title.slice(1)}.` : `🗞️ ${x.name} told ${y.name} about ${h.about}.`;
+            headline ??= h.subject === x.id ? `🗞️ ${x.name} told ${y.name} what happened to them: ${lowerStart(world, h.title)}.` : `🗞️ ${x.name} told ${y.name} about ${h.about}.`;
           },
         });
       } else {

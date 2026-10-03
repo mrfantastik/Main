@@ -291,3 +291,15 @@ test("the director: news chats stay within their share of calls; unscripted and 
   const off = new AIDirector(null, { total: () => 0, add: () => {} });
   assert.match(off.invent(w) ?? "", /isn't available/);
 });
+
+test("telling your own news keeps names capitalised in the feed", () => {
+  const w = newWorld(71);
+  at(w, 1, 12);
+  const [winner, friend] = people(w);
+  for (const c of [winner, friend]) c.activity.kind = "socialize";
+  const h = happen(w, "lottery", { subject: winner.id });
+  friend.news = friend.news.filter((k) => k.id !== h.id);
+  const headlines = Array.from({ length: 12 }, (_, i) => improvise(w, chat(w, winner, friend, 91000 + i), winner, friend).headline).filter((x): x is string => !!x && x.includes("what happened to them"));
+  assert.ok(headlines.length > 0, "the winner tells their own news");
+  for (const x of headlines) assert.ok(x.includes(`: ${winner.name} won the lottery.`), x);
+});
