@@ -25,6 +25,8 @@ That's it. The city starts at 6am on Day 1 and keeps running on the server — r
 npm run build:standalone
 ```
 
+A ready-made copy is published here: **https://claude.ai/artifact/ApFS3fgxqugFg2Pz6RKtwU** (private to the owner until shared).
+
 This makes `dist/ai-hustle-city.html`, a single file that runs the whole city inside your browser (no server, nothing to install for whoever opens it). It saves itself in that browser. It uses the built-in utility AI only, because Claude needs the API key on a server.
 
 ### Turning on Claude (optional)

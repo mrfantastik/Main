@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: standalone ? "../../dist/standalone" : "../../dist/client",
       emptyOutDir: true,
-      ...(standalone ? { rolldownOptions: { output: { codeSplitting: false } } } : {}),
+      ...(standalone ? { modulePreload: { polyfill: false }, rolldownOptions: { output: { codeSplitting: false } } } : {}),
     },
   };
 });
