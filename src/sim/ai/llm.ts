@@ -39,6 +39,8 @@ export interface LLMClient {
   ready?(): boolean;
   /** Slow (an in-page model on a processor): keep it for what the player is watching. */
   slow?(): boolean;
+  /** How many requests it can work on at once (an in-page model on a graphics card writes for several people together). */
+  parallel?(): number;
   complete(req: LLMRequest): Promise<LLMResponse>;
 }
 

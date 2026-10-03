@@ -206,16 +206,29 @@ export function smallNextPrompt(world: WorldState, c: Citizen, options: { id: st
   return { system: SMALL_CHOICE_SYSTEM, user, prefill: "", kind: "choice", options: options.map((o) => o.id) };
 }
 
-/** Their plan for a day, from the things they could do that day (numbered). */
-export function smallDayPlanPrompt(world: WorldState, c: Citizen, day: number, wake: number, things: { id: string; label: string }[]): SmallPrompt {
+/** Something just happened to them: what goes through their mind. */
+export function smallReactionPrompt(world: WorldState, c: Citizen, what: string): SmallPrompt {
+  const user = [
+    sketch(world, c),
+    `Just now: ${what}`,
+    `Money: ${money(c.money)} in their pocket, ${money(c.savings)} saved. Goal: ${c.goal.label}.`,
+    ...onTheirMind(world, c).filter((x) => !x.includes(what)),
+    `What goes through ${c.name}'s mind right now, and what will they do about it?`,
+  ].join("\n");
+  return { system: SMALL_THOUGHT_SYSTEM, user, prefill: "", kind: "thought" };
+}
+
+/** Their plan for a day, from the things they could do that day (numbered). `news`: something that's just happened to them. */
+export function smallDayPlanPrompt(world: WorldState, c: Citizen, day: number, wake: number, things: { id: string; label: string }[], news?: string): SmallPrompt {
   const first = hourLabel(Math.ceil(wake * 2) / 2);
   const user = [
     sketch(world, c),
+    ...(news ? [`Just now: ${news}`] : []),
     ...onTheirMind(world, c),
     `Money: ${money(c.money)} in their pocket, ${money(c.savings)} saved. Goal: ${c.goal.label}.`,
-    `It's day ${day}. ${c.name} gets up at about ${first}. Things ${c.name} could do today:`,
+    news ? `It's day ${day}, ${first}. After what's happened, things ${c.name} could do with the rest of the day:` : `It's day ${day}. ${c.name} gets up at about ${first}. Things ${c.name} could do today:`,
     ...things.map((o, i) => `${i + 1}. ${o.label}`),
-    `Write ${c.name}'s plan for today: 4 to 6 lines, from ${first} to the evening.`,
+    news ? `Write ${c.name}'s new plan for the rest of today: 3 to 5 lines, from ${first}.` : `Write ${c.name}'s plan for today: 4 to 6 lines, from ${first} to the evening.`,
   ].join("\n");
   return { system: SMALL_DAY_PLAN_SYSTEM, user, prefill: `${first}:`, kind: "plan", options: things.map((o) => o.id), labels: things.map((o) => o.label) };
 }

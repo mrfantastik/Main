@@ -94,6 +94,15 @@ export class BrainClient implements LLMClient {
     return this.status.state === "ready";
   }
 
+  /**
+   * On a graphics card it writes for up to four people at once (one step
+   * costs about the same), with a couple more waiting so it can put
+   * similar-length replies together; on a processor, one at a time.
+   */
+  parallel(): number {
+    return this.status.device === "webgpu" ? 6 : 1;
+  }
+
   /** On a processor and slower than ~15 tokens a second: a conversation would keep people waiting. */
   slow(): boolean {
     return this.status.device === "wasm" && (this.status.speed === 0 || this.status.speed < 15);
@@ -186,8 +195,8 @@ export class BrainClient implements LLMClient {
     this.waiting.delete(m.id!);
     if (m.type === "error") w.reject(new Error(m.message));
     else {
-      // Writing speed (reading the prompt is quicker, and not what people wait on line by line).
-      const writing = m.newTokens > 1 ? (m.newTokens - 1) / Math.max(0.001, (m.ms - m.prefillMs) / 1000) : 0;
+      // Writing speed, for everyone it was writing for at once (reading the prompt is quicker, and not what people wait on line by line).
+      const writing = m.rate;
       const speed = !writing ? this.status.speed : this.status.speed ? this.status.speed * 0.7 + writing * 0.3 : writing;
       this.set({ replies: this.status.replies + 1, speed });
       w.resolve(m);

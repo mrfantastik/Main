@@ -482,6 +482,8 @@ export interface Citizen {
   thoughtSource: "utility" | "llm";
   /** Only when the town's brain runs them: their plan for the day and their diary. */
   agent?: AgentMind;
+  /** The last thing that happened to them out of the blue (God Mode), for reacting to it. */
+  shock?: { t: number; text: string };
   thoughtT: number;
   /** 1 mundane, 2 urgent need, 3 strategic/social, 4 major life event. */
   thoughtPriority: number;

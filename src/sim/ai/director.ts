@@ -10,7 +10,7 @@ import { newId, pushRing, round2 } from "../util";
 import { activityOptions, type ActivityOption } from "./activity";
 import { setActivityHook } from "./brain";
 import { scoreOf, setThought } from "./decision";
-import { hourLabel, smallChoicePrompt, smallConversationPrompt, smallDayPlanPrompt, smallDiaryPrompt, smallNextPrompt, smallThoughtPrompt, type SmallPrompt } from "./small";
+import { hourLabel, smallChoicePrompt, smallConversationPrompt, smallDayPlanPrompt, smallDiaryPrompt, smallNextPrompt, smallReactionPrompt, smallThoughtPrompt, type SmallPrompt } from "./small";
 import { situation } from "./situation";
 import { makeAction } from "./actions";
 import type { FreeAIClient, FreeAIStatus } from "./freeai";
@@ -249,7 +249,7 @@ export class AIDirector {
       return false;
     }
     if (ai.callsToday >= ai.maxCallsPerDay) return false;
-    if (this.inFlight.size >= this.opts.maxConcurrent) return false;
+    if (this.inFlight.size >= Math.max(this.opts.maxConcurrent, this.client?.parallel?.() ?? 0)) return false;
     if (Date.now() - this.lastCallAt < this.opts.minIntervalMs) return false;
     return true;
   }
@@ -338,22 +338,26 @@ export class AIDirector {
         if (q.world === world) this.dropQueued(world, q);
       }
     }
-    if (!this.free || !this.canCall(world)) return;
+    // As many as it can take at once (several for the town's brain on a graphics card).
+    for (let n = 0; n < 8 && this.free && this.canCall(world); n++) if (!this.scheduleOne(world)) break;
+  }
+
+  /** Send the most useful request there is; false when there's nothing to ask. */
+  private scheduleOne(world: WorldState): boolean {
     const talk = (): boolean => {
       const q = this.queue.shift();
       if (q) this.send(world, { kind: "conversation", citizenId: q.citizenId, convId: q.convId }, FREE_CONVERSATION_SYSTEM, q.user, q.schema, q.small);
       return !!q;
     };
-    if ((this.queue[0]?.watched && talk()) || this.maybeNext(world, true) || this.maybeDayPlan(world, true) || this.maybeThink(world, true)) return;
+    if (this.maybeReact(world) || (this.queue[0]?.watched && talk()) || this.maybeNext(world, true) || this.maybeDayPlan(world, true) || this.maybeThink(world, true)) return true;
     const turns: [Pending["kind"], () => boolean][] = [
       ["conversation", talk],
       ["plan", () => this.maybeNext(world, false)],
       ["dayplan", () => this.maybeDayPlan(world, false)],
     ];
     const after = turns.findIndex(([k]) => k === this.lastKind) + 1;
-    if ([...turns.slice(after), ...turns.slice(0, after)].some(([, f]) => f())) return;
-    if (this.maybeDiary(world)) return;
-    this.maybeThink(world, false);
+    if ([...turns.slice(after), ...turns.slice(0, after)].some(([, f]) => f())) return true;
+    return this.maybeDiary(world) || this.maybeThink(world, false);
   }
 
   /** A queued conversation that waited too long: the built-in AI speaks it. */
@@ -473,11 +477,34 @@ export class AIDirector {
     this.log(world, d, "ok", JSON.stringify(reply), `${c.name} will ${option.label.charAt(0).toLowerCase()}${option.label.slice(1)} next${plan.thought ? `: "${plan.thought}"` : ""}`);
   }
 
+  // --------------------------------------------- something just happened
+
+  /** Shaken by something that just happened to them (God Mode), and the AI hasn't reacted yet. */
+  private shaken(world: WorldState, c: Citizen): boolean {
+    return !!c.shock && world.time - c.shock.t < 180 && (c.cooldowns.agentShock ?? -1e9) < c.shock.t;
+  }
+
+  /** Before anything else: what goes through their mind (their new plan for the day follows, see dayToPlan). */
+  private maybeReact(world: WorldState): boolean {
+    const c = world.citizenOrder
+      .map((id) => world.citizens[id])
+      .filter((x) => this.shaken(world, x) && x.activity.kind !== "sleep")
+      .sort((a, b) => (a.id === this.focus ? -1 : b.id === this.focus ? 1 : b.shock!.t - a.shock!.t))[0];
+    if (!c) return false;
+    c.cooldowns.agentShock = world.time;
+    this.plans.delete(c.id); // a pick made before this happened doesn't count
+    const { user, schema } = thoughtPrompt(world, c);
+    this.send(world, { kind: "thought", citizenId: c.id }, THOUGHT_SYSTEM, `${user}\nJust happened: ${c.shock!.text}`, schema, this.small ? smallReactionPrompt(world, c, c.shock!.text) : undefined);
+    return true;
+  }
+
   // ------------------------------------------------- a plan for the day
 
   /** The day they're planning and when they'll be up, if they need a plan (asked through the night, or first thing if they've none). */
   private dayToPlan(world: WorldState, c: Citizen): { day: number; wake: number } | null {
-    if (world.time - (c.cooldowns.agentPlan ?? -1e9) < 240 || c.awaitingAI) return null;
+    // Something's happened since their last plan: they think again, whatever the time.
+    const news = !!c.shock && c.shock.t > (c.cooldowns.agentPlan ?? -1e9) && world.time - c.shock.t < 180;
+    if ((world.time - (c.cooldowns.agentPlan ?? -1e9) < 240 && !news) || c.awaitingAI) return null;
     if (c.activity.kind === "sleep") {
       const left = c.activity.endsAt - world.time;
       const wake = (c.activity.endsAt % 1440) / 60;
@@ -487,7 +514,7 @@ export class AIDirector {
     }
     const h = (world.time % 1440) / 60;
     const day = dayOf(world.time);
-    if (h < 5 || h > 17 || c.agent?.plan?.day === day) return null;
+    if (h < 5 || h > (news ? 21 : 17) || c.agent?.plan?.day === day) return null;
     return { day, wake: h + 0.25 };
   }
 
@@ -532,15 +559,17 @@ export class AIDirector {
         .map((id) => world.citizens[id])
         .map((x) => ({ x, w: this.dayToPlan(world, x) }))
         .filter((e) => e.w)
-        .sort((a, b) => (a.w!.day - b.w!.day) * 24 + (a.w!.wake - b.w!.wake))[0];
+        // People something has just happened to first, then whoever wakes first.
+        .sort((a, b) => Number(!!b.x.shock && b.x.shock.t > (b.x.cooldowns.agentPlan ?? -1e9)) - Number(!!a.x.shock && a.x.shock.t > (a.x.cooldowns.agentPlan ?? -1e9)) || (a.w!.day - b.w!.day) * 24 + (a.w!.wake - b.w!.wake))[0];
       c = due?.x;
       want = due?.w ?? null;
     }
     if (!c || !want) return false;
     const things = this.dayCatalog(world, c, want.day, want.wake);
     if (things.length < 3) return false;
+    const news = c.shock && c.shock.t > (c.cooldowns.agentPlan ?? -1e9) && world.time - c.shock.t < 180 ? c.shock.text : undefined;
     c.cooldowns.agentPlan = world.time;
-    const small = smallDayPlanPrompt(world, c, want.day, want.wake, things);
+    const small = smallDayPlanPrompt(world, c, want.day, want.wake, things, news);
     this.send(world, { kind: "dayplan", citizenId: c.id, day: want.day, labels: Object.fromEntries(things.map((t) => [t.id, t.label])) }, small.system, small.user, {}, small);
     return true;
   }

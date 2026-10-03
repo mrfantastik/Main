@@ -185,12 +185,12 @@ function concat(parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
-function emptyPast(): Record<string, ort.Tensor> {
+function emptyPast(batch = 1): Record<string, ort.Tensor> {
   const feeds: Record<string, ort.Tensor> = {};
   for (let i = 0; i < cfg!.layers; i++) {
     for (const kv of ["key", "value"]) {
       feeds[`past_key_values.${i}.${kv}`] =
-        pastType === "float16" ? new ort.Tensor("float16", new Uint16Array(0), [1, cfg!.kvHeads, 0, cfg!.headDim]) : new ort.Tensor("float32", new Float32Array(0), [1, cfg!.kvHeads, 0, cfg!.headDim]);
+        pastType === "float16" ? new ort.Tensor("float16", new Uint16Array(0), [batch, cfg!.kvHeads, 0, cfg!.headDim]) : new ort.Tensor("float32", new Float32Array(0), [batch, cfg!.kvHeads, 0, cfg!.headDim]);
     }
   }
   return feeds;
@@ -378,18 +378,216 @@ async function generate(id: number, o: GenerateOptions): Promise<void> {
   } finally {
     if (owned) disposeAll(past);
   }
-  post({ type: "result", id, text, promptTokens: promptIds.length, newTokens: out.length, ms: Math.round(performance.now() - t0), prefillMs: Math.round(prefillMs) });
+  const ms = performance.now() - t0;
+  post({ type: "result", id, text, promptTokens: promptIds.length, newTokens: out.length, ms: Math.round(ms), prefillMs: Math.round(prefillMs), rate: out.length > 1 ? (out.length - 1) / Math.max(0.001, (ms - prefillMs) / 1000) : 0, batch: 1 });
+}
+
+// ------------------------------------------------- several at once
+
+/** One prompt in a batch: its tokens, how far it's got, and its own sampling. */
+interface Row {
+  id: number;
+  o: GenerateOptions;
+  ids: number[];
+  forced: number[] | null;
+  rand: () => number;
+  out: number[];
+  text: string;
+  /** Attention mask so far: 0 for the padding in front of a short prompt. */
+  mask: number[];
+  done: boolean;
+}
+
+/** The scores for row b's last position. */
+function rowAt(t: ort.Tensor, b: number, rows: number): Float32Array {
+  const V = Number(t.dims[t.dims.length - 1]);
+  const per = t.size / rows;
+  const start = b * per + per - V;
+  const data = t.data as Float32Array | Uint16Array;
+  if (data instanceof Float32Array) return data.slice(start, start + V);
+  const out = new Float32Array(V);
+  for (let i = 0; i < V; i++) out[i] = halfToFloat(data[start + i]);
+  return out;
+}
+
+/** Run the model over the same number of new tokens for every row. */
+async function forwardBatch(ids: number[][], masks: number[][], pos: number[][], past: Past, logits: boolean): Promise<{ past: Past; rows: Float32Array[] | null }> {
+  const B = ids.length;
+  const n = ids[0].length;
+  const total = masks[0].length;
+  const names = session!.inputNames;
+  const feeds: Record<string, ort.Tensor> = {
+    input_ids: new ort.Tensor("int64", BigInt64Array.from(ids.flat().map(BigInt)), [B, n]),
+    attention_mask: new ort.Tensor("int64", BigInt64Array.from(masks.flat().map(BigInt)), [B, total]),
+    ...past,
+  };
+  if (names.includes("position_ids")) feeds.position_ids = new ort.Tensor("int64", BigInt64Array.from(pos.flat().map(BigInt)), [B, n]);
+  if (names.includes("num_logits_to_keep")) feeds.num_logits_to_keep = new ort.Tensor("int64", BigInt64Array.from([1n]), []);
+  const res = logits ? await session!.run(feeds) : await session!.run(feeds, presentNames());
+  let rows: Float32Array[] | null = null;
+  if (res.logits) {
+    if (logits) rows = Array.from({ length: B }, (_, b) => rowAt(res.logits, b, B));
+    res.logits.dispose();
+  }
+  const next: Past = {};
+  for (let i = 0; i < cfg!.layers; i++) {
+    next[`past_key_values.${i}.key`] = res[`present.${i}.key`];
+    next[`past_key_values.${i}.value`] = res[`present.${i}.value`];
+  }
+  return { past: next, rows };
+}
+
+/** Positions of the given mask columns: real tokens count 0, 1, 2... from the first one; padding sits at 0. */
+function positions(mask: number[], from: number, to: number): number[] {
+  let seen = 0;
+  const out: number[] = [];
+  for (let i = 0; i < to; i++) {
+    if (mask[i]) seen++;
+    if (i >= from) out.push(Math.max(0, seen - 1));
+  }
+  return out;
+}
+
+/**
+ * Several prompts at once. On a graphics card one step costs about the same
+ * for four as for one, so this writes for several people in the time of one.
+ * Shorter prompts are padded in front (and masked out); each reply is sent
+ * back as soon as it's finished.
+ */
+async function generateBatch(reqs: { id: number; o: GenerateOptions }[]): Promise<void> {
+  if (!session || !tokenizer || !cfg) throw new Error("the brain isn't loaded yet");
+  const t0 = performance.now();
+  const tok = tokenizer;
+  const B = reqs.length;
+  const pad = [...cfg.eos][0];
+  const special = new Set<number>(cfg.eos);
+  const rows: Row[] = reqs.map(({ id, o }) => {
+    const ids = tok.encode(o.prompt, { add_special_tokens: false }).ids.map(Number);
+    return { id, o, ids, forced: o.forced ? tok.encode(o.forced, { add_special_tokens: false }).ids.map(Number) : null, rand: rng(o.seed ?? Math.floor(Math.random() * 2 ** 31)), out: [], text: "", mask: [], done: false };
+  });
+  const width = Math.max(...rows.map((r) => r.ids.length));
+  const padded = rows.map((r) => [...new Array<number>(width - r.ids.length).fill(pad), ...r.ids]);
+  for (const r of rows) r.mask = [...new Array<number>(width - r.ids.length).fill(0), ...new Array<number>(r.ids.length).fill(1)];
+  let past = emptyPast(B);
+  let prefillMs = 0;
+  let writeStart = 0;
+  let written = 0;
+  const finish = (r: Row) => {
+    r.done = true;
+    const now = performance.now();
+    const rate = written > B ? (written - B) / Math.max(0.001, (now - writeStart) / 1000) : 0;
+    post({ type: "result", id: r.id, text: r.text, promptTokens: r.ids.length, newTokens: r.out.length, ms: Math.round(now - t0), prefillMs: Math.round(prefillMs), rate, batch: B });
+  };
+  try {
+    // Read the prompts: all but the last column without scores, then the last column with them.
+    if (width > 1) {
+      const res = await forwardBatch(
+        padded.map((p) => p.slice(0, -1)),
+        rows.map((r) => r.mask.slice(0, width - 1)),
+        rows.map((r) => positions(r.mask, 0, width - 1)),
+        past,
+        false,
+      );
+      disposeAll(past);
+      past = res.past;
+    }
+    let cur = padded.map((p) => p[width - 1]);
+    const longest = Math.max(...rows.map((r) => r.o.maxNewTokens));
+    for (let step = 0; step < longest && rows.some((r) => !r.done); step++) {
+      const total = rows[0].mask.length;
+      const res = await forwardBatch(
+        cur.map((t) => [t]),
+        rows.map((r) => r.mask),
+        rows.map((r) => positions(r.mask, total - 1, total)),
+        past,
+        true,
+      );
+      disposeAll(past);
+      past = res.past;
+      if (step === 0) {
+        prefillMs = performance.now() - t0;
+        writeStart = performance.now();
+      }
+      rows.forEach((r, b) => {
+        if (r.done) return;
+        const next = r.forced ? (r.forced[step] ?? pad) : sample(res.rows![b], r.out.slice(-64), r.o, r.rand, step === 0 ? special : new Set());
+        written++;
+        if (cfg!.eos.has(next) || (r.forced && step >= r.forced.length)) return finish(r);
+        r.out.push(next);
+        r.text = tok.decode(r.out, { skip_special_tokens: true });
+        const hit = r.o.stop.map((s) => r.text.indexOf(s)).filter((i) => i >= 0);
+        if (hit.length) {
+          r.text = r.text.slice(0, Math.min(...hit));
+          return finish(r);
+        }
+        if (r.out.length >= r.o.maxNewTokens) finish(r);
+      });
+      cur = rows.map((r, b) => (r.done ? pad : r.out[r.out.length - 1] ?? padded[b][width - 1]));
+      for (const r of rows) r.mask.push(1);
+    }
+    for (const r of rows) if (!r.done) finish(r);
+  } catch (err) {
+    for (const r of rows) {
+      if (r.done) continue; // already answered
+      r.done = true;
+      post({ type: "error", id: r.id, message: (err as Error)?.message ?? String(err) });
+    }
+  } finally {
+    disposeAll(past);
+  }
+}
+
+// ----------------------------------------------------------- the queue
+
+const queue: { id: number; o: GenerateOptions }[] = [];
+let running = false;
+
+/** How many at once: several on a graphics card; on a processor each extra one costs nearly as much again. */
+let batchOverride = 0;
+const maxBatch = () => batchOverride || (device === "webgpu" ? 4 : 1);
+
+/** Long replies (conversations, day plans) are batched together, and short ones (choices, thoughts, diaries) together, oldest first. */
+async function drain(): Promise<void> {
+  if (running || !session) return;
+  running = true;
+  try {
+    while (queue.length) {
+      // Let requests sent together all arrive, so they can go in one batch.
+      await new Promise((r) => setTimeout(r, 0));
+      const long = (o: GenerateOptions) => o.maxNewTokens > 100;
+      const first = queue.shift()!;
+      const batch = [first];
+      for (let i = 0; i < queue.length && batch.length < maxBatch(); ) {
+        if (long(queue[i].o) === long(first.o)) batch.push(...queue.splice(i, 1));
+        else i++;
+      }
+      if (batch.length === 1) {
+        try {
+          await generate(first.id, first.o);
+        } catch (err) {
+          post({ type: "error", id: first.id, message: (err as Error)?.message ?? String(err) });
+        }
+      } else await generateBatch(batch);
+    }
+  } finally {
+    running = false;
+  }
 }
 
 self.onmessage = (ev: MessageEvent<BrainRequest>) => {
   const msg = ev.data;
-  // One thing at a time: the model can't run two generations at once.
+  if (msg.type === "generate") {
+    queue.push({ id: msg.id, o: msg.opts });
+    void busy.then(drain);
+    return;
+  }
   busy = busy.then(async () => {
     try {
-      if (msg.type === "load") await load(msg.source, msg.device);
-      else await generate(msg.id, msg.opts);
+      batchOverride = msg.batch ?? 0;
+      await load(msg.source, msg.device);
+      void drain();
     } catch (err) {
-      post({ type: "error", id: msg.type === "generate" ? msg.id : undefined, message: (err as Error)?.message ?? String(err) });
+      post({ type: "error", message: (err as Error)?.message ?? String(err) });
     }
   });
 };

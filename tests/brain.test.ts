@@ -271,3 +271,42 @@ test("an agent can choose to go and see a friend, and they talk", async () => {
   const chats = w.conversationLog.filter((cv) => !before.has(cv.id) && visits.some(({ c, x }) => cv.a === c.id && cv.b === x.chosen.slice(4)));
   assert.ok(chats.length >= 1, `${chats.length} of those visits ended in a chat`);
 });
+
+test("on a graphics card the brain works for several people at once, and gets to more of the town", async () => {
+  const measure = async (parallel: number) => {
+    let inFlight = 0;
+    let most = 0;
+    const seen: LLMRequest[] = [];
+    const inner = fakeBrain(seen);
+    const brain: LLMClient = {
+      ...inner,
+      parallel: () => parallel,
+      async complete(req) {
+        most = Math.max(most, ++inFlight);
+        // Replies take a few game minutes of real time, like the real thing.
+        await new Promise((r) => setTimeout(r, 12));
+        inFlight--;
+        return inner.complete(req);
+      },
+    };
+    const d = new AIDirector(brain, { total: () => 0, add: () => {} }, { maxConcurrent: 1, minIntervalMs: 0, timeoutMs: 5000 });
+    d.attach();
+    const w = newWorld(97);
+    w.ai.mode = "llm";
+    w.ai.maxCallsPerDay = 50000;
+    advance(w, 7 * 60);
+    for (let i = 0; i < 160; i++) {
+      advance(w, 3);
+      await new Promise((r) => setTimeout(r, 3));
+      d.pump(w);
+    }
+    const moves = w.citizenOrder.flatMap((id) => w.citizens[id].decisions.filter((x) => x.kind === "activity" && x.t > 7 * 60 + 360 + 60));
+    return { most, asked: seen.length, share: moves.filter((x) => x.source === "llm").length / Math.max(1, moves.length) };
+  };
+  const one = await measure(1);
+  const four = await measure(4);
+  assert.equal(one.most, 1);
+  assert.ok(four.most >= 3, `up to ${four.most} at once`);
+  assert.ok(four.asked > one.asked * 1.5, `${four.asked} requests vs ${one.asked}`);
+  assert.ok(four.share >= one.share, `${Math.round(four.share * 100)}% of moves from the brain vs ${Math.round(one.share * 100)}%`);
+});

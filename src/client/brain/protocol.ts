@@ -39,12 +39,16 @@ export interface GenerateOptions {
 }
 
 export type BrainRequest =
-  | { type: "load"; source: BrainSource; device: "auto" | "webgpu" | "wasm" }
+  /** `batch`: tests only, how many prompts to run at once (normally 4 on a graphics card, 1 on a processor). */
+  | { type: "load"; source: BrainSource; device: "auto" | "webgpu" | "wasm"; batch?: number }
   | { type: "generate"; id: number; opts: GenerateOptions };
 
 export type BrainEvent =
   | { type: "progress"; stage: "download" | "compile"; loaded: number; total: number; file: string }
   | { type: "ready"; device: "webgpu" | "wasm"; name: string; ms: number }
-  /** `ms`: the whole request; `prefillMs`: the part spent reading the prompt (the rest is writing the reply). */
-  | { type: "result"; id: number; text: string; promptTokens: number; newTokens: number; ms: number; prefillMs: number }
+  /**
+   * `ms`: the whole request; `prefillMs`: the part spent reading the prompt (the rest is writing the reply).
+   * `rate`: tokens written a second by the whole batch it ran in; `batch`: how many prompts ran together.
+   */
+  | { type: "result"; id: number; text: string; promptTokens: number; newTokens: number; ms: number; prefillMs: number; rate: number; batch: number }
   | { type: "error"; id?: number; message: string };

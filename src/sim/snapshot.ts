@@ -93,8 +93,9 @@ export function citizenSummary(world: WorldState, c: Citizen): CitizenSummary {
   };
 }
 
+/** How they feel, as the panels show it: the strongest feeling once it's noticeable (lower than the bar for it to change what they do). */
 function emotionDTO(c: Citizen): CitizenSummary["emotion"] {
-  const d = dominantEmotion(c);
+  const d = dominantEmotion(c, 28);
   return d ? { kind: d.emotion, level: d.level, emoji: EMOTION_EMOJI[d.emotion] } : null;
 }
 
