@@ -4,7 +4,7 @@ import type { DecisionRecord } from "../../sim/types";
 import { renderer } from "../App";
 import { store, useStore } from "../net/store";
 import { Avatar } from "./CitizenList";
-import { EMOTION_UI, gbp, KIND_LABEL, OCC_COLORS, OCC_LABEL, VALUE_LABEL, when } from "./format";
+import { aiName, EMOTION_UI, gbp, KIND_LABEL, OCC_COLORS, OCC_LABEL, VALUE_LABEL, when } from "./format";
 import { Sparkline } from "./charts";
 import { Transcript } from "./Transcript";
 
@@ -82,11 +82,12 @@ function Who({ d }: { d: CitizenDetail }) {
 }
 
 function Decision({ d }: { d: DecisionRecord }) {
+  const ai = aiName(useStore((s) => s.state?.ai.free));
   return (
     <details className="item decision">
       <summary>
         <div className="meta">
-          {when(d.t)} · {d.kind} · {d.source === "llm" ? <span style={{ color: "var(--llm)" }}>🧠 Claude</span> : d.source === "llm-rejected" ? "Claude (rejected → fallback)" : "utility AI"}
+          {when(d.t)} · {d.kind} · {d.source === "llm" ? <span style={{ color: "var(--llm)" }}>🧠 {ai}</span> : d.source === "llm-rejected" ? `${ai} (rejected → fallback)` : "utility AI"}
         </div>
         <div>
           ➜ <b>{d.options.find((o) => o.id === d.chosen)?.label ?? d.chosen}</b>
@@ -122,12 +123,13 @@ function Decision({ d }: { d: DecisionRecord }) {
 }
 
 function Overview({ d }: { d: CitizenDetail }) {
+  const ai = aiName(useStore((s) => s.state?.ai.free));
   return (
     <>
       <div className="section">💭 What is {d.name} thinking?</div>
       <div className={`thought ${d.thoughtSource === "llm" ? "llm" : ""}`}>
         {d.thought}
-        <span className="src">{d.thoughtSource === "llm" ? "🧠 Reasoned by Claude" : "⚙️ From the utility AI's current decision"}</span>
+        <span className="src">{d.thoughtSource === "llm" ? `🧠 Reasoned by ${ai}` : "⚙️ From the utility AI's current decision"}</span>
       </div>
       <div className="section">
         How {d.name} feels{d.emotion ? ` — mostly ${EMOTION_UI.find((e) => e.key === d.emotion!.kind)?.label.toLowerCase()} ${d.emotion.emoji}` : " — calm"}
@@ -248,7 +250,7 @@ function Mind({ d }: { d: CitizenDetail }) {
         <div className="list">
           {d.lessons.map((r) => (
             <div key={r.id} className="item" style={{ opacity: 0.45 + r.strength * 0.55 }}>
-              {r.valence >= 0 ? "💡" : "⚠️"} {r.text} {r.source === "llm" && <span className="chip llm">Claude</span>}
+              {r.valence >= 0 ? "💡" : "⚠️"} {r.text} {r.source === "llm" && <span className="chip llm">AI-worded</span>}
               <div className="meta">
                 {when(r.t)} · {r.kind}
               </div>
@@ -302,9 +304,25 @@ function Mind({ d }: { d: CitizenDetail }) {
   );
 }
 
+function stanceLabel(s: number): string {
+  return s <= -0.5 ? "😟 upset" : s < -0.1 ? "😕 sorry about it" : s >= 0.5 ? "😄 pleased" : s > 0.1 ? "🙂 quietly glad" : "😐 not bothered";
+}
+
 function Social({ d }: { d: CitizenDetail }) {
   return (
     <>
+      <div className="section">What they've heard</div>
+      <div className="list">
+        {d.news.length === 0 && <div className="empty">No news yet. People pass it on when they talk.</div>}
+        {d.news.slice(0, 8).map((n) => (
+          <div key={n.id} className="item news-item">
+            {n.icon} {n.title}
+            <div className="meta">
+              {when(n.t)} · {n.via} · <span className="stance">{stanceLabel(n.stance)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
       <div className="section">Recent conversations</div>
       <div className="list">
         {d.conversations.length === 0 && <div className="empty">Hasn't talked to anyone yet.</div>}

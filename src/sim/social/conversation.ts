@@ -17,7 +17,9 @@ import { chance, rand, type RngHolder } from "../rng";
 import { dayOf } from "../time";
 import type { Citizen, Conversation, ConversationTopic, ConvValue, EventCategory, Loan, WorldState } from "../types";
 import { clamp, money, newId, pct, pushRing, round2 } from "../util";
-import { argueDialogue, chatDialogue, helpDialogue, investDialogue, jobDialogue, loanDialogue, repaymentDialogue, tipDialogue } from "./dialogue";
+import { hotNews, knows } from "../town/happenings";
+import { applyNotes, improvise } from "./improv";
+import { argueDialogue, helpDialogue, investDialogue, jobDialogue, loanDialogue, repaymentDialogue, tipDialogue } from "./dialogue";
 import { compatibility } from "./encounters";
 import { helpTerms, investmentTerms, jobTerms, loanTerms, lookWealthy as lookWealthyRaw, MAX_STAFF, settleLoan } from "./negotiation";
 import { adjustRel, getRel, peekRel } from "./relationships";
@@ -572,21 +574,23 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
 
   chat: {
     schema: {},
-    prepare(world, conv, a, b, r) {
-      const news = (c: Citizen) => {
-        const earn = c.finance.occupationEarnings.slice(-3);
-        const avgEarn = earn.length ? earn.reduce((x, y) => x + y, 0) / earn.length : 0;
-        const biz = c.businessIds.map((id) => world.businesses[id]).find((x) => x && x.open);
-        if (biz && biz.avgProfit > 30) return `${biz.name} is doing great — about ${money(biz.avgProfit)} a day!`;
-        if (biz && biz.avgProfit < 0) return `Honestly? ${biz.name} is struggling.`;
-        if (avgEarn > 45) return `Really well actually. ${c.occupation === "reseller" ? "Flipping stuff" : c.occupation === "trader" ? "Trading" : "Work"} is bringing in ${money(avgEarn)} a day.`;
-        if (c.occupation === "unemployed") return "Still looking for work. It's grim.";
-        return null;
+    prepare(world, conv, a, b) {
+      // Improvised from what's on their minds: news, gossip, worries, feelings, dreams.
+      const imp = improvise(world, conv, a, b);
+      conv.notes = imp.notes;
+      conv.topics = imp.topics;
+      const hasNews = imp.notes.some((n) => n.t === "news");
+      return {
+        terms: { headline: imp.headline ?? "", summary: imp.summary, news: hasNews },
+        lines: imp.lines,
+        outcome: {},
+        stakes: 0,
+        brief: `A casual chat. Beats, in order (keep to them, in your own words): ${imp.brief.join(" ")}`,
       };
-      return { terms: {}, lines: chatDialogue(r, world, a, b, news(b), news(a)), outcome: {}, stakes: 0, brief: "A and B chat and swap news." };
     },
     validate: () => ({}),
     apply(world, conv, a, b) {
+      applyNotes(world, conv);
       // Gossip: they learn how each other are doing (fuel for imitation).
       for (const [teller, listener] of [
         [a, b],
@@ -601,7 +605,9 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
         adjustRel(world, listener, teller.id, { affinity: 1.5 + compat * 3, familiarity: 4, trust: 1 });
         listener.needs.social = clamp(listener.needs.social + 15, 0, 100);
       }
-      conv.summary = `${a.name} and ${b.name} caught up.`;
+      conv.summary = String(conv.terms.summary || `${a.name} and ${b.name} caught up.`);
+      const headline = String(conv.terms.headline || "");
+      if (headline) return news(headline, headline.startsWith("🗞️") ? "town" : "conversation", 2);
       // Notable gossip is news: it's how success spreads (and gets copied).
       for (const [teller, listener] of [
         [a, b],
@@ -672,7 +678,7 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
   recallPerson(world, b, a.id);
   const prepared = handlers[topic].prepare(world, conv, a, b, world);
   if (!prepared) return null;
-  prepared.lines = voiceConversation(conv.id, topic, a, b, prepared.lines, typeof prepared.outcome.agreed === "boolean" ? prepared.outcome.agreed : null, dayOf(world.time));
+  prepared.lines = voiceConversation(conv.id, topic === "chat" ? "improv" : topic, a, b, prepared.lines, typeof prepared.outcome.agreed === "boolean" ? prepared.outcome.agreed : null, dayOf(world.time));
   conv.terms = prepared.terms;
   conv.fallback = { lines: prepared.lines, outcome: handlers[topic].validate(conv, prepared.outcome) };
   // Register first: interrupting their current activities must not start
@@ -705,7 +711,7 @@ export function resolveConversationAI(world: WorldState, convId: number, ai: { l
     conv.outcome = conv.fallback!.outcome;
     return "fallback";
   }
-  conv.lines = ai.lines.filter((l) => l.speaker === conv.a || l.speaker === conv.b).slice(0, 8);
+  conv.lines = ai.lines.filter((l) => l.speaker === conv.a || l.speaker === conv.b).slice(0, conv.topic === "chat" ? 12 : 8);
   conv.outcome = handlers[conv.topic].validate(conv, ai.outcome);
   conv.source = "llm";
   return "ok";
@@ -823,11 +829,16 @@ export function startOpportunisticConversations(world: WorldState): void {
         startConversation(world, c, foe, "argue", { reason });
         continue;
       }
-      // Small talk, mostly with people they know or like.
+      // Small talk, mostly with people they know or like. Fresh news makes
+      // people chattier, and they look for someone who hasn't heard it yet.
       const ctx = TALKATIVE[c.activity.kind] ?? 0.3;
       const lonely = (100 - c.needs.social) / 100;
-      if (!chance(world, Math.min(0.6, 0.07 * ctx * (0.5 + c.traits.sociability + lonely)))) continue;
-      const partner = [...present].sort((x, y) => (c.relationships[y.id]?.affinity ?? 0) + (c.relationships[y.id]?.familiarity ?? 0) - ((c.relationships[x.id]?.affinity ?? 0) + (c.relationships[x.id]?.familiarity ?? 0)))[rand(world) < 0.7 ? 0 : present.length - 1];
+      const hot = hotNews(world, c);
+      const unaware = hot ? present.filter((o) => !knows(o, hot.h.id) && (c.relationships[o.id]?.familiarity ?? 0) >= 5) : [];
+      const keen = unaware.length ? hot!.heat : 0;
+      if (!chance(world, Math.min(0.75, 0.07 * ctx * (0.5 + c.traits.sociability + lonely) * (1 + keen * 3)))) continue;
+      const pool = unaware.length ? unaware : present;
+      const partner = [...pool].sort((x, y) => (c.relationships[y.id]?.affinity ?? 0) + (c.relationships[y.id]?.familiarity ?? 0) - ((c.relationships[x.id]?.affinity ?? 0) + (c.relationships[x.id]?.familiarity ?? 0)))[rand(world) < 0.7 ? 0 : pool.length - 1];
       startConversation(world, c, partner, "chat", {});
     }
   }

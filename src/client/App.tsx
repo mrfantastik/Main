@@ -1,3 +1,4 @@
+import { TownNews } from "./ui/TownNews";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { store, useStore } from "./net/store";
 import { Renderer } from "./render/renderer";
@@ -14,12 +15,19 @@ import { OCC_COLORS, OCC_LABEL } from "./ui/format";
 
 export let renderer: CityRenderer | null = null;
 
-type View = "3d" | "2d";
+/** 3D is the dreamscape; Retro is the low-poly pixel town; 2D the flat map. */
+type View = "3d" | "retro" | "2d";
 const VIEW_KEY = "hustle.view";
+const VIEWS: [View, string][] = [
+  ["3d", "3D"],
+  ["retro", "Retro"],
+  ["2d", "2D"],
+];
 
 function savedView(): View {
   try {
-    return localStorage.getItem(VIEW_KEY) === "2d" ? "2d" : "3d";
+    const v = localStorage.getItem(VIEW_KEY);
+    return v === "2d" || v === "retro" ? v : "3d";
   } catch {
     return "3d";
   }
@@ -32,7 +40,7 @@ function CityView({ view, onFail }: { view: View; onFail: () => void }) {
     if (!ref.current) return;
     let r: CityRenderer;
     try {
-      r = view === "3d" ? new Renderer3D(ref.current) : new Renderer(ref.current);
+      r = view === "2d" ? new Renderer(ref.current) : new Renderer3D(ref.current, view === "retro" ? "retro" : "dream");
     } catch {
       // No WebGL (old browser, blocked GPU): fall back to the flat map.
       onFail();
@@ -58,22 +66,39 @@ function CityView({ view, onFail }: { view: View; onFail: () => void }) {
   );
 }
 
-/** 2D/3D switch, plus rotate and director buttons for the 3D view. */
+/** 3D / Retro / 2D switch, plus rotate, ground-level and director buttons for the 3D views. */
 function ViewControls({ view, setView }: { view: View; setView: (v: View) => void }) {
   const [director, setDirector] = useState(false);
-  useEffect(() => setDirector(false), [view]);
+  const [ground, setGround] = useState(false);
+  useEffect(() => {
+    setDirector(false);
+    setGround(false);
+  }, [view]);
   const r3d = () => (renderer instanceof Renderer3D ? renderer : null);
   return (
     <div className="view-controls">
       <div className="seg" role="group" aria-label="City view">
-        {(["3d", "2d"] as const).map((v) => (
+        {VIEWS.map(([v, label]) => (
           <button key={v} className={view === v ? "on" : ""} aria-pressed={view === v} onClick={() => setView(v)}>
-            {v.toUpperCase()}
+            {label}
           </button>
         ))}
       </div>
-      {view === "3d" && (
-        <>
+      {view !== "2d" && (
+        <div className="view-buttons">
+          <button
+            className={ground ? "on" : ""}
+            aria-pressed={ground}
+            aria-label="Ground view"
+            title="See it from ground level: behind the person you've selected, or looking round town"
+            onClick={() => {
+              const next = !ground;
+              setGround(next);
+              r3d()?.setGroundView(next);
+            }}
+          >
+            👁 Ground
+          </button>
           <button title="Rotate left (Q)" aria-label="Rotate view left" onClick={() => r3d()?.rotate(-1)}>
             ⟲
           </button>
@@ -92,7 +117,7 @@ function ViewControls({ view, setView }: { view: View; setView: (v: View) => voi
           >
             🎬 Director
           </button>
-        </>
+        </div>
       )}
     </div>
   );
@@ -166,6 +191,7 @@ export function App() {
       <main className="stage">
         <CityView view={view} onFail={fallBack} />
         <ViewControls view={view} setView={setView} />
+        <TownNews />
         {!connected && <div className="banner">{store.standalone ? "Building the city…" : "Connecting to the city server…"}</div>}
         {connected && paused && <div className="banner">⏸ Paused</div>}
         <Legend />

@@ -13,6 +13,7 @@ const q = new Quaternion();
 const pos = new Vector3();
 const scl = new Vector3();
 const up = new Vector3(0, 1, 0);
+const fwdZ = new Vector3(0, 0, 1);
 const col = new Color();
 
 /**
@@ -86,6 +87,50 @@ export class GeoBuilder {
   cylinder(x: number, y: number, z: number, r: number, h: number, color: number, segments = 8): this {
     m.compose(pos.set(x, y + h / 2, z), q.identity(), scl.set(r, h, r));
     return this.push(new CylinderGeometry(1, 1, 1, segments, 1), color, m);
+  }
+
+  /** A smooth sphere (lamp globes, topiary). */
+  sphere(x: number, y: number, z: number, r: number, color: number, segments = 12): this {
+    m.compose(pos.set(x, y, z), q.identity(), scl.set(r, r, r));
+    return this.push(new SphereGeometry(1, segments, Math.max(6, segments >> 1)), color, m);
+  }
+
+  /** Tapered round shaft (columns, cypress trunks). */
+  shaft(x: number, y: number, z: number, rBottom: number, rTop: number, h: number, color: number, segments = 18): this {
+    m.compose(pos.set(x, y + h / 2, z), q.identity(), scl.set(1, h, 1));
+    return this.push(new CylinderGeometry(rTop, rBottom, 1, segments, 1), color, m);
+  }
+
+  /**
+   * A classical Ionic column on y: square plinth, round base, a slightly
+   * tapered fluted-looking shaft and a capital with scroll ends. `broken`
+   * columns stop part-way with no capital (ruins).
+   */
+  column(x: number, y: number, z: number, h: number, r: number, color: number, broken = false): this {
+    const base = r * 0.55;
+    this.box(x, y, z, r * 3, base * 0.6, r * 3, color);
+    this.shaft(x, y + base * 0.6, z, r * 1.32, r * 1.22, base * 0.45, color, 20);
+    const shaftH = broken ? h * 0.55 : h - base * 1.05 - r * 1.1;
+    this.shaft(x, y + base * 1.05, z, r, r * 0.88, shaftH, color, 20);
+    if (broken) return this;
+    const top = y + base * 1.05 + shaftH;
+    this.shaft(x, top, z, r * 0.95, r * 1.15, r * 0.3, color, 20);
+    this.box(x, top + r * 0.3, z, r * 2.7, r * 0.32, r * 2.1, color);
+    // Scrolls: short horizontal cylinders at each end of the capital.
+    for (const side of [-1, 1]) {
+      q.setFromAxisAngle(fwdZ, Math.PI / 2);
+      m.compose(pos.set(x + side * r * 1.2, top + r * 0.18, z), q, scl.set(r * 0.42, r * 2.0, r * 0.42));
+      this.push(new CylinderGeometry(1, 1, 1, 14, 1), color, m);
+    }
+    this.box(x, top + r * 0.62, z, r * 2.9, r * 0.2, r * 2.9, color);
+    return this;
+  }
+
+  /** A slim cypress tree: short trunk, tall tapering crown. */
+  cypress(x: number, y: number, z: number, h: number, color: number, trunk: number): this {
+    this.shaft(x, y, z, 0.06, 0.05, h * 0.15, trunk, 8);
+    m.compose(pos.set(x, y + h * 0.15 + (h * 0.85) / 2, z), q.identity(), scl.set(h * 0.13, h * 0.85, h * 0.13));
+    return this.push(new SphereGeometry(1, 12, 10).scale(1, 0.5, 1), color, m);
   }
 
   /** Low-poly blob (tree crowns, bushes). */

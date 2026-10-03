@@ -6,6 +6,7 @@ import { citizenAcc, externalAcc, transfer } from "./economy/ledger";
 import { addListing, refPrice } from "./economy/market";
 import { logEvent } from "./events";
 import { remember } from "./memory/memory";
+import { createHappening, HAPPENING_KINDS } from "./town/happenings";
 import { randInt, randRange } from "./rng";
 import type { GodCommand } from "../shared/protocol";
 import type { BusinessKind, Occupation, WorldState } from "./types";
@@ -92,6 +93,12 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       m.tape.push(price);
       logEvent(world, "god", `⚡ The wholesale price of ${p.emoji} ${p.name} is now ${money(price)}.`, 4);
       return `${p.name} now cost ${money(price)} wholesale.`;
+    }
+    case "happening": {
+      if (!HAPPENING_KINDS.includes(cmd.kind)) throw new GodError("Unknown kind of happening");
+      const h = createHappening(world, cmd.kind, { source: "god", subject: cmd.citizenId || null, businessId: cmd.businessId || null });
+      if (typeof h === "string") throw new GodError(h);
+      return `${h.title}.`;
     }
     case "hype": {
       const p = world.products[cmd.productId];

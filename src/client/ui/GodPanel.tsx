@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { GodCommand } from "../../shared/protocol";
 import { store, useStore } from "../net/store";
-import { OCC_LABEL } from "./format";
+import { HAPPENING_UI, OCC_LABEL } from "./format";
 import { Shell } from "./Overlays";
 
 function god(command: GodCommand) {
@@ -40,6 +40,11 @@ export function GodPanel() {
   const [bid, setBid] = useState("");
   const [seed, setSeed] = useState("");
   const [confirmReset, setConfirmReset] = useState(false);
+  const [hap, setHap] = useState<string>("festival");
+  const [hapTarget, setHapTarget] = useState("");
+  const [idea, setIdea] = useState("");
+  const writer = st?.ai.writer ?? null;
+  const hapInfo = HAPPENING_UI.find((h) => h.kind === hap) ?? HAPPENING_UI[0];
   const amt = Number(amount.replace(/[£,\s]/g, ""));
   const amountOk = Number.isFinite(amt) && amt >= 1;
   const badAmount = () => store.toast("Type an amount of money first (e.g. 1000).", "error");
@@ -51,6 +56,59 @@ export function GodPanel() {
       <p className="muted" style={{ marginTop: 0 }}>
         Interfere with the world. Citizens notice — and react in their own way.
       </p>
+
+      <div className="god-section">
+        <h4>🗞️ Make something happen</h4>
+        <p className="muted" style={{ margin: "0 0 6px" }}>
+          It plays out for real, and people react and talk about it.
+        </p>
+        <div className="god-row">
+          <select aria-label="What happens" value={hap} onChange={(e) => setHap(e.target.value)}>
+            {HAPPENING_UI.map((h) => (
+              <option key={h.kind} value={h.kind}>
+                {h.icon} {h.label}
+              </option>
+            ))}
+          </select>
+          {hapInfo.target && (
+            <select aria-label={hapInfo.target === "citizen" ? "Who" : "Where"} value={hapTarget} onChange={(e) => setHapTarget(e.target.value)}>
+              <option value="">{hapInfo.target === "citizen" ? "Anyone" : "Anywhere"}</option>
+              {hapInfo.target === "citizen"
+                ? citizens.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))
+                : businesses.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+            </select>
+          )}
+          <button
+            className="btn"
+            onClick={() =>
+              god({
+                cmd: "happening",
+                kind: hapInfo.kind,
+                ...(hapInfo.target === "citizen" && hapTarget ? { citizenId: hapTarget } : {}),
+                ...(hapInfo.target === "business" && hapTarget ? { businessId: hapTarget } : {}),
+              })
+            }
+          >
+            Make it happen
+          </button>
+        </div>
+        {writer && (
+          <div className="god-row">
+            <input aria-label="Your idea (optional)" placeholder="Your idea (optional)" value={idea} onChange={(e) => setIdea(e.target.value)} />
+            <button className="btn unscripted" title={`${writer} invents something that happens, about real people here`} onClick={() => store.send({ type: "invent", idea })}>
+              ✨ Let the AI invent one
+            </button>
+          </div>
+        )}
+      </div>
 
       <div className="god-section">
         <h4>💰 Money</h4>
@@ -229,7 +287,7 @@ export function GodPanel() {
         </div>
         {confirmReset && <div className="neg" style={{ fontSize: 12, marginBottom: 6 }}>The current city will be replaced and can't be brought back (unless you copied a save).</div>}
         <div className="muted" style={{ fontSize: 11 }}>
-          The same seed always produces the same city and the same story (with Claude switched off).
+          The same seed always produces the same city and the same story (with the AI switched off).
         </div>
       </div>
     </Shell>

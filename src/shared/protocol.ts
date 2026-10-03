@@ -11,6 +11,7 @@ import type {
   Emotion,
   Emotions,
   Goal,
+  HappeningKind,
   Memory,
   Needs,
   Occupation,
@@ -147,6 +148,62 @@ export interface AIStatusDTO {
   maxCallsPerDay: number;
   pending: number;
   reason: string | null;
+  /** Who writes the AI conversations, and can rewrite one or invent an event on request (null: nobody). */
+  writer: string | null;
+  /** The writer is a free public AI (no budget; rate limited). */
+  free?: boolean;
+  /** Free AI: which services answer, and whether this page can reach the internet at all. */
+  connection?: {
+    connected: boolean;
+    active: string | null;
+    blocked: boolean;
+    providers: { name: string; state: "untried" | "ok" | "busy" | "unreachable" | "error"; note: string }[];
+  } | null;
+  /** Free AI: the player's own endpoint, if set (no key shown). */
+  endpoint?: { url: string; model?: string } | null;
+  /** The town's brain: an open-source model running on the player's own computer. */
+  brain?: BrainDTO | null;
+}
+
+export interface BrainDTO {
+  state: "off" | "loading" | "ready" | "error";
+  name: string;
+  from: "page" | "huggingface" | null;
+  device: "webgpu" | "wasm" | null;
+  stage: "download" | "compile" | null;
+  loaded: number;
+  total: number;
+  error: string | null;
+  speed: number;
+  replies: number;
+}
+
+/** A town happening, for the top bar, the map and the feed. */
+export interface HappeningDTO {
+  id: number;
+  kind: HappeningKind;
+  icon: string;
+  title: string;
+  text: string;
+  t: number;
+  until: number;
+  active: boolean;
+  buildingId: string | null;
+  subject: string | null;
+  businessId: string | null;
+  source: "world" | "god" | "llm";
+  /** How many residents have heard about it. */
+  known: number;
+}
+
+/** A piece of news a citizen knows. */
+export interface NewsDTO {
+  id: number;
+  icon: string;
+  title: string;
+  t: number;
+  via: string;
+  stance: number;
 }
 
 /** Overall state for UI panels, ~2x per second. */
@@ -167,6 +224,8 @@ export interface StateMsg {
   txCount: number;
   /** Recently finished conversations (for expanding events in the feed). */
   conversations: ConversationDTO[];
+  /** Town happenings: the ones going on now, then the latest few. */
+  happenings: HappeningDTO[];
   /** Money moving around the map since the last update (floating "+£5"). */
   fx: { x: number; y: number; amount: number }[];
 }
@@ -205,6 +264,9 @@ export interface ConversationDTO {
   lines: { speaker: string; name: string; text: string }[];
   summary: string;
   source: "template" | "llm";
+  topics: string[];
+  /** Still being spoken (lines reveal over time). */
+  live: boolean;
 }
 
 export interface CitizenDetail {
@@ -256,6 +318,8 @@ export interface CitizenDetail {
   /** Lessons from nightly reflection, strongest first. */
   lessons: Reflection[];
   conversations: ConversationDTO[];
+  /** What they've heard about (most recent first). */
+  news: NewsDTO[];
 }
 
 export interface BusinessDetail {
@@ -322,7 +386,8 @@ export type GodCommand =
   | { cmd: "close_business"; businessId: string }
   | { cmd: "boom" }
   | { cmd: "crash" }
-  | { cmd: "hype"; productId: string };
+  | { cmd: "hype"; productId: string }
+  | { cmd: "happening"; kind: HappeningKind; citizenId?: string; businessId?: string };
 
 export type ClientMsg =
   | { type: "speed"; speed: number }
@@ -331,10 +396,25 @@ export type ClientMsg =
   | { type: "dashboard"; open: boolean }
   | { type: "god"; command: GodCommand }
   | { type: "reset"; seed?: number }
-  | { type: "ai"; mode?: "off" | "llm"; budgetUsd?: number; maxCallsPerDay?: number }
+  | {
+      type: "ai";
+      mode?: "off" | "llm";
+      budgetUsd?: number;
+      maxCallsPerDay?: number;
+      /** Free AI: test every service now. */
+      probe?: boolean;
+      /** Free AI: the player's own OpenAI-style endpoint (null clears it). */
+      endpoint?: { url: string; model?: string; key?: string } | null;
+      /** The town's brain (a model running in the page): wake it up or switch it off. */
+      brain?: "load" | "unload";
+    }
   | { type: "save" }
   | { type: "skip"; minutes: number }
   /** Replace the city with a saved one (the JSON from "Download world" / "Copy save"). */
-  | { type: "import"; world: unknown };
+  | { type: "import"; world: unknown }
+  /** Ask Claude to write this conversation from scratch. */
+  | { type: "unscripted"; convId: number }
+  /** Ask Claude to invent something that happens in town. */
+  | { type: "invent"; idea?: string };
 
 export type { ConversationLine };

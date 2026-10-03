@@ -1,6 +1,8 @@
+import { HAPPENING_ICON, isActive } from "./town/happenings";
 import type {
   AIStatusDTO,
   ConversationDTO,
+  HappeningDTO,
   BubbleDTO,
   BusinessDetail,
   BusinessSummary,
@@ -201,8 +203,32 @@ export function state(
     savedAt: opts.savedAt,
     txCount: world.txCount,
     conversations: world.conversationLog.slice(-12).map((x) => conversationDTO(world, x)),
+    happenings: happeningsDTO(world),
     fx: opts.fx,
   };
+}
+
+/** What's going on now, then the most recent others (newest first). */
+export function happeningsDTO(world: WorldState): HappeningDTO[] {
+  const known = (id: number) => world.citizenOrder.reduce((n, cid) => n + (world.citizens[cid].news.some((k) => k.id === id) ? 1 : 0), 0);
+  const list = [...world.happenings].reverse();
+  const active = list.filter((h) => isActive(world, h));
+  const recent = list.filter((h) => !isActive(world, h)).slice(0, Math.max(0, 8 - active.length));
+  return [...active, ...recent].map((h) => ({
+    id: h.id,
+    kind: h.kind,
+    icon: HAPPENING_ICON[h.kind],
+    title: h.title,
+    text: h.text,
+    t: h.t,
+    until: h.until,
+    active: isActive(world, h),
+    buildingId: h.buildingId,
+    subject: h.subject,
+    businessId: h.businessId,
+    source: h.source,
+    known: known(h.id),
+  }));
 }
 
 export function conversationDTO(world: WorldState, c: Conversation): ConversationDTO {
@@ -219,6 +245,8 @@ export function conversationDTO(world: WorldState, c: Conversation): Conversatio
     lines: c.lines.map((l) => ({ speaker: l.speaker, name: name(l.speaker), text: l.text })),
     summary: c.summary,
     source: c.source,
+    topics: c.topics ?? [],
+    live: c.status !== "done",
   };
 }
 
@@ -320,6 +348,12 @@ export function citizenDetail(world: WorldState, id: string): CitizenDetail | nu
     emotions: Object.fromEntries(Object.entries(c.emotions).map(([k, v]) => [k, Math.round(v)])) as Emotions,
     emotion: emotionDTO(c),
     lessons: [...c.reflections].sort((a, b) => b.strength - a.strength),
+    news: [...c.news].reverse().flatMap((k) => {
+      const h = world.happenings.find((x) => x.id === k.id);
+      if (!h) return [];
+      const via = k.via === "saw" ? "saw it" : k.via === "paper" ? "the paper" : k.via === "self" ? "it happened to them" : `heard from ${world.citizens[k.via]?.name ?? "someone"}`;
+      return [{ id: h.id, icon: HAPPENING_ICON[h.kind], title: h.title, t: k.t, via, stance: k.stance }];
+    }),
     conversations: [...world.conversations, ...world.conversationLog]
       .filter((x) => (x.a === c.id || x.b === c.id) && x.lines.length > 0)
       .sort((x, y) => y.startedT - x.startedT)

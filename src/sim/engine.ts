@@ -1,3 +1,4 @@
+import { happeningsHourly } from "./town/happenings";
 import { beginAction, finishActivity, makeAction, startActivity, tickActivity } from "./ai/actions";
 import { updateBeliefsDaily } from "./ai/beliefs";
 import { decideNext } from "./ai/brain";
@@ -116,6 +117,7 @@ function hourly(world: WorldState): void {
   const svc = servicesHourly(world);
   agencyHourly(world);
   encountersHourly(world);
+  happeningsHourly(world);
   world.economy.servicePool = round2(svc.pool);
   world.economy.serviceSupplied = round2(svc.supplied);
   for (const id of world.citizenOrder) updateMood(world, world.citizens[id]);

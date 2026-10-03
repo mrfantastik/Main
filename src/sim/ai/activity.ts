@@ -284,6 +284,6 @@ export function activityOptions(world: WorldState, c: Citizen): ActivityOption[]
   const out = needsOptions(world, c, s);
   for (const p of workProviders.get(c.occupation) ?? []) out.push(...p(world, c, s));
   for (const p of extraProviders) out.push(...p(world, c, s));
-  tiltActivities(c, out);
+  tiltActivities(world, c, out);
   return out;
 }
