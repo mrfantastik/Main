@@ -114,26 +114,61 @@ export function modelFiles(choice: ModelChoice): { name: string; url: string }[]
   }));
 }
 
+/** A downloaded file's text as JSON, even if the browser saved the page around it (a <pre> in an HTML page). */
+function readJson(text: string): Record<string, unknown> | null {
+  let t = text.replace(/^\uFEFF/, "").trim();
+  if (t.startsWith("<")) {
+    const pre = /<pre[^>]*>([\s\S]*?)<\/pre>/i.exec(t);
+    if (!pre) return null;
+    t = pre[1].replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").trim();
+  }
+  try {
+    const v = JSON.parse(t) as unknown;
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Put a model's files, downloaded by hand, together as one model file. Takes
- * config.json, tokenizer.json, tokenizer_config.json and the .onnx file, however
- * the browser named them ("config (1).json" is fine).
+ * config.json, tokenizer.json, tokenizer_config.json and the .onnx file. It
+ * tells them apart by what's in them, so it doesn't matter what the browser
+ * called them ("config (1).json", "tokenizer.json.txt", "download") or whether
+ * it saved a JSON file as a web page.
  */
 export async function packFromFiles(files: File[]): Promise<Blob> {
-  const base = (f: File) => f.name.toLowerCase().replace(/\s*\(\d+\)(?=\.)/, "");
-  const find = (test: (n: string) => boolean) => files.find((f) => test(base(f)));
-  const tokCfg = find((n) => n.startsWith("tokenizer_config") && n.endsWith(".json"));
-  const tok = find((n) => n.startsWith("tokenizer") && !n.startsWith("tokenizer_config") && n.endsWith(".json"));
-  const config = find((n) => n.startsWith("config") && n.endsWith(".json"));
-  const onnx = find((n) => n.endsWith(".onnx"));
+  let onnx: File | undefined;
+  let config: Record<string, unknown> | undefined;
+  let tok: Record<string, unknown> | undefined;
+  let tokCfg: Record<string, unknown> | undefined;
+  const unknown: string[] = [];
+  for (const f of files) {
+    const head = new Uint8Array(await f.slice(0, 16).arrayBuffer());
+    if (/\.onnx$/i.test(f.name) || head[0] === 0x08) {
+      // An ONNX model starts with its IR version (protobuf field 1); a text file never does.
+      onnx = f;
+      continue;
+    }
+    if (new TextDecoder().decode(head).startsWith("bplist")) throw new Error(`${f.name} was saved as a Safari web archive. Save it again with File > Save As and choose "Page Source"`);
+    const j = f.size < 64e6 ? readJson(await f.text()) : null;
+    if (!j) unknown.push(f.name);
+    else if ("added_tokens" in j || (typeof j.model === "object" && j.model !== null && "vocab" in j.model)) tok = j;
+    else if ("model_type" in j || "architectures" in j || "num_hidden_layers" in j) config = j;
+    else if ("tokenizer_class" in j || "chat_template" in j || "added_tokens_decoder" in j || "eos_token" in j) tokCfg = j;
+    else unknown.push(f.name);
+  }
   const missing = [!config && "config.json", !tok && "tokenizer.json", !tokCfg && "tokenizer_config.json", !onnx && "the .onnx model file"].filter(Boolean);
-  if (missing.length) throw new Error(`pick all four of the model's files together (missing: ${missing.join(", ")})`);
-  const cfg = JSON.parse(await config!.text()) as { _name_or_path?: string; model_type?: string };
-  const known = MODEL_CHOICES.find((c) => cfg._name_or_path && c.repo.endsWith(cfg._name_or_path.split("/").pop()!));
-  const name = known?.name ?? (cfg._name_or_path ? cfg._name_or_path.split("/").pop()!.replace(/-/g, " ") : `Your model (${cfg.model_type ?? "unknown"})`);
-  const model = `onnx/${base(onnx!)}`;
+  if (missing.length)
+    throw new Error(`pick all four of the model's files together (missing: ${missing.join(", ")}${unknown.length ? `; couldn't read ${unknown.join(", ")}` : ""})`);
+  const path = String(config!._name_or_path ?? "");
+  const known = MODEL_CHOICES.find((c) => path && c.repo.split("/").pop()!.toLowerCase() === path.split("/").pop()!.toLowerCase());
+  const name = known?.name ?? (path ? path.split("/").pop()!.replace(/-/g, " ") : `Your model (${String(config!.model_type ?? "unknown")})`);
+  const onnxName = /\.onnx$/i.test(onnx!.name) ? onnx!.name.toLowerCase().replace(/\s*\(\d+\)(?=\.)/, "") : "model_q4.onnx";
+  const model = `onnx/${onnxName}`;
+  const bytes = (j: Record<string, unknown>) => new TextEncoder().encode(JSON.stringify(j));
   return makePack(
     { name, model, pastType: /f16|fp16/.test(model) ? "float16" : "float32", ...(known ? { repo: known.repo } : {}) },
-    { "config.json": config!, "tokenizer.json": tok!, "tokenizer_config.json": tokCfg!, [model]: onnx! },
+    { "config.json": bytes(config!), "tokenizer.json": bytes(tok!), "tokenizer_config.json": bytes(tokCfg!), [model]: onnx! },
   );
 }

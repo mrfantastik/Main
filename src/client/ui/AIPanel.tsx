@@ -428,7 +428,10 @@ function ModelChooser({ b, open }: { b: Brain; open: boolean }) {
                 </a>
               ))}
             </div>
-            <span className="muted">Then click 📂 below and pick all four together.</span>
+            <span className="muted">
+              If one opens as text instead of downloading, save that page (Ctrl+S, or ⌘S on a Mac; in Safari choose "Page Source"). Any name is fine.
+              Then click 📂 below and pick all four together.
+            </span>
           </details>
         </div>
       ))}
@@ -444,7 +447,6 @@ function ModelChooser({ b, open }: { b: Brain; open: boolean }) {
         <input
           ref={input}
           type="file"
-          accept=".bin,.json,.onnx"
           multiple
           aria-label="Model file"
           style={{ display: "none" }}
