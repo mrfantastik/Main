@@ -58,6 +58,18 @@ async function writeSave(json: string): Promise<boolean> {
 }
 
 const AI_PREF = "hustle.ai";
+const AI_ENDPOINT = "hustle.ai.endpoint";
+
+type Endpoint = { url: string; model?: string; key?: string };
+
+function savedEndpoint(): Endpoint | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(AI_ENDPOINT) ?? "null") as Endpoint | null;
+    return v && typeof v.url === "string" && v.url ? v : null;
+  } catch {
+    return null;
+  }
+}
 
 /** "?freeai=<url>" points the free AI somewhere else (tests); "?freeai=off" switches it off. */
 function freeAIUrl(): string | null | undefined {
@@ -80,6 +92,7 @@ function aiWanted(): boolean {
 export class LocalHost {
   private runner!: SimRunner;
   private readonly director: AIDirector;
+  private endpoint: Endpoint | null = null;
   private selected: { kind: "citizen" | "business"; id: string } | null = null;
   private dashboardOpen = false;
   private lastEventId = 0;
@@ -90,7 +103,8 @@ export class LocalHost {
 
   constructor(private deliver: (msg: ServerMsg) => void) {
     const url = freeAIUrl();
-    this.director = new AIDirector(url === null ? null : createFreeAIClient({ url }), { total: () => 0, add: () => undefined }, { maxConcurrent: 1, minIntervalMs: 4000, timeoutMs: 45_000 });
+    this.endpoint = url === null ? null : savedEndpoint();
+    this.director = new AIDirector(url === null ? null : createFreeAIClient({ url, custom: this.endpoint }), { total: () => 0, add: () => undefined }, { maxConcurrent: 2, minIntervalMs: 2500, timeoutMs: 45_000 });
     this.director.attach();
   }
 
@@ -117,6 +131,13 @@ export class LocalHost {
     };
     this.sendHello();
     this.runner.start();
+    // Find a free AI service that answers from here (or learn that none can).
+    if (this.director.available && this.world.ai.mode === "llm")
+      void this.director.probe().then((st) => {
+        if (st?.blocked) this.toast("🧠 This page can't reach the internet (pages published on claude.ai can't), so the built-in AI is doing the thinking and talking. Download the game file and open it in your browser to use the free AI. More in the 🧠 AI panel.", "error");
+        else if (st?.connected) this.toast(`🌐 Free AI connected (${st.active}): it's writing thoughts and conversations.`);
+        this.pushState();
+      });
     this.timers.push(setInterval(() => this.deliver(snap.frame(this.world, this.runner.speed, this.runner.paused)), 100));
     this.timers.push(setInterval(() => this.pushState(), 500));
     this.timers.push(setInterval(() => this.dashboardOpen && this.deliver(snap.dashboard(this.world)), 1500));
@@ -157,6 +178,8 @@ export class LocalHost {
       reason: this.director.available ? null : "the free AI is switched off for this page.",
       writer: this.director.writer,
       free: true,
+      connection: this.director.freeStatus(),
+      endpoint: this.endpoint ? { url: this.endpoint.url, model: this.endpoint.model } : null,
     };
   }
 
@@ -223,6 +246,7 @@ export class LocalHost {
         break;
       case "select":
         this.selected = msg.kind && msg.id ? { kind: msg.kind, id: msg.id } : null;
+        this.director.focus = this.selected?.kind === "citizen" ? this.selected.id : null;
         if (this.selected) this.pushDetail();
         else this.deliver({ type: "detail", detail: null });
         break;
@@ -238,6 +262,28 @@ export class LocalHost {
         }
         break;
       case "ai":
+        if (msg.endpoint !== undefined) {
+          this.endpoint = msg.endpoint && msg.endpoint.url ? { url: msg.endpoint.url.trim(), model: msg.endpoint.model?.trim() || undefined, key: msg.endpoint.key?.trim() || undefined } : null;
+          try {
+            if (this.endpoint) localStorage.setItem(AI_ENDPOINT, JSON.stringify(this.endpoint));
+            else localStorage.removeItem(AI_ENDPOINT);
+          } catch {
+            // a private window: it lasts until the page closes
+          }
+          this.director.setCustomEndpoint(this.endpoint);
+          this.toast(this.endpoint ? `🔌 Using your endpoint first: ${this.endpoint.url}` : "🔌 Back to the built-in list of free services.");
+          msg = { type: "ai", probe: true };
+        }
+        if (msg.probe) {
+          this.toast("🌐 Testing the free AI services…");
+          void this.director.probe().then((st) => {
+            if (!st) return;
+            const ok = st.providers.filter((p) => p.state === "ok").map((p) => p.name);
+            this.toast(ok.length ? `🌐 Connected: ${ok.join(", ")}.` : st.blocked ? "Can't reach the internet from this page. Pages published on claude.ai can't; download the game file and open it in your browser." : "No free AI service answered just now. Try again in a minute.", ok.length ? "info" : "error");
+            this.pushState();
+          });
+          break;
+        }
         if (msg.mode === "llm" && !this.director.available) this.toast("The free AI is switched off for this page.", "error");
         else if (msg.mode) {
           w.ai.mode = msg.mode;

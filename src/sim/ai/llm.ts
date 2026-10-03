@@ -195,6 +195,33 @@ export function conversationPrompt(world: WorldState, conv: Conversation, brief:
   return { user, schema };
 }
 
+export const THOUGHT_SYSTEM =
+  "You are the inner voice of a resident of Hustle City, a small British town in a life simulation. " +
+  "Say what they're thinking right now, in the first person, in their own voice: their worries, hopes, plans, grudges and reactions to what's going on. " +
+  "One or two sentences, under 30 words. Plain British English. No quotation marks.";
+
+/** What someone is thinking right now (the free AI writes it; nothing in the world changes). */
+export function thoughtPrompt(world: WorldState, c: Citizen): { user: string; schema: Record<string, unknown> } {
+  const s = situation(world, c);
+  const news = newsKnown(world, c).slice(-2);
+  const mem = [...c.memories.short]
+    .sort((x, y) => y.t - x.t)
+    .slice(0, 3)
+    .map((m) => `- ${m.text}`);
+  const user = [
+    `It's ${formatTime(world.time)}. ${c.name} is ${c.activity.label.toLowerCase()} (${placeName(world, c.insideId)}).`,
+    `Who they are: ${profile(world, c)}`,
+    s.worry ? `On their mind: ${s.worry}` : "",
+    mem.length ? `Lately:\n${mem.join("\n")}` : "",
+    news.length ? `News they've heard:\n${news.join("\n")}` : "",
+    `What the simulation says they're thinking (for reference only, say it your own way or think about something else on their mind): ${c.thought}`,
+    `Reply as JSON: {"thought": "..."}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return { user, schema: { type: "object", properties: { thought: { type: "string" } }, required: ["thought"] } };
+}
+
 export const FREE_CONVERSATION_SYSTEM =
   "You write short, natural, spoken dialogue between two residents of Hustle City, a small British town in a life simulation. " +
   "Every conversation is different: give them real opinions, jokes, questions, little details from their lives, and let their personalities and moods show. " +

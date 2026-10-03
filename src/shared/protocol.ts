@@ -152,6 +152,15 @@ export interface AIStatusDTO {
   writer: string | null;
   /** The writer is a free public AI (no budget; rate limited). */
   free?: boolean;
+  /** Free AI: which services answer, and whether this page can reach the internet at all. */
+  connection?: {
+    connected: boolean;
+    active: string | null;
+    blocked: boolean;
+    providers: { name: string; state: "untried" | "ok" | "busy" | "unreachable" | "error"; note: string }[];
+  } | null;
+  /** Free AI: the player's own endpoint, if set (no key shown). */
+  endpoint?: { url: string; model?: string } | null;
 }
 
 /** A town happening, for the top bar, the map and the feed. */
@@ -372,7 +381,16 @@ export type ClientMsg =
   | { type: "dashboard"; open: boolean }
   | { type: "god"; command: GodCommand }
   | { type: "reset"; seed?: number }
-  | { type: "ai"; mode?: "off" | "llm"; budgetUsd?: number; maxCallsPerDay?: number }
+  | {
+      type: "ai";
+      mode?: "off" | "llm";
+      budgetUsd?: number;
+      maxCallsPerDay?: number;
+      /** Free AI: test every service now. */
+      probe?: boolean;
+      /** Free AI: the player's own OpenAI-style endpoint (null clears it). */
+      endpoint?: { url: string; model?: string; key?: string } | null;
+    }
   | { type: "save" }
   | { type: "skip"; minutes: number }
   /** Replace the city with a saved one (the JSON from "Download world" / "Copy save"). */

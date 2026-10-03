@@ -29,21 +29,27 @@ A ready-made copy is published here: **https://claude.ai/artifact/ApFS3fgxqugFg2
 
 This makes `dist/ai-hustle-city.html`, a single file that runs the whole city inside your browser (no server, nothing to install for whoever opens it). It saves itself in that browser. The free AI writes conversations here too, straight from the page.
 
-### Who writes the conversations
+### Who does the thinking and talking
 
-Citizens *decide* what to do with the built-in **utility AI** (needs, money, personality, memories, relationships). What they *say* to each other is written by a **free public AI**: [Pollinations](https://pollinations.ai)' text API, which needs no account, no key and costs nothing. Every chat, deal, favour and argument is written fresh from who the two people are, how they feel, what they've heard about town and what they remember about each other, so no two conversations are the same.
+Citizens run on the built-in **utility AI** (needs, money, personality, memories, relationships). On top of that, a **free public AI** (no account, no key, no cost) writes:
 
-- **The town still decides what happens.** Who lends what, who gets the job, which news gets passed on: the engine settles it first, and the AI only puts it into words. A smaller model can't break the economy.
-- **It's rate limited.** The game spaces calls out (one every few seconds) and backs off if told to slow down. Whatever the AI can't get to in time, or anything during a skip-ahead, is improvised by the built-in AI from the same beats. AI-written conversations have a gold border and a 🌐 *Free AI* label.
-- **What gets sent:** the made-up townsfolk's names, personalities, feelings, memories and town news, to `text.pollinations.ai` (marked private, so it stays out of their public feed). Nothing about you.
-- **Off switch:** 🧠 **AI** panel → *Built-in AI only*. Or run the server with `AI_PROVIDER=off`.
-- Ask for more: any conversation's **✨ Hear it unscripted** button rewrites it from scratch; **⚡ God Mode → ✨ Let the AI invent one** makes something happen in town.
+- **what they say**: every chat, deal, favour and argument it has room for, written fresh from who the two people are, how they feel, what they've heard and what they remember about each other;
+- **what they're thinking**: the person you're looking at first, then everyone else in turn;
+- **their tough decisions**: close calls with real stakes (careers, businesses, money).
+
+The town still decides what happens (who lends what, who gets the job, which news gets passed on), so a smaller model can't break the economy. Whatever the AI can't get to in time, or anything during a skip-ahead, the built-in AI improvises. AI-written lines have a gold border.
+
+**Which AI:** free services come and go and rate-limit anonymous users, so several are tried in turn and the first that answers is used: [Pollinations](https://pollinations.ai) (OpenAI-style endpoint), [LLM7](https://llm7.io), then Pollinations' plain GET endpoint. If a service rejects the model name, the game asks it for its model list and picks a small chat model. In the **🧠 AI** panel you can see which services answer, test the connection, switch it off, or add **your own endpoint** (any OpenAI-style URL, e.g. a free key from a provider, or Ollama / LM Studio on your own machine). Your endpoint is tried first.
+
+> **Playing on claude.ai?** Pages published there aren't allowed to reach the internet, so no outside AI can be called from them; the game notices, says so, and the built-in AI does all the thinking and talking. Download the game file (`npm run build:standalone` → `dist/ai-hustle-city.html`) and open it in your browser, or run `npm start`, to play with the free AI.
+
+**What gets sent:** the made-up townsfolk's names, personalities, feelings, memories and town news (Pollinations requests are marked private, so they stay out of its public feed). Nothing about you.
 
 | Setting (server) | Default | What it does |
 |---|---|---|
-| `AI_PROVIDER` | `free` | `free`: the free AI. `claude`: Claude with an API key (below). `off`: built-in AI only. |
-| `FREE_AI_URL` | `https://text.pollinations.ai/openai` | Any OpenAI-style chat endpoint that needs no key. |
-| `FREE_AI_INTERVAL_MS` | `4000` | Minimum gap between calls. |
+| `AI_PROVIDER` | `free` | `free`: the free AI services. `claude`: Claude with an API key (below). `off`: built-in AI only. |
+| `FREE_AI_URL` | *(the built-in list)* | Use only this OpenAI-style endpoint. |
+| `FREE_AI_INTERVAL_MS` | `2500` | Minimum gap between calls. |
 
 ### Using Claude instead (optional)
 

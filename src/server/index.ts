@@ -77,12 +77,15 @@ const director =
     ? new AIDirector(null, ledger)
     : FREE
       ? new AIDirector(createFreeAIClient({ model: AI_MODEL, url: process.env.FREE_AI_URL || undefined }), ledger, {
-          maxConcurrent: 1,
-          minIntervalMs: Number(process.env.FREE_AI_INTERVAL_MS ?? 4000),
+          maxConcurrent: 2,
+          minIntervalMs: Number(process.env.FREE_AI_INTERVAL_MS ?? 2500),
           timeoutMs: 45_000,
         })
       : new AIDirector(createClaudeClient(AI_MODEL), ledger);
 director.attach();
+
+/** The player's own free-AI endpoint (set from the AI panel; lasts until restart). */
+let customEndpoint: { url: string; model?: string; key?: string } | null = null;
 
 function configureAI(world: WorldState): void {
   world.ai.model = director.model;
@@ -114,6 +117,8 @@ function aiStatus(world: WorldState): AIStatusDTO {
     reason: director.unavailableReason,
     writer: director.writer,
     free: director.free,
+    connection: director.freeStatus(),
+    endpoint: customEndpoint ? { url: customEndpoint.url, model: customEndpoint.model } : null,
   };
 }
 
@@ -171,6 +176,7 @@ function handle(client: Client, msg: ClientMsg): void {
       break;
     case "select":
       client.selected = msg.kind && msg.id ? { kind: msg.kind, id: msg.id } : null;
+      if (client.selected?.kind === "citizen") director.focus = client.selected.id;
       pushDetail(client);
       break;
     case "dashboard":
@@ -187,6 +193,19 @@ function handle(client: Client, msg: ClientMsg): void {
       break;
     }
     case "ai": {
+      if (msg.endpoint !== undefined) {
+        customEndpoint = msg.endpoint && msg.endpoint.url ? { url: msg.endpoint.url.trim(), model: msg.endpoint.model?.trim() || undefined, key: msg.endpoint.key?.trim() || undefined } : null;
+        director.setCustomEndpoint(customEndpoint);
+      }
+      if (msg.probe || msg.endpoint !== undefined) {
+        void director.probe().then((st) => {
+          if (!st) return;
+          const ok = st.providers.filter((p) => p.state === "ok").map((p) => p.name);
+          send(client.ws, { type: "toast", text: ok.length ? `🌐 Connected: ${ok.join(", ")}.` : "No free AI service answered from the server. Check its internet access, or try again in a minute.", level: ok.length ? "info" : "error" });
+          broadcastState();
+        });
+        break;
+      }
       if (msg.mode) {
         if (msg.mode === "llm" && !director.available) {
           send(client.ws, { type: "toast", text: `The AI isn't available: ${director.unavailableReason ?? "none configured"}`, level: "error" });
@@ -401,6 +420,13 @@ async function main(): Promise<void> {
   server.listen(PORT, () => {
     console.log(`\n  🏙️  AI Hustle City is running:  http://localhost:${PORT}\n`);
   });
+  if (director.free && runner.world.ai.mode === "llm") {
+    void director.probe().then((st) => {
+      if (!st) return;
+      const ok = st.providers.filter((p) => p.state === "ok").map((p) => p.name);
+      console.log(ok.length ? `  🌐 Free AI connected: ${ok.join(", ")}` : `  🌐 No free AI service answered yet (${st.providers.map((p) => `${p.name}: ${p.note || p.state}`).join("; ")}). The built-in AI fills in; it keeps trying.`);
+    });
+  }
 }
 
 main().catch((err) => {

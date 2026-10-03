@@ -5,7 +5,9 @@ import { dayOf } from "../time";
 import type { AILogEntry, Citizen, Conversation, ConvValue, Reflection, WorldState } from "../types";
 import { newId, pushRing, round2 } from "../util";
 import { scoreOf } from "./decision";
-import { CONVERSATION_SYSTEM, conversationPrompt, costUsd, FREE_CONVERSATION_SYSTEM, freeConversationPrompt, REFLECTION_SYSTEM, reflectionPrompt, STRATEGY_SYSTEM, strategyPrompt, type LLMClient } from "./llm";
+import { setThought } from "./decision";
+import type { FreeAIClient, FreeAIStatus } from "./freeai";
+import { CONVERSATION_SYSTEM, conversationPrompt, costUsd, FREE_CONVERSATION_SYSTEM, freeConversationPrompt, REFLECTION_SYSTEM, reflectionPrompt, STRATEGY_SYSTEM, strategyPrompt, THOUGHT_SYSTEM, thoughtPrompt, type LLMClient } from "./llm";
 import { applyStrategy, setStrategyHook, strategyOptions, type StrategyOption } from "./strategy";
 import { cleanLines } from "./lines";
 import { applyInvented, applyUnscripted, INVENT_SCHEMA, INVENT_SYSTEM, inventableKinds, inventPrompt, UNSCRIPTED_SCHEMA, UNSCRIPTED_SYSTEM, unscriptedPrompt } from "./unscripted";
@@ -39,7 +41,7 @@ export interface DirectorOptions {
 
 interface Pending {
   id: number;
-  kind: "strategy" | "conversation" | "reflection" | "unscripted" | "invent";
+  kind: "strategy" | "conversation" | "reflection" | "unscripted" | "invent" | "thought";
   world: WorldState;
   citizenId: string;
   convId?: number;
@@ -73,6 +75,11 @@ export class AIDirector {
   /** The free AI asked us to slow down, or couldn't be reached: no calls until then. */
   private backoffUntil = 0;
   private failures = 0;
+  private toldBlocked = false;
+  /** The citizen the player is looking at: their thoughts come first. */
+  focus: string | null = null;
+  /** Free AI: when the next inner thought may be asked for (real time). */
+  private nextThoughtAt = 0;
   /** Messages for the player (the server shows them as toasts). */
   readonly notices: { text: string; level: "info" | "error" }[] = [];
 
@@ -98,6 +105,28 @@ export class AIDirector {
   /** Who writes the words, as the player sees it (null: nobody). */
   get writer(): string | null {
     return this.available ? (this.client!.label ?? `Claude (${this.model})`) : null;
+  }
+
+  /** The free AI's connection report (null for Claude or no AI). */
+  freeStatus(): FreeAIStatus | null {
+    return this.free ? (this.client as FreeAIClient).status() : null;
+  }
+
+  /** Free AI: try every service now (the "Test connection" button). */
+  async probe(): Promise<FreeAIStatus | null> {
+    if (!this.free) return null;
+    this.backoffUntil = 0;
+    this.failures = 0;
+    const st = await (this.client as FreeAIClient).probe();
+    if (st.connected) this.toldBlocked = false;
+    return st;
+  }
+
+  /** Free AI: the player's own endpoint (any OpenAI-style URL), tried first. */
+  setCustomEndpoint(custom: { url: string; model?: string; key?: string } | null): void {
+    if (this.free) (this.client as FreeAIClient).setCustom(custom);
+    this.backoffUntil = 0;
+    this.failures = 0;
   }
 
   /** Short name for messages ("the free AI", "Claude"). */
@@ -145,8 +174,9 @@ export class AIDirector {
     if (ranked.length < 2) return false;
     const close = scoreOf(ranked[0]) - scoreOf(ranked[1]) < 0.3;
     const stakes = Math.max(ranked[0].payload.stakes, ranked[1].payload.stakes);
-    const recently = world.time - (c.cooldowns.llmStrategy ?? -1e9) < 2 * 1440;
-    if (!close || stakes < 80 || recently || !this.canCall(world)) return false;
+    // Free AI: no bill, so more of the close calls are thought through by it.
+    const recently = world.time - (c.cooldowns.llmStrategy ?? -1e9) < (this.free ? 1440 : 2 * 1440);
+    if (!close || stakes < (this.free ? 40 : 80) || recently || !this.canCall(world)) return false;
     const top = ranked.slice(0, 5);
     if (!top.includes(fallback)) top.push(fallback);
     const { user, schema } = strategyPrompt(world, c, top.map((o) => ({ id: o.id, label: o.label })));
@@ -186,6 +216,45 @@ export class AIDirector {
     const { user, schema } = conversationPrompt(world, conv, brief, outcomeSchema);
     this.send(world, { kind: "conversation", citizenId: conv.a, convId: conv.id }, CONVERSATION_SYSTEM, user, schema);
     return true;
+  }
+
+  // --------------------------------------------------------- thoughts
+
+  /**
+   * Free AI: now and then, ask for what someone is thinking right now. The
+   * person the player is looking at comes first; otherwise whoever's been
+   * longest without one. It's only words: nothing in the world changes.
+   */
+  private maybeThink(world: WorldState): void {
+    if (!this.free || Date.now() < this.nextThoughtAt || !this.canCall(world)) return;
+    const awake = (c: Citizen) => c.activity.kind !== "sleep" && !c.awaitingAI;
+    const since = (c: Citizen) => world.time - (c.cooldowns.llmThought ?? -1e9);
+    const focus = this.focus ? world.citizens[this.focus] : undefined;
+    const c =
+      focus && awake(focus) && since(focus) >= 30
+        ? focus
+        : world.citizenOrder
+            .map((id) => world.citizens[id])
+            .filter((x) => awake(x) && since(x) >= 240)
+            .sort((x, y) => since(y) - since(x))[0];
+    if (!c) return;
+    c.cooldowns.llmThought = world.time;
+    this.nextThoughtAt = Date.now() + 10_000;
+    const { user, schema } = thoughtPrompt(world, c);
+    this.send(world, { kind: "thought", citizenId: c.id }, THOUGHT_SYSTEM, user, schema);
+  }
+
+  private applyThoughtResult(world: WorldState, d: Done): void {
+    const c = world.citizens[d.pending.citizenId];
+    if (!c) return;
+    const raw = (d.json as { thought?: unknown } | null)?.thought;
+    const text = typeof raw === "string" ? raw.replace(/^["“'\s]+|["”'\s]+$/g, "").replace(/\s+/g, " ").trim() : "";
+    if (!text || text.length < 4 || text.length > 240) {
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : "no usable thought — kept the built-in one");
+      return;
+    }
+    setThought(world, c, text, Math.max(3, c.thoughtPriority), "llm");
+    this.log(world, d, "ok", JSON.stringify(d.json), `${c.name}: "${text}"`);
   }
 
   // ------------------------------------------------------ reflections
@@ -294,11 +363,15 @@ export class AIDirector {
     this.failures++;
     const wait = Math.min(120_000, 5_000 * 2 ** (this.failures - 1));
     this.backoffUntil = Date.now() + wait;
-    if (this.failures === 3) {
+    const st = this.freeStatus();
+    if (st?.blocked && !this.toldBlocked) {
+      this.toldBlocked = true;
       this.notices.push({
-        text: status === 0 ? "Can't reach the free AI right now, so the built-in AI is doing the talking. Trying again shortly." : `The free AI is busy (${status}). The built-in AI fills in until it's back.`,
+        text: "Can't reach any free AI service from here, so the built-in AI is doing the thinking and talking. (Pages published on claude.ai aren't allowed to reach the internet: download the game file and open it in your browser, or run it with npm start.)",
         level: "error",
       });
+    } else if (this.failures === 3 && !st?.blocked) {
+      this.notices.push({ text: `The free AI services are busy (${status || "no answer"}). The built-in AI fills in until they're back.`, level: "error" });
     }
   }
 
@@ -317,6 +390,7 @@ export class AIDirector {
         this.done.push({ pending: p, json: null, costUsd: 0, ms: now - p.startedAt, error: "timed out" });
       }
     }
+    this.maybeThink(world);
     const batch = this.done.splice(0);
     for (const d of batch) {
       if (d.pending.world !== world) continue; // world was reset meanwhile
@@ -325,6 +399,7 @@ export class AIDirector {
       else if (d.pending.kind === "reflection") this.applyReflectionResult(world, d);
       else if (d.pending.kind === "unscripted") this.applyUnscriptedResult(world, d);
       else if (d.pending.kind === "invent") this.applyInventResult(world, d);
+      else if (d.pending.kind === "thought") this.applyThoughtResult(world, d);
       else this.applyConversationResult(world, d);
     }
   }

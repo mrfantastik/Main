@@ -116,30 +116,52 @@ export function AIPanel() {
   );
 }
 
-/** The free AI: what it does, whether it's on, how busy it is. */
+/** The free AI: what it does, whether it can connect, and the player's own endpoint. */
 function FreeAIBox({ ai }: { ai: AIStatusDTO }) {
   const on = ai.available && ai.mode === "llm";
+  const conn = ai.connection;
+  const [url, setUrl] = useState(ai.endpoint?.url ?? "");
+  const [model, setModel] = useState(ai.endpoint?.model ?? "");
+  const [key, setKey] = useState("");
+  const STATE: Record<string, [string, string]> = {
+    ok: ["good", "connected"],
+    busy: ["", "busy (rate limited)"],
+    unreachable: ["bad", "can't connect"],
+    error: ["bad", "error"],
+    untried: ["", "not tried yet"],
+  };
   return (
     <div className="box">
-      <h3>Who's talking</h3>
+      <h3>Who's thinking and talking</h3>
       <p style={{ marginTop: 0 }}>
-        Citizens decide what to do with the built-in <b>utility AI</b> (needs, money, personality, memories, relationships). What they{" "}
-        <b>say</b> to each other is written by a <b>free public AI</b>: no account, no key, no cost. Every conversation is written fresh from who
-        they are, how they feel, what they've heard and what they remember about each other.
+        Citizens run on the built-in <b>utility AI</b> (needs, money, personality, memories, relationships). On top of that a <b>free public AI</b>{" "}
+        (no account, no key, no cost) writes their <b>conversations</b>, their <b>thoughts</b> (whoever you're looking at first) and their{" "}
+        <b>tough decisions</b>, from who they are, how they feel, what they've heard and what they remember.
       </p>
       <p>
-        The town still decides what happens (who lends what, what news gets passed on), so the AI can't break the economy, only put it in
-        their own words. It's a smaller model than Claude and it's rate limited: when it can't keep up (or you skip time), the built-in AI
-        improvises the rest. Conversations it wrote have a gold border.
+        The town still decides what happens (who lends what, what news gets passed on), so the AI can't break the economy. Free services are slow
+        and rate limited: whatever they can't get to (or anything during a skip) the built-in AI improvises. AI-written lines have a gold border.
       </p>
+      {conn?.blocked && (
+        <div className="item" style={{ borderColor: "#e5484d", marginBottom: 8 }}>
+          <b>This page can't reach the internet.</b> Pages published on claude.ai aren't allowed to call outside services, so here the built-in AI
+          does all the thinking and talking. To play with the free AI, download the game file (<code>ai-hustle-city.html</code>) and open it in
+          your browser, or run the full version with <code>npm start</code>.
+        </div>
+      )}
       <div className="kv">
         <span className="k">Status</span>
         <span>
-          {on ? <span className="chip llm">🌐 ON</span> : ai.available ? <span className="chip">Paused</span> : <span className="chip bad">Off</span>}{" "}
-          <span className="muted">{ai.writer ?? ai.reason}</span>
+          {!on ? (
+            <span className="chip">{ai.available ? "Paused" : "Off"}</span>
+          ) : conn?.connected ? (
+            <span className="chip good">🌐 Connected · {conn.active}</span>
+          ) : conn?.blocked ? (
+            <span className="chip bad">No internet here</span>
+          ) : (
+            <span className="chip">Connecting…</span>
+          )}
         </span>
-        <span className="k">Model</span>
-        <span>{ai.model}</span>
         <span className="k">Calls</span>
         <span>
           {ai.calls} total · {ai.callsToday} today (game day) · {ai.pending} in flight
@@ -147,14 +169,60 @@ function FreeAIBox({ ai }: { ai: AIStatusDTO }) {
         <span className="k">Cost</span>
         <span>Free</span>
       </div>
+      {conn && (
+        <div className="list" style={{ margin: "8px 0" }}>
+          {conn.providers.map((p) => (
+            <div key={p.name} className="item" style={{ padding: "4px 8px" }}>
+              <span className={`chip ${STATE[p.state]?.[0] ?? ""}`}>{STATE[p.state]?.[1] ?? p.state}</span> <b>{p.name}</b>
+              {p.note && <div className="meta">{p.note}</div>}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="god-row">
         <button className="btn" disabled={!ai.available} onClick={() => store.send({ type: "ai", mode: on ? "off" : "llm" })}>
-          {on ? "⏸ Built-in AI only (nothing leaves the page)" : "▶ Let the free AI write conversations"}
+          {on ? "⏸ Built-in AI only (nothing leaves the page)" : "▶ Use the free AI"}
+        </button>
+        <button className="btn" disabled={!on} onClick={() => store.send({ type: "ai", probe: true })}>
+          🔄 Test connection
         </button>
       </div>
+      <details>
+        <summary style={{ cursor: "pointer" }}>🔌 Use your own free endpoint</summary>
+        <p className="muted" style={{ fontSize: 12 }}>
+          Any OpenAI-style chat endpoint works (for example a free key from a provider, or a model running on your own computer with Ollama or LM
+          Studio: <code>http://localhost:11434/v1/chat/completions</code>). It's tried before the built-in list.
+          {" "}The key is kept only in this browser (or on the server, until it restarts).
+        </p>
+        <div className="god-row">
+          <input aria-label="Endpoint URL" placeholder="https://…/v1/chat/completions" value={url} onChange={(e) => setUrl(e.target.value)} />
+        </div>
+        <div className="god-row">
+          <input aria-label="Model" placeholder="Model (e.g. llama3.2)" value={model} onChange={(e) => setModel(e.target.value)} />
+          <input aria-label="Key (optional)" placeholder="Key (optional)" type="password" value={key} onChange={(e) => setKey(e.target.value)} />
+        </div>
+        <div className="god-row">
+          <button className="btn" disabled={!url.trim()} onClick={() => store.send({ type: "ai", endpoint: { url: url.trim(), model: model.trim() || undefined, key: key.trim() || undefined } })}>
+            Use it
+          </button>
+          {ai.endpoint && (
+            <button
+              className="btn"
+              onClick={() => {
+                setUrl("");
+                setModel("");
+                setKey("");
+                store.send({ type: "ai", endpoint: null });
+              }}
+            >
+              Forget it
+            </button>
+          )}
+        </div>
+      </details>
       <p className="muted" style={{ fontSize: 11 }}>
-        Conversations are sent to text.pollinations.ai (names and details of the made-up townsfolk only). Running the server with
-        AI_PROVIDER=claude and an API key uses Claude instead.
+        Services tried in turn: Pollinations, LLM7, Pollinations (simple). What's sent: the made-up townsfolk's names, personalities, feelings,
+        memories and town news. Running the server with AI_PROVIDER=claude and an API key uses Claude instead.
       </p>
     </div>
   );
