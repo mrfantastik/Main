@@ -1,46 +1,17 @@
-import { MS_PER_GAME_MINUTE, type BubbleDTO, type FrameMsg } from "../../shared/protocol";
-import type { ActivityKind, Building, CityMap } from "../../sim/types";
+import type { BubbleDTO } from "../../shared/protocol";
+import type { Building, CityMap } from "../../sim/types";
 import { store } from "../net/store";
 import { Camera, TILE } from "./camera";
 import { drawCityLayer, lampPositions } from "./cityLayer";
+import { FrameInterpolator } from "./interpolation";
+import { ACTIVITY_ICON, KIND_COLORS, darkness, drawBubble, drawLabel, drawMoneyPopup, moneyText } from "./overlay";
+import type { CityRenderer, Pos } from "./types";
 
 // Draws the live city every animation frame. Citizen positions are
 // interpolated between server frames using *game time*, so motion is smooth
 // at every simulation speed.
 
-const ACTIVITY_ICON: Partial<Record<ActivityKind, string>> = {
-  sleep: "💤",
-  work: "💼",
-  eat: "🍽️",
-  shop: "🛍️",
-  socialize: "🍻",
-  talk: "💬",
-  rest: "🌿",
-  bank: "🏦",
-  browse: "🔎",
-  trade: "📈",
-  research: "🔬",
-  restock: "📦",
-  job_hunt: "📄",
-  manage: "🧾",
-  meet: "🤝",
-};
-
-const KIND_COLORS: Record<string, string> = {
-  shop: "#f59e2c",
-  stall: "#2fbf71",
-  cafe: "#e5484d",
-  agency: "#a46cf5",
-};
-
-interface Pos {
-  x: number;
-  y: number;
-  kind: ActivityKind;
-  inside: string | null;
-}
-
-export class Renderer {
+export class Renderer implements CityRenderer {
   cam = new Camera();
   private ctx: CanvasRenderingContext2D;
   private city: HTMLCanvasElement | null = null;
@@ -48,9 +19,8 @@ export class Renderer {
   private lamps: { x: number; y: number }[] = [];
   private buildingIndex = new Map<string, Building>();
   private light: HTMLCanvasElement = document.createElement("canvas");
-  private clientT = 0;
-  private lastNow = performance.now();
-  private positions = new Map<string, Pos>();
+  private interp = new FrameInterpolator();
+  private positions: Map<string, Pos> = this.interp.positions;
   private dragging: { x: number; y: number; camX: number; camY: number; moved: boolean } | null = null;
   private hover: string | null = null;
   private raf = 0;
@@ -81,6 +51,7 @@ export class Renderer {
 
   stop() {
     cancelAnimationFrame(this.raf);
+    window.removeEventListener("keydown", this.onKey);
   }
 
   // ------------------------------------------------------------ input
@@ -119,17 +90,19 @@ export class Renderer {
         this.click(e.clientX - r.left, e.clientY - r.top);
       }
     });
-    window.addEventListener("keydown", (e) => {
-      if ((e.target as HTMLElement)?.tagName === "INPUT" || (e.target as HTMLElement)?.tagName === "SELECT") return;
-      const step = 40 / this.cam.scale;
-      if (e.key === "ArrowLeft" || e.key === "a") this.cam.x -= step;
-      if (e.key === "ArrowRight" || e.key === "d") this.cam.x += step;
-      if (e.key === "ArrowUp" || e.key === "w") this.cam.y -= step;
-      if (e.key === "ArrowDown" || e.key === "s") this.cam.y += step;
-      if (e.key === "+" || e.key === "=") this.cam.zoomAt(this.cam.width / 2, this.cam.height / 2, 1.2);
-      if (e.key === "-") this.cam.zoomAt(this.cam.width / 2, this.cam.height / 2, 1 / 1.2);
-    });
+    window.addEventListener("keydown", this.onKey);
   }
+
+  private onKey = (e: KeyboardEvent) => {
+    if ((e.target as HTMLElement)?.tagName === "INPUT" || (e.target as HTMLElement)?.tagName === "SELECT") return;
+    const step = 40 / this.cam.scale;
+    if (e.key === "ArrowLeft" || e.key === "a") this.cam.x -= step;
+    if (e.key === "ArrowRight" || e.key === "d") this.cam.x += step;
+    if (e.key === "ArrowUp" || e.key === "w") this.cam.y -= step;
+    if (e.key === "ArrowDown" || e.key === "s") this.cam.y += step;
+    if (e.key === "+" || e.key === "=") this.cam.zoomAt(this.cam.width / 2, this.cam.height / 2, 1.2);
+    if (e.key === "-") this.cam.zoomAt(this.cam.width / 2, this.cam.height / 2, 1 / 1.2);
+  };
 
   private citizenAt(sx: number, sy: number): string | null {
     let best: string | null = null;
@@ -179,49 +152,34 @@ export class Renderer {
     return this.positions.get(id);
   }
 
-  // ------------------------------------------------------- interpolation
-
-  private updatePositions(now: number) {
-    const frames = store.frames;
-    if (frames.length === 0) return;
-    const latest = frames[frames.length - 1];
-    const rate = latest.paused ? 0 : latest.speed / MS_PER_GAME_MINUTE; // game minutes per ms
-    const dt = Math.min(100, now - this.lastNow);
-    this.lastNow = now;
-    const target = latest.t + Math.min((now - store.lastFrameAt) * rate, rate * 250);
-    if (Math.abs(target - this.clientT) > 30 + rate * 1000) this.clientT = target;
-    else this.clientT += dt * rate + (target - this.clientT) * 0.08;
-    const delay = latest.paused ? 0 : rate * 160 + 1;
-    const rt = Math.min(this.clientT - delay, latest.t);
-
-    let a: FrameMsg = frames[0];
-    let b: FrameMsg | null = null;
-    for (let i = 0; i < frames.length; i++) {
-      if (frames[i].t <= rt) a = frames[i];
-      else {
-        b = frames[i];
-        break;
-      }
-    }
-    const f = b && b.t > a.t ? Math.min(1, Math.max(0, (rt - a.t) / (b.t - a.t))) : 0;
-    const bMap = new Map<string, FrameMsg["c"][number]>();
-    if (b) for (const row of b.c) bMap.set(row[0], row);
-    this.positions.clear();
-    for (const row of a.c) {
-      const nb = bMap.get(row[0]);
-      const jump = nb ? Math.hypot(nb[1] - row[1], nb[2] - row[2]) : 0;
-      const useNext = nb && jump < 40;
-      this.positions.set(row[0], {
-        x: useNext ? row[1] + (nb![1] - row[1]) * f : row[1],
-        y: useNext ? row[2] + (nb![2] - row[2]) * f : row[2],
-        kind: f > 0.5 && nb ? nb[3] : row[3],
-        inside: f > 0.5 && nb ? nb[4] : row[4],
-      });
-    }
+  get gameTime(): number {
+    return this.interp.gameTime;
   }
 
-  get gameTime(): number {
-    return this.clientT;
+  worldToScreen(x: number, y: number): { x: number; y: number } {
+    return this.cam.worldToScreen(x, y);
+  }
+
+  fitView(): void {
+    if (this.map) this.cam.fit(this.map.width, this.map.height);
+  }
+
+  citizenToScreen(id: string): { x: number; y: number } | null {
+    const p = this.positions.get(id);
+    return p ? this.cam.worldToScreen(p.x, p.y) : null;
+  }
+
+  buildingToScreen(id: string): { x: number; y: number } | null {
+    const b = this.buildingIndex.get(id);
+    return b ? this.cam.worldToScreen(b.x + b.w / 2, b.y + b.h / 2) : null;
+  }
+
+  get zoom(): number {
+    return this.cam.scale;
+  }
+
+  get center(): { x: number; y: number } {
+    return { x: this.cam.x, y: this.cam.y };
   }
 
   // ------------------------------------------------------------- drawing
@@ -253,7 +211,7 @@ export class Renderer {
     ctx.fillStyle = "#1b2430";
     ctx.fillRect(0, 0, this.cam.width, this.cam.height);
     if (!this.city || !this.map) return;
-    this.updatePositions(now);
+    this.interp.update(now);
 
     const sel = store.s.selection;
     if (store.s.followSelected && sel?.kind === "citizen") {
@@ -284,28 +242,19 @@ export class Renderer {
     if (st && st.fx !== this.lastFx) {
       this.lastFx = st.fx;
       for (const f of st.fx.slice(0, 12)) {
-        this.popups.push({ x: f.x + (Math.random() - 0.5) * 0.8, y: f.y, text: `+£${f.amount >= 100 ? Math.round(f.amount) : f.amount.toFixed(f.amount % 1 ? 2 : 0)}`, born: now + Math.random() * 400 });
+        this.popups.push({ x: f.x + (Math.random() - 0.5) * 0.8, y: f.y, text: moneyText(f.amount), born: now + Math.random() * 400 });
       }
       if (this.popups.length > 60) this.popups.splice(0, this.popups.length - 60);
     }
     const life = 1600;
     this.popups = this.popups.filter((p) => now - p.born < life);
     if (this.cam.scale < 12) return;
-    ctx.font = "bold 12px Inter, system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
     for (const p of this.popups) {
       const age = (now - p.born) / life;
       if (age < 0) continue;
       const s = this.cam.worldToScreen(p.x, p.y);
-      const y = s.y - 10 - age * 30;
-      ctx.globalAlpha = Math.max(0, 1 - age);
-      ctx.fillStyle = "rgba(10,20,15,0.6)";
-      ctx.fillText(p.text, s.x + 1, y + 1);
-      ctx.fillStyle = "#5ee08f";
-      ctx.fillText(p.text, s.x, y);
+      drawMoneyPopup(ctx, p.text, s.x, s.y, age);
     }
-    ctx.globalAlpha = 1;
   }
 
   private drawBusinesses(ctx: CanvasRenderingContext2D) {
@@ -435,42 +384,13 @@ export class Renderer {
         }
       }
       if (isSel || this.hover === id || s > 44) {
-        this.label(ctx, m.name, sp.x, sp.y + r + 3, isSel ? "#fff" : "rgba(255,255,255,0.9)");
+        drawLabel(ctx, m.name, sp.x, sp.y + r + 3, isSel ? "#fff" : "rgba(255,255,255,0.9)");
       }
     }
   }
 
-  private label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, color: string, maxWidth = Infinity) {
-    ctx.font = "600 11px Inter, system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    // Keep names inside their building so neighbours' labels don't collide.
-    if (ctx.measureText(text).width + 8 > maxWidth) {
-      if (maxWidth < 34) return;
-      let t = text;
-      while (t.length > 1 && ctx.measureText(`${t}…`).width + 8 > maxWidth) t = t.slice(0, -1);
-      text = `${t.trimEnd()}…`;
-    }
-    const w = ctx.measureText(text).width + 8;
-    ctx.fillStyle = "rgba(15,20,30,0.72)";
-    ctx.beginPath();
-    ctx.roundRect(x - w / 2, y, w, 15, 4);
-    ctx.fill();
-    ctx.fillStyle = color;
-    ctx.fillText(text, x, y + 2);
-  }
-
-  private darkness(): number {
-    const h = (((this.clientT % 1440) + 1440) % 1440) / 60;
-    if (h < 5) return 0.62;
-    if (h < 7.5) return 0.62 * (7.5 - h) / 2.5;
-    if (h < 18) return 0;
-    if (h < 21) return (0.62 * (h - 18)) / 3;
-    return 0.62;
-  }
-
   private drawNight(ctx: CanvasRenderingContext2D) {
-    const dark = this.darkness();
+    const dark = darkness(this.interp.gameTime);
     if (dark <= 0.01 || !this.map) return;
     const dpr = window.devicePixelRatio || 1;
     const lc = this.light.getContext("2d")!;
@@ -540,7 +460,7 @@ export class Renderer {
       }
       if (!name) continue;
       const p = this.cam.worldToScreen(b.x + b.w / 2, b.y);
-      this.label(ctx, name, p.x, p.y - 17, "#ffe9b0", (b.w + 1.6) * this.cam.scale);
+      drawLabel(ctx, name, p.x, p.y - 17, "#ffe9b0", (b.w + 1.6) * this.cam.scale);
     }
   }
 
@@ -556,46 +476,7 @@ export class Renderer {
     if (!p) return;
     const sp = this.cam.worldToScreen(p.x, p.y);
     if (sp.x < -100 || sp.y < -100 || sp.x > this.cam.width + 100 || sp.y > this.cam.height + 100) return;
-    ctx.font = "12px Inter, system-ui, sans-serif";
-    const maxW = 190;
-    const words = bub.text.split(" ");
-    const lines: string[] = [];
-    let cur = "";
-    for (const w of words) {
-      const next = cur ? `${cur} ${w}` : w;
-      if (ctx.measureText(next).width > maxW && cur) {
-        lines.push(cur);
-        cur = w;
-      } else cur = next;
-    }
-    if (cur) lines.push(cur);
-    const shown = lines.slice(0, 4);
-    if (lines.length > 4) shown[3] = `${shown[3].slice(0, 24)}…`;
-    const w = Math.min(maxW, Math.max(...shown.map((l) => ctx.measureText(l).width))) + 16;
-    const h = shown.length * 15 + 10;
-    let x = sp.x - w / 2;
-    let y = sp.y - h - 16;
-    for (const q of placed) {
-      if (Math.abs(q.x - x) < w && Math.abs(q.y - y) < h) y = q.y - h - 6;
-    }
-    placed.push({ x, y });
-    x = Math.max(4, Math.min(this.cam.width - w - 4, x));
-    ctx.fillStyle = bub.source === "llm" ? "rgba(255,248,225,0.97)" : "rgba(255,255,255,0.95)";
-    ctx.strokeStyle = bub.source === "llm" ? "#d4a017" : "rgba(30,30,40,0.5)";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.roundRect(x, y, w, h, 8);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(sp.x - 5, y + h);
-    ctx.lineTo(sp.x, y + h + 8);
-    ctx.lineTo(sp.x + 5, y + h);
-    ctx.fill();
-    ctx.fillStyle = "#1a1f2b";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    shown.forEach((l, i) => ctx.fillText(l, x + 8, y + 6 + i * 15));
+    drawBubble(ctx, bub, sp.x, sp.y, this.cam.width, placed);
   }
 }
 

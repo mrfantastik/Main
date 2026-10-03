@@ -54,7 +54,9 @@ In practice the city makes **~2–3 Claude calls per game day** (≈ $0.03/day w
 
 | | |
 |---|---|
-| **Pan / zoom** | Drag the map / mouse wheel (or WASD + `+`/`-`) |
+| **3D / 2D** | Switch views top-right of the map (3D is the default; your choice is remembered) |
+| **Pan / zoom / rotate** | Drag the map / mouse wheel or pinch (or WASD + `+`/`-`); in 3D, `Q`/`E` or ⟲ ⟳ turn the view 90° |
+| **🎬 Director** | (3D) the camera glides to deals, conversations, new businesses and big money moments on its own |
 | **Inspect a citizen** | Click them on the map or in the list. Tabs: Overview, 🧠 Mind (why they did things), Social (relationships, memories, conversations), Money |
 | **Inspect a business** | Click a shop |
 | **Speed** | ⏸ 1× 5× 20× 50× (1× = one game hour every 15 s) |
@@ -68,7 +70,7 @@ In practice the city makes **~2–3 Claude calls per game day** (≈ $0.03/day w
 
 ## What's simulated
 
-- **City**: houses, shops, marketplace, CityCorp offices, cowork hub, bank & exchange, pub, diner, park, research lab, wholesale depot. Day/night cycle. Citizens walk the roads.
+- **City**: houses, shops, marketplace, CityCorp offices, cowork hub, bank & exchange, pub, diner, park, research lab, wholesale depot. Day/night cycle. Citizens walk the roads. Shown as a retro low-poly 3D town (three.js, rendered at ~400 px tall and scaled up pixel-sharp) or as the original flat 2D map.
 - **Citizens**: name, age, personality (ambitious, risk-taking, conservative, lazy, friendly, competitive, entrepreneurial, greedy, generous, frugal, curious), skills that improve with practice, needs (energy, hunger, social, fun), mood, money, savings, credit score, inventory, home, goal, thoughts.
 - **Jobs**: employee (CityCorp or citizen businesses), freelancer, shopkeeper, reseller, trader, entrepreneur, researcher, unemployed — each behaves differently.
 - **Economy** (all virtual £): wholesale market with volatility and demand shocks, a marketplace with listings and clearance lots, shops/stalls/cafés/agencies competing on price, reputation and staffing, rent, wages, owner draws, dividends, bank savings & loans, peer loans, equity investments, bankruptcies, evictions, inventions with royalties.
@@ -130,7 +132,9 @@ src/
   server/              Node server: runs the sim, WebSocket streaming, persistence
     persistence/       SQLite store (node:sqlite) with JSON-file fallback
     anthropic.ts       Claude client (structured JSON output)
-  client/              Browser: React panels + canvas renderer
+  client/              Browser: React panels + city views
+    render/            2D canvas view, shared interpolation and overlay text
+    render3d/          Low-poly 3D view (merged static city, instanced citizens)
     net/local.ts       Standalone build: runs the sim in the browser (same messages as the server)
   shared/protocol.ts   Messages between server and browser
 scripts/               Headless runner, diagnostics, soak test, standalone packer
