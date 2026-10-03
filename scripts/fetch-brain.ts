@@ -1,8 +1,10 @@
 // Downloads a small open-source model from Hugging Face into models/brain for
-// scripts/build-brain.ts to package with the standalone game.
+// scripts/build-brain.ts and scripts/three.ts to package with the game (the
+// three-file game gets it as hustle-model.bin).
 //
 //   npm run fetch-brain                                   (SmolLM2 135M Instruct, 4-bit: fits a published page)
 //   npm run fetch-brain -- --model HuggingFaceTB/SmolLM2-360M-Instruct --file onnx/model_q4f16.onnx --past float16
+//   npm run fetch-brain -- --model onnx-community/Qwen2.5-1.5B-Instruct --name "Qwen2.5 1.5B Instruct"
 //
 // A page published on claude.ai can carry about 256 MB in all, so the model
 // (plus a 27 MB runtime) has to fit in that.
@@ -33,5 +35,5 @@ for (const f of ["config.json", "tokenizer.json", "tokenizer_config.json", file]
   await pipeline(Readable.fromWeb(res.body as never), createWriteStream(path.join(out, f)));
   console.log("done");
 }
-writeFileSync(path.join(out, "brain.json"), JSON.stringify({ name, model: file, pastType: past, source: `https://huggingface.co/${model}` }, null, 1));
-console.log(`  🧠 models/brain: ${name} (${file}). Now: npm run build:standalone`);
+writeFileSync(path.join(out, "brain.json"), JSON.stringify({ name, model: file, pastType: past, repo: model, source: `https://huggingface.co/${model}` }, null, 1));
+console.log(`  🧠 models/brain: ${name} (${file}). Now: npm run build:standalone (or build:three)`);

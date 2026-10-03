@@ -104,6 +104,11 @@ class Store {
     return this.local?.exportJson() ?? null;
   }
 
+  /** Standalone build only: the player's model file for the town's brain. */
+  brainFile(file: Blob): void {
+    this.local?.loadBrainFile(file);
+  }
+
   /** Standalone build only: save straight away (e.g. before the page is replaced). */
   saveNow(): void {
     void this.local?.save();

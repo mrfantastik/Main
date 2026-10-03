@@ -154,14 +154,19 @@ export class LocalHost {
     this.sendHello();
     this.runner.start();
     if (this.brain) {
-      // Woken before: wake it again (the download is cached by the browser).
-      let auto = false;
+      // With a model here (kept in this browser, or published with the page) it wakes by itself,
+      // unless the player put it to sleep last time.
+      const b = this.brain;
+      let pref: string | null = null;
       try {
-        auto = localStorage.getItem(BRAIN_PREF) === "on";
+        pref = localStorage.getItem(BRAIN_PREF);
       } catch {
-        auto = false;
+        pref = null;
       }
-      if (auto && this.world.ai.mode === "llm") this.wakeBrain();
+      void b.refresh().then(() => {
+        if (this.world.ai.mode === "llm" && pref !== "off" && !b.status.needsModel) this.wakeBrain();
+        this.pushState();
+      });
     } else if (this.director.available && this.world.ai.mode === "llm")
       // Find a free AI service that answers from here (or learn that none can).
       void this.director.probe().then((st) => {
@@ -188,7 +193,8 @@ export class LocalHost {
     return w;
   }
 
-  private wakeBrain(): void {
+  /** Wake the brain: with the model file given, or the one it already has (or ask for one). `run` downloads one instead. */
+  private wakeBrain(given?: Blob, run?: (b: BrainClient) => Promise<void>): void {
     const b = this.brain;
     if (!b || b.status.state === "loading" || b.status.state === "ready") return;
     try {
@@ -196,18 +202,28 @@ export class LocalHost {
     } catch {
       // a private window: it'll ask again next time
     }
-    this.toast("🧠 Waking the town's brain: an open-source AI that runs on your computer. The first time it downloads (about once); after that it starts from your browser's cache.");
-    b.load().then(
+    if (this.world.ai.mode !== "llm") this.world.ai.mode = "llm";
+    (run ? run(b) : b.load("auto", given)).then(
       () => {
         const s = b.status;
-        this.toast(`🧠 The town's brain is awake (${s.name}, ${s.device === "webgpu" ? "on your graphics card" : "on your processor"}). People are thinking and talking for themselves now.`);
+        if (s.needsModel) this.toast("🧠 The town's brain needs a model first. Choose one in the 🧠 AI panel (free, downloaded once), or load your hustle-model.bin.");
+        else if (s.state === "ready") this.toast(`🧠 The town's brain is awake (${s.name}, ${s.device === "webgpu" ? "on your graphics card" : "on your processor"}). Every citizen is thinking, planning and talking for themselves now.`);
         this.pushState();
       },
       (err: Error) => {
-        this.toast(`🧠 The brain couldn't start here: ${err.message}. The built-in AI carries on.`, "error");
+        this.toast(`🧠 The brain couldn't start: ${err.message}. The built-in AI carries on.`, "error");
         this.pushState();
       },
     );
+    this.pushState();
+  }
+
+  /** The player's model file (hustle-model.bin), picked from disk. */
+  loadBrainFile(file: Blob): void {
+    if (!this.brain) return;
+    if (this.brain.status.state === "ready") this.brain.unload();
+    this.toast("🧠 Loading your model file…");
+    this.wakeBrain(file);
   }
 
   private configureAI(world: WorldState): void {
@@ -319,9 +335,21 @@ export class LocalHost {
         break;
       case "ai":
         if (msg.brain === "load") {
-          if (w.ai.mode !== "llm") w.ai.mode = "llm";
           this.wakeBrain();
           this.pushState();
+          break;
+        }
+        if (msg.brain === "get" && msg.model) {
+          const id = msg.model;
+          this.toast("🧠 Downloading the model from Hugging Face (free, just this once). It'll be saved as hustle-model.bin in your downloads, and kept in this browser.");
+          this.wakeBrain(undefined, (b) => b.getModel(id));
+          break;
+        }
+        if (msg.brain === "forget") {
+          void this.brain?.forget().then(() => {
+            this.toast("🧠 Forgotten. Load your hustle-model.bin again any time.");
+            this.pushState();
+          });
           break;
         }
         if (msg.brain === "unload") {

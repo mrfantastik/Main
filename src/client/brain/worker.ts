@@ -9,6 +9,7 @@
 
 import * as ort from "onnxruntime-web/webgpu";
 import { Tokenizer } from "@huggingface/tokenizers";
+import { openPack } from "./pack";
 import type { BrainEvent, BrainRequest, BrainSource, GenerateOptions } from "./protocol";
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -117,22 +118,30 @@ async function pickDevice(want: "auto" | "webgpu" | "wasm"): Promise<"webgpu" | 
 async function load(src: BrainSource, want: "auto" | "webgpu" | "wasm"): Promise<void> {
   const t0 = performance.now();
   const progress = { loaded: 0, total: src.bytes };
-  const [wasmParts, config, tokJson, tokCfg] = await Promise.all([
-    Promise.all(src.wasm.map((w) => fetchBytes(src, w, progress))),
-    fetchJson(src, "config.json", progress),
-    fetchJson(src, "tokenizer.json", progress),
-    fetchJson(src, "tokenizer_config.json", progress),
-  ]);
-  // The model file; if it isn't there (404), the next best one.
+  const json = (b: Uint8Array) => JSON.parse(new TextDecoder().decode(b)) as Record<string, unknown>;
+  const wasmParts = src.wasmBinary ? [new Uint8Array(src.wasmBinary)] : await Promise.all(src.wasm.map((w) => fetchBytes(src, w, progress)));
+  let config: Record<string, unknown>;
+  let tokJson: Record<string, unknown>;
+  let tokCfg: Record<string, unknown>;
   let modelBytes: Uint8Array | null = null;
   pastType = src.pastType;
-  for (const m of [{ model: src.model, pastType: src.pastType }, ...(src.fallbacks ?? [])]) {
-    try {
-      modelBytes = await fetchBytes(src, m.model, progress);
-      pastType = m.pastType;
-      break;
-    } catch (err) {
-      if ((err as { status?: number }).status !== 404) throw err;
+  if (src.pack) {
+    // The model file, already here: everything's inside it.
+    const p = await openPack(src.pack);
+    [config, tokJson, tokCfg] = (await Promise.all(["config.json", "tokenizer.json", "tokenizer_config.json"].map((f) => p.file(f)))).map(json);
+    modelBytes = await p.file(p.meta.model);
+    pastType = p.meta.pastType;
+  } else {
+    [config, tokJson, tokCfg] = await Promise.all([fetchJson(src, "config.json", progress), fetchJson(src, "tokenizer.json", progress), fetchJson(src, "tokenizer_config.json", progress)]);
+    // The model file; if it isn't there (404), the next best one.
+    for (const m of [{ model: src.model, pastType: src.pastType }, ...(src.fallbacks ?? [])]) {
+      try {
+        modelBytes = await fetchBytes(src, m.model, progress);
+        pastType = m.pastType;
+        break;
+      } catch (err) {
+        if ((err as { status?: number }).status !== 404) throw err;
+      }
     }
   }
   if (!modelBytes) throw new Error("the model file isn't where it should be");

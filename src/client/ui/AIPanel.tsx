@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { MODEL_CHOICES } from "../brain/models";
 import type { AIStatusDTO } from "../../shared/protocol";
 import { store, useStore } from "../net/store";
 import { aiName, when } from "./format";
@@ -235,23 +236,23 @@ export function BrainBox({ ai }: { ai: AIStatusDTO }) {
   const b = ai.brain!;
   const on = ai.mode === "llm";
   const pct = b.total ? Math.min(100, Math.round((b.loaded / b.total) * 100)) : 0;
+  const busy = b.state === "loading" || b.state === "ready";
   return (
     <div className="box">
       <h3>The town's brain</h3>
       <p style={{ marginTop: 0 }}>
-        An open-source AI (<b>SmolLM2</b> by Hugging Face, free under the Apache 2.0 licence) that runs <b>here, on your computer</b>: on your graphics
-        card if your browser has WebGPU, otherwise on your processor. Nothing is sent anywhere and nothing costs anything. Once it's awake, every
-        citizen is an AI agent run by it, all the time: each morning it writes their <b>plan for the day</b>, it <b>chooses what they do next</b>{" "}
-        (including going to see a friend), decides their <b>tough calls</b> (jobs, money, businesses), writes what they <b>say</b> and{" "}
-        <b>think</b>, and each night their <b>diary</b>, which it reads back the next day. All from who they are, how they feel, what they've heard
-        and what they remember. Whoever you're looking at comes first.
+        A free, open-source AI that runs <b>here, on your computer</b>: on your graphics card if your browser has WebGPU, otherwise on your
+        processor. Nothing is sent anywhere and nothing costs anything. Once it's awake, every citizen is an AI agent run by it, all the time: each
+        morning it writes their <b>plan for the day</b>, it <b>chooses what they do next</b> (including going to see a friend), decides their{" "}
+        <b>tough calls</b> (jobs, money, businesses), writes what they <b>say</b> and <b>think</b>, and each night their <b>diary</b>, which it reads
+        back the next day. All from who they are, how they feel, what they've heard and what they remember. Whoever you're looking at comes first.
       </p>
       <p>
         The town keeps the rules: it only offers choices a person can actually make, and it settles who lends what and what news gets passed on, so
-        the brain can't break the economy. It's a small model doing one thing at a time, so it can't get to everyone at once: whoever it misses (and
-        everyone during a skip) is looked after by the built-in AI. Its lines have a gold border, and its decisions are marked 🧠 in each person's
-        panel.
+        the brain can't break the economy. Whoever it can't get to (and everyone during a skip) is looked after by the built-in AI. Its lines have a
+        gold border, and its decisions are marked 🧠 in each person's panel.
       </p>
+      <ThreeFiles b={b} />
       <div className="kv">
         <span className="k">Status</span>
         <span>
@@ -261,19 +262,30 @@ export function BrainBox({ ai }: { ai: AIStatusDTO }) {
             <span className="chip">{b.stage === "compile" ? "Starting up…" : `Downloading ${pct}%`}</span>
           ) : b.state === "error" ? (
             <span className="chip bad">Couldn't start</span>
+          ) : b.needsModel ? (
+            <span className="chip bad">Needs a model</span>
           ) : (
             <span className="chip">Asleep</span>
           )}
         </span>
-        {b.name && (
+        {b.name && busy && (
           <>
             <span className="k">Model</span>
             <span>
-              {b.name} {b.from === "page" ? "(comes with this page)" : b.from === "huggingface" ? "(from Hugging Face)" : ""}
+              {b.name}{" "}
+              {b.from === "page" ? "(comes with this page)" : b.from === "huggingface" ? "(downloading from Hugging Face)" : b.from === "file" ? "(your model file)" : ""}
             </span>
           </>
         )}
-        {b.state === "loading" && b.total > 0 && (
+        {b.stored && (
+          <>
+            <span className="k">Kept here</span>
+            <span>
+              {b.stored} <span className="muted">(in this browser, so it wakes by itself)</span>
+            </span>
+          </>
+        )}
+        {b.state === "loading" && b.stage === "download" && b.total > 0 && (
           <>
             <span className="k">Download</span>
             <span>
@@ -318,14 +330,17 @@ export function BrainBox({ ai }: { ai: AIStatusDTO }) {
         </div>
       )}
       <div className="god-row">
-        {b.state === "ready" || b.state === "loading" ? (
+        {busy ? (
           <button className="btn" onClick={() => store.send({ type: "ai", brain: "unload" })}>
             😴 Let it sleep (built-in AI only)
           </button>
         ) : (
-          <button className="btn unscripted" onClick={() => store.send({ type: "ai", brain: "load" })}>
-            🧠 Wake the town's brain{b.total ? ` (${mb(b.total)} download, once)` : ""}
-          </button>
+          !b.needsModel &&
+          b.engine && (
+            <button className="btn unscripted" onClick={() => store.send({ type: "ai", brain: "load" })}>
+              🧠 Wake the town's brain
+            </button>
+          )
         )}
         {b.state === "ready" && (
           <button className="btn" onClick={() => store.send({ type: "ai", mode: on ? "off" : "llm" })}>
@@ -333,9 +348,93 @@ export function BrainBox({ ai }: { ai: AIStatusDTO }) {
           </button>
         )}
       </div>
+      {b.engine && <ModelChooser b={b} open={b.needsModel || (!b.stored && b.state !== "ready" && b.state !== "loading")} />}
       <p className="muted" style={{ fontSize: 11 }}>
         Calls so far: {ai.calls} · {ai.pending} in progress. A graphics card makes it much quicker; on a processor each reply takes a few seconds.
       </p>
     </div>
+  );
+}
+
+type Brain = NonNullable<AIStatusDTO["brain"]>;
+
+/** The game in three parts, and which of them are here. */
+function ThreeFiles({ b }: { b: Brain }) {
+  const model = b.state === "ready" || b.stored ? "✅" : "➖";
+  const modelText =
+    b.state === "ready" ? `the model (${b.name})` : b.stored ? `the model (${b.stored}, kept in this browser)` : "the model: choose one below (downloaded free, once) or load yours";
+  if (b.engine && !b.engineFile)
+    return (
+      <div className="item" style={{ margin: "8px 0" }}>
+        This is the <b>single-file</b> game: the town and the AI engine are both in this page. The model is the one other file:
+        <div className="kv" style={{ marginTop: 4 }}>
+          <span className="k">{model} hustle-model.bin</span>
+          <span>{modelText}</span>
+        </div>
+      </div>
+    );
+  return (
+    <div className="item" style={{ margin: "8px 0" }}>
+      <b>The game comes in three files</b>, kept together in one folder:
+      <div className="kv" style={{ marginTop: 4 }}>
+        <span className="k">✅ ai-hustle-city.html</span>
+        <span>the town (this page)</span>
+        <span className="k">{b.engine ? "✅" : "❌"} hustle-brain.js</span>
+        <span>{b.engine ? "the AI engine (here)" : "the AI engine: not found next to the page, so the brain can't run. Put it back in the same folder and reload."}</span>
+        <span className="k">{model} hustle-model.bin</span>
+        <span>{modelText}</span>
+      </div>
+    </div>
+  );
+}
+
+/** Pick a model to download (once), or load a model file from disk. */
+function ModelChooser({ b, open }: { b: Brain; open: boolean }) {
+  const input = useRef<HTMLInputElement>(null);
+  const busy = b.state === "loading";
+  return (
+    <details open={open} style={{ margin: "8px 0" }}>
+      <summary style={{ cursor: "pointer" }}>{b.stored || b.state === "ready" ? "Change the model" : "Choose the model"}</summary>
+      <p className="muted" style={{ fontSize: 12 }}>
+        Bigger models write smarter, livelier conversations and plans, but take longer to download and need more of your computer. The download comes
+        straight from Hugging Face (free, Apache 2.0 licence); the game then saves it as <b>hustle-model.bin</b> in your downloads and keeps it in
+        this browser. Put that file next to the other two, and next time (or on another computer) just load it.
+      </p>
+      {MODEL_CHOICES.map((m) => (
+        <div key={m.id} className="item" style={{ display: "flex", gap: 8, alignItems: "center", margin: "6px 0" }}>
+          <div style={{ flex: 1 }}>
+            <b>{m.name}</b> <span className="muted">· about {m.mb >= 1000 ? `${(m.mb / 1000).toFixed(1)} GB` : `${m.mb} MB`}</span>
+            <div className="muted" style={{ fontSize: 12 }}>
+              {m.note}
+            </div>
+          </div>
+          <button className="btn" disabled={busy} onClick={() => store.send({ type: "ai", brain: "get", model: m.id })}>
+            ⬇ Get it
+          </button>
+        </div>
+      ))}
+      <div className="god-row">
+        <button className="btn unscripted" disabled={busy} onClick={() => input.current?.click()}>
+          📂 Load hustle-model.bin
+        </button>
+        {b.stored && (
+          <button className="btn" disabled={busy} onClick={() => store.send({ type: "ai", brain: "forget" })}>
+            🗑 Forget the kept copy
+          </button>
+        )}
+        <input
+          ref={input}
+          type="file"
+          accept=".bin"
+          aria-label="Model file"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) store.brainFile(f);
+            e.target.value = "";
+          }}
+        />
+      </div>
+    </details>
   );
 }

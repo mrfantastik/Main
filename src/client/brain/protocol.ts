@@ -19,6 +19,10 @@ export interface BrainSource {
   name: string;
   /** Total download size in bytes (for the progress bar). */
   bytes: number;
+  /** The model file (hustle-model.bin) itself, from disk or this browser: nothing to download. */
+  pack?: Blob;
+  /** The engine's WebAssembly runtime, already in memory (from hustle-brain.js). */
+  wasmBinary?: ArrayBuffer;
 }
 
 export interface GenerateOptions {

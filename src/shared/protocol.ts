@@ -173,7 +173,7 @@ export interface AIStatusDTO {
 export interface BrainDTO {
   state: "off" | "loading" | "ready" | "error";
   name: string;
-  from: "page" | "huggingface" | null;
+  from: "page" | "huggingface" | "file" | null;
   device: "webgpu" | "wasm" | null;
   stage: "download" | "compile" | null;
   loaded: number;
@@ -181,6 +181,14 @@ export interface BrainDTO {
   error: string | null;
   speed: number;
   replies: number;
+  /** No model yet: the player chooses one, or loads their model file. */
+  needsModel: boolean;
+  /** The AI engine (hustle-brain.js) is here. */
+  engine: boolean;
+  /** It came as its own file, not built into a single-file game. */
+  engineFile: boolean;
+  /** The model kept in this browser, if any. */
+  stored: string | null;
 }
 
 /** A town happening, for the top bar, the map and the feed. */
@@ -413,7 +421,9 @@ export type ClientMsg =
       /** Free AI: the player's own OpenAI-style endpoint (null clears it). */
       endpoint?: { url: string; model?: string; key?: string } | null;
       /** The town's brain (a model running in the page): wake it up or switch it off. */
-      brain?: "load" | "unload";
+      /** "get": download the model `model` (once), save the model file and start it; "forget": drop the copy kept in this browser. */
+      brain?: "load" | "unload" | "get" | "forget";
+      model?: string;
     }
   | { type: "save" }
   | { type: "skip"; minutes: number }

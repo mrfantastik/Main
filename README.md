@@ -27,7 +27,17 @@ npm run build:standalone
 
 A ready-made copy is published here: **https://claude.ai/artifact/ApFS3fgxqugFg2Pz6RKtwU** (private to the owner until shared).
 
-This makes `dist/ai-hustle-city.html`, a single file that runs the whole city inside your browser (no server, nothing to install for whoever opens it). It saves itself in that browser. The free AI writes conversations here too, straight from the page.
+This makes the game in **three files**, in `dist/three/`. Keep them together in one folder and open the page:
+
+| File | What it is |
+|---|---|
+| `ai-hustle-city.html` | **The town**: the whole city, its people and economy, running in your browser (no server, nothing to install). Open this one. |
+| `hustle-brain.js` | **The AI engine**: the town's brain (a worker that runs a language model) and the onnxruntime WebAssembly runtime it runs on, about 9 MB. Without it the town runs on its built-in AI. |
+| `hustle-model.bin` | **The model**: an open-source language model and its tokenizer in one file. Swap it for a bigger one and the town gets smarter. |
+
+You don't need to find a model: in the 🧠 AI panel, choose one (SmolLM2 360M, Qwen2.5 0.5B or Qwen2.5 1.5B, all free under Apache 2.0) and the game downloads it from Hugging Face once, saves it as `hustle-model.bin` in your downloads, and keeps it in your browser, so from then on the brain wakes by itself. Put that file next to the other two; next time, or on another computer, click **📂 Load hustle-model.bin**. If you serve the folder from a website, a `hustle-model.bin` next to the page is picked up by itself. `npm run fetch-brain -- --model onnx-community/Qwen2.5-1.5B-Instruct --name "Qwen2.5 1.5B Instruct"` before building puts the model file in `dist/three/` for you. (The format: `HUSTLEMODEL1`, a little-endian 32-bit header length, a JSON header naming each file's offset and length, then the files; see `src/client/brain/pack.ts`.)
+
+The same build also makes `dist/ai-hustle-city.html`, the older **single-file** game (the town and the engine in one page; it fetches the runtime from a CDN and takes the same model file). Both save the town in that browser.
 
 ### Who does the thinking and talking
 
@@ -46,12 +56,15 @@ Every citizen is an AI agent, and the brain is its mind:
 
 Whoever you're looking at comes first; then whoever is about to decide something or wake up. On a graphics card the brain writes for up to four people at once (one step costs about the same for four as for one), so it can keep up with the whole town at normal speed; on a processor it does one at a time. The brain does one thing at a time, so it can't get to everything at once: whatever it misses, the built-in utility AI does, and a day plan keeps steering them even when the brain is busy. The 🧠 AI panel shows what it's doing right now and how much it has done, and a person's panel marks what the brain chose for them with 🧠. It's all free: the model runs on your computer, and nothing is sent anywhere.
 
-The brain is [SmolLM2](https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct) by Hugging Face (Apache 2.0), run with [onnxruntime-web](https://onnxruntime.ai): on your graphics card if your browser has WebGPU (Chrome, Edge), otherwise on your processor. Nothing is sent anywhere; it's free. Click **🧠 Wake the brain** in the top bar (or **Wake the town's brain** in the 🧠 AI panel). The first time, the model downloads (about 300 MB) and is kept in your browser's cache; after that it starts from there. On a processor it's slower, so it only writes the conversations of whoever you're watching (it still picks people's moves and thinks for them).
+The brain is whichever model you choose: [SmolLM2 360M](https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct) (quick, runs anywhere), [Qwen2.5 0.5B](https://huggingface.co/onnx-community/Qwen2.5-0.5B-Instruct) or [Qwen2.5 1.5B](https://huggingface.co/onnx-community/Qwen2.5-1.5B-Instruct) (the smartest: livelier conversations and plans, needs a decent graphics card), all Apache 2.0, run with [onnxruntime-web](https://onnxruntime.ai): on your graphics card if your browser has WebGPU (Chrome, Edge), otherwise on your processor. Nothing is sent anywhere; it's free. Click **🧠 Wake the brain** in the top bar: the first time it takes you to the 🧠 AI panel to choose a model; after that it wakes by itself whenever you open the game. On a processor it's slower, so it only writes the conversations of whoever you're watching (it still picks people's moves and thinks for them).
+
+Without the brain (or before it's awake), conversations come from a phrasebook of hundreds of wordings, matched to who's talking (warm or cold, a friend or a stranger, at the pub or the market), what's happened to them, the news and their last chat together. Nobody repeats a line they've said lately, and the town avoids lines it's heard lately, so two chats rarely go the same way; replies answer what was actually said.
 
 The town keeps the rules (it only offers choices a person can actually make, and decides who lends what, who gets the job, which news gets passed on), so a small model can't break the economy. Whatever it can't get to in time, or anything during a skip-ahead, the built-in AI improvises. AI-written lines have a gold border.
 
 **Where the model comes from:**
-- **The single-file game** (`dist/ai-hustle-city.html`, opened in your browser): straight from Hugging Face, the first time you wake it.
+- **The three-file game** (`dist/three/`, opened from disk): `hustle-model.bin`, which you load once (or the game downloads for you); after that it's kept in your browser.
+- **The single-file game** (`dist/ai-hustle-city.html`): the same model file.
 - **A published copy** (e.g. on claude.ai, where pages can't reach the internet): the model has to be published with the page. `npm run fetch-brain` downloads it into `models/brain`, and `npm run build:standalone` then splits it into parts under 15 MB in `dist/artifact/brain/` (with the onnxruntime WebAssembly binary and a manifest). A page published on claude.ai can carry about 256 MB, so the model has to fit in that.
 
 **The server version** (`npm start`) can't use the in-page brain; there, free web AI services write the conversations instead (no account or key: Pollinations, then LLM7, tried in turn; or any OpenAI-style endpoint you add in the 🧠 AI panel, such as Ollama on your machine). What gets sent there: the made-up townsfolk's names, personalities, feelings, memories and town news.
@@ -178,13 +191,14 @@ src/
   client/              Browser: React panels + city views
     render/            2D canvas view, shared interpolation and overlay text
     brain/             The town's brain: a small open-source model in a Web Worker
-                       (onnxruntime-web + tokenizer + generation loop), and its page-side client
+                       (onnxruntime-web + tokenizer + generation loop), its page-side client,
+                       the model file format (pack.ts) and the models to choose from (models.ts)
     render3d/          3D views (merged static city, instanced citizens): the dreamscape
                        (dream/: sky, mirror floor, mannequins) and the retro town; effects.ts
                        draws happenings (flames, rain, festival lights…)
     net/local.ts       Standalone build: runs the sim in the browser (same messages as the server)
   shared/protocol.ts   Messages between server and browser
-scripts/               Headless runner, diagnostics, soak test, standalone packer
+scripts/               Headless runner, diagnostics, soak test, standalone and three-file packers
 tests/                 node:test suites
 ```
 

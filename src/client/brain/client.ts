@@ -1,20 +1,23 @@
 import type { LLMClient, LLMRequest, LLMResponse } from "../../sim/ai/llm";
 import { readChoice, readDiary, readLines, readPlan, readThought, type SmallPrompt } from "../../sim/ai/small";
+import { downloadModel, MODEL_CHOICES, saveToDisk } from "./models";
+import { forgetPack, packInfo, storedPack, storePack } from "./pack";
 import type { BrainEvent, BrainRequest, BrainSource, GenerateOptions } from "./protocol";
 
-// The page's side of the town's brain: starts the worker, finds the model
-// files (next to the page when it's published with them, otherwise from
-// Hugging Face), and turns the director's requests into short prompts for a
-// small model and its plain-text replies back into what the director
-// expects. One request at a time; nothing is sent anywhere but the worker.
+// The page's side of the town's brain: starts the worker (the AI engine,
+// hustle-brain.js, or the copy inside a single-file game), finds the model
+// (a model file you give it, the one kept in this browser, or files published
+// next to the page; or it downloads one you choose, once), and turns the
+// director's requests into short prompts and the plain-text replies back into
+// what the director expects. Nothing is sent anywhere but the worker.
 
 export type BrainState = "off" | "loading" | "ready" | "error";
 
 export interface BrainStatus {
   state: BrainState;
   name: string;
-  /** Where the files come from: "page" (published with it) or "huggingface". */
-  from: "page" | "huggingface" | null;
+  /** Where the model came from: "file" (a model file, given or kept in this browser), "page" (published with it) or "huggingface" (downloading). */
+  from: "page" | "huggingface" | "file" | null;
   device: "webgpu" | "wasm" | null;
   stage: "download" | "compile" | null;
   loaded: number;
@@ -23,47 +26,70 @@ export interface BrainStatus {
   /** Generated tokens per second, recent average. */
   speed: number;
   replies: number;
+  /** There's no model yet: the player chooses one (or loads their model file). */
+  needsModel: boolean;
+  /** The AI engine is here (hustle-brain.js, or built into the page). */
+  engine: boolean;
+  /** It came as its own file (hustle-brain.js), not built into a single-file game. */
+  engineFile: boolean;
+  /** The model kept in this browser, if any. */
+  stored: string | null;
 }
 
-const HF_BASE = "https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct/resolve/main/";
 const ORT_CDN = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort-wasm-simd-threaded.asyncify.wasm";
 
-/** Where the model is: published next to the page (brain/manifest.json), or straight from Hugging Face. */
-export async function findBrainSource(): Promise<{ source: BrainSource; from: "page" | "huggingface" }> {
+type Engine = { __HUSTLE_BRAIN__?: string; __HUSTLE_ORT__?: string };
+
+/** The engine's WebAssembly runtime, if the engine file carries it (gzipped; a fresh copy each time: it's handed over to the worker). */
+async function engineWasm(): Promise<ArrayBuffer | undefined> {
+  const b64 = (globalThis as Engine).__HUSTLE_ORT__;
+  if (!b64 || typeof DecompressionStream === "undefined") return undefined;
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return new Response(new Blob([out]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+}
+
+/** The model published next to the page (brain/manifest.json), if there is one. */
+export async function pageSource(): Promise<BrainSource | null> {
+  if (location.protocol === "file:") return null; // pages opened from disk can't read files next to them
   try {
     const base = new URL("brain/", document.baseURI).href;
     const res = await fetch(new URL("manifest.json", base).href);
-    if (res.ok) {
-      const m = (await res.json()) as Omit<BrainSource, "base">;
-      return { source: { ...m, base }, from: "page" };
-    }
+    if (res.ok) return { ...((await res.json()) as Omit<BrainSource, "base">), base };
   } catch {
-    // not published with the page (e.g. opened from a file): use Hugging Face
+    // not published with the page (e.g. opened from a file)
   }
-  let f16 = false;
+  return null;
+}
+
+/** A model file published next to the page (hustle-model.bin), when the page is served from somewhere. `peek` only checks it's there. */
+async function pagePack(peek = false): Promise<Blob | null> {
+  if (location.protocol === "file:") return null; // pages opened from disk can't read files next to them
   try {
-    const gpu = (navigator as unknown as { gpu?: { requestAdapter(): Promise<{ features: Set<string> } | null> } }).gpu;
-    const adapter = gpu ? await gpu.requestAdapter() : null;
-    f16 = !!adapter?.features.has("shader-f16");
+    const res = await fetch(new URL("hustle-model.bin", document.baseURI).href);
+    // A server that answers every path with the page itself doesn't count.
+    if (!res.ok || /text\/html/.test(res.headers.get("content-type") ?? "")) return null;
+    if (peek && res.body) {
+      const reader = res.body.getReader();
+      let got = new Uint8Array(0);
+      while (got.byteLength < 12) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const next = new Uint8Array(got.byteLength + value.byteLength);
+        next.set(got);
+        next.set(value, got.byteLength);
+        got = next;
+      }
+      void reader.cancel();
+      return new TextDecoder().decode(got.subarray(0, 12)) === "HUSTLEMODEL1" ? new Blob([got]) : null;
+    }
+    const blob = await res.blob();
+    await packInfo(blob);
+    return blob;
   } catch {
-    f16 = false;
+    return null;
   }
-  return {
-    from: "huggingface",
-    source: {
-      base: HF_BASE,
-      shards: {},
-      model: f16 ? "onnx/model_q4f16.onnx" : "onnx/model_q4.onnx",
-      pastType: f16 ? "float16" : "float32",
-      fallbacks: [
-        { model: "onnx/model_q4.onnx", pastType: "float32" },
-        { model: "onnx/model_quantized.onnx", pastType: "float32" },
-      ],
-      wasm: [ORT_CDN],
-      name: "SmolLM2 360M Instruct",
-      bytes: (f16 ? 299 : 380) * 1e6 + 27e6,
-    },
-  };
 }
 
 /** The shared start of every prompt with this system message (the model's work on it is kept). */
@@ -82,7 +108,7 @@ export class BrainClient implements LLMClient {
   readonly free = true;
   readonly small = true;
   readonly label = "Town brain (runs on your computer)";
-  status: BrainStatus = { state: "off", name: "", from: null, device: null, stage: null, loaded: 0, total: 0, error: null, speed: 0, replies: 0 };
+  status: BrainStatus = { state: "off", name: "", from: null, device: null, stage: null, loaded: 0, total: 0, error: null, speed: 0, replies: 0, needsModel: false, engine: !!(globalThis as Engine).__HUSTLE_BRAIN__, engineFile: !!(globalThis as Engine).__HUSTLE_ORT__, stored: null };
   /** Tests: write the reply instead of sampling it (the model still runs every step). */
   forced = false;
   onChange: (() => void) | null = null;
@@ -114,20 +140,70 @@ export class BrainClient implements LLMClient {
   }
 
   private startWorker(source: BrainSource, fromFile: boolean): Worker {
-    const inline = (globalThis as { __HUSTLE_BRAIN__?: string }).__HUSTLE_BRAIN__;
-    // Published with the page: the worker file sits next to the model. Otherwise it's carried inside the page.
+    const inline = (globalThis as Engine).__HUSTLE_BRAIN__;
+    // Published with the page: the worker file sits next to the model. Otherwise it's the engine file (or carried inside the page).
     if (fromFile) return new Worker(new URL("worker.js", source.base).href, { type: "module" });
-    if (!inline) throw new Error("this page doesn't include the brain");
+    if (!inline) throw new Error("the AI engine file (hustle-brain.js) isn't next to the game. Keep all three files in the same folder");
     const code = new TextDecoder().decode(Uint8Array.from(atob(inline), (ch) => ch.charCodeAt(0)));
     return new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
   }
 
-  /** Download (once; the browser keeps it) and start the model. */
-  async load(device: "auto" | "webgpu" | "wasm" = "auto"): Promise<void> {
+  /** Check what's kept in this browser (for the panel). */
+  async refresh(): Promise<void> {
+    const blob = await storedPack();
+    let stored: string | null = null;
+    if (blob) {
+      try {
+        stored = (await packInfo(blob)).name;
+      } catch {
+        await forgetPack(); // not a model file after all
+      }
+    }
+    // Nothing to wake with yet: say so up front, so "wake" goes straight to choosing one.
+    const needsModel = this.status.state !== "ready" && this.status.state !== "loading" && !stored && !(await this.hasModel());
+    this.set({ stored, needsModel });
+  }
+
+  /** Is there a model to wake with, without asking the player? */
+  async hasModel(): Promise<boolean> {
+    return !!(await storedPack()) || !!(await pagePack(true)) || !!(await pageSource());
+  }
+
+  /**
+   * Start the model: the model file given (kept in this browser for next
+   * time), or the one already kept, or the one published with the page. With
+   * none, it asks the player to choose one (needsModel).
+   */
+  async load(device: "auto" | "webgpu" | "wasm" = "auto", given?: Blob): Promise<void> {
     if (this.status.state === "loading" || this.status.state === "ready") return;
-    this.set({ state: "loading", stage: "download", loaded: 0, error: null });
+    this.set({ state: "loading", stage: "compile", loaded: 0, error: null, needsModel: false });
     try {
-      const { source, from } = await findBrainSource();
+      let source: BrainSource | null = null;
+      let from: BrainStatus["from"] = "file";
+      const kept = given ?? (await storedPack());
+      const blob = kept ?? (await pagePack());
+      if (blob && !kept) from = "page";
+      if (blob) {
+        const meta = await packInfo(blob);
+        if (given) {
+          try {
+            await storePack(given);
+            this.set({ stored: meta.name });
+          } catch {
+            // a private window: it works for now, but has to be loaded again next time
+          }
+        }
+        const wasmBinary = await engineWasm();
+        source = { base: ORT_CDN.slice(0, ORT_CDN.lastIndexOf("/") + 1), shards: {}, model: meta.model, pastType: meta.pastType, wasm: wasmBinary ? [] : [ORT_CDN], name: meta.name, bytes: blob.size, pack: blob, wasmBinary };
+      } else {
+        source = await pageSource();
+        from = "page";
+      }
+      if (!source) {
+        // Nothing to run yet: the player picks a model (or loads their model file).
+        this.set({ state: "off", stage: null, needsModel: true });
+        return;
+      }
       this.set({ name: source.name, from, total: source.bytes });
       // The worker file next to the model first; if the page isn't allowed to start it, the copy inside the page.
       let started = false;
@@ -138,14 +214,35 @@ export class BrainClient implements LLMClient {
         await this.boot(source, device, false, () => (started = true));
       }
     } catch (err) {
-      let message = (err as Error).message ?? String(err);
-      if (this.status.from === "huggingface" && /no connection/.test(message))
-        message = /claude/.test(location.hostname)
-          ? "this copy of the game doesn't include the model, and pages published on claude.ai can't download it. Open the game file in your browser instead"
-          : "couldn't download the model from Hugging Face. Check your internet connection and try again";
+      const message = (err as Error).message ?? String(err);
       this.fail(message);
       throw new Error(message);
     }
+  }
+
+  /** Download a model (once), give the player their copy of the model file, keep it in this browser, and start it. */
+  async getModel(id: string, device: "auto" | "webgpu" | "wasm" = "auto"): Promise<void> {
+    const choice = MODEL_CHOICES.find((c) => c.id === id);
+    if (!choice) throw new Error("no such model");
+    if (this.status.state === "loading" || this.status.state === "ready") return;
+    this.set({ state: "loading", stage: "download", loaded: 0, total: choice.mb * 1e6, name: choice.name, from: "huggingface", error: null, needsModel: false });
+    let blob: Blob;
+    try {
+      blob = await downloadModel(choice, (loaded, total) => this.set({ loaded, total }));
+    } catch (err) {
+      const message = (err as Error).message ?? String(err);
+      this.fail(message);
+      throw new Error(message);
+    }
+    saveToDisk(blob);
+    this.set({ state: "off" });
+    await this.load(device, blob);
+  }
+
+  /** Forget the model kept in this browser (it can be loaded again from the model file). */
+  async forget(): Promise<void> {
+    await forgetPack();
+    await this.refresh();
   }
 
   private async boot(source: BrainSource, device: "auto" | "webgpu" | "wasm", fromFile: boolean, onStarted: () => void): Promise<void> {
@@ -165,7 +262,8 @@ export class BrainClient implements LLMClient {
           } else if (m.type === "error" && m.id === undefined) reject(new Error(m.message));
           else this.onResult(m);
         };
-        w.postMessage({ type: "load", source, device } satisfies BrainRequest);
+        // The runtime is handed over, not copied (the model file goes as a reference to it).
+        w.postMessage({ type: "load", source, device } satisfies BrainRequest, source.wasmBinary ? [source.wasmBinary] : []);
       });
       w.onmessage = (ev: MessageEvent<BrainEvent>) => this.onResult(ev.data);
       w.onerror = (e) => this.fail(e.message || "the brain stopped");

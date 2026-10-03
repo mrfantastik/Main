@@ -50,7 +50,17 @@ export function TopBar() {
           {!connected ? "Offline" : st?.savedAt ? <span>💾 {clock(st.savedAt)}</span> : "Live"}
         </span>
         {ai?.brain && (ai.brain.state === "off" || ai.brain.state === "error") && (
-          <button className="tool" aria-label="Wake the town's brain" title="Wake the town's brain: an open-source AI on your computer that runs the people" onClick={() => store.send({ type: "ai", brain: "load" })}>
+          <button
+            className="tool"
+            aria-label="Wake the town's brain"
+            title="Wake the town's brain: an open-source AI on your computer that runs the people"
+            onClick={() => {
+              // No model yet (or no engine): the AI panel is where you choose one.
+              if (ai.brain!.needsModel || !ai.brain!.engine) {
+                if (store.getSnapshot().panel !== "ai") store.setPanel("ai");
+              } else store.send({ type: "ai", brain: "load" });
+            }}
+          >
             🧠 Wake the brain
           </button>
         )}
