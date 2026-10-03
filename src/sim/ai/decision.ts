@@ -1,5 +1,6 @@
 import { rand } from "../rng";
 import type { Citizen, DecisionOption, DecisionRecord, WorldState } from "../types";
+import { flavourThought } from "../mind/voice";
 import { pushRing, round2 } from "../util";
 
 // Utility-based decision making.
@@ -81,7 +82,8 @@ export function setThought(world: WorldState, c: Citizen, text: string, priority
   const age = world.time - c.thoughtT;
   const holdFor = c.thoughtPriority >= 3 ? 150 : 45;
   if (priority >= c.thoughtPriority || age > holdFor) {
-    c.thought = text;
+    // Claude's thoughts are already in character; the built-in AI's get the citizen's voice.
+    c.thought = source === "llm" ? text : flavourThought(world, c, text, priority);
     c.thoughtPriority = priority;
     c.thoughtT = world.time;
     c.thoughtSource = source;

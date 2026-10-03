@@ -69,7 +69,7 @@ export function chargeRent(world: WorldState): void {
       evict(world, c);
     } else {
       logEvent(world, "life", `${c.name} couldn't pay the full rent and owes ${money(c.rentArrears)}.`, 3, [c.id]);
-      remember(world, c, { text: `I couldn't pay my rent. I owe the landlord ${money(c.rentArrears)}.`, kind: "financial", importance: 7, valence: -0.8, people: [], key: "rent-arrears" });
+      remember(world, c, { text: `I couldn't pay my rent. I owe the landlord ${money(c.rentArrears)}.`, kind: "financial", importance: 7, valence: -0.8, people: [], key: "rent-arrears", feel: { fear: 18, shame: 10, sadness: 6 }, feelCtx: { fearOf: "homeless" } });
       c.creditScore = Math.max(0, c.creditScore - 6);
       c.reviewRequested = "rent arrears";
     }
@@ -98,7 +98,7 @@ export function evict(world: WorldState, c: Citizen): void {
   c.rentArrears = 0;
   c.creditScore = Math.max(0, c.creditScore - 15);
   logEvent(world, "life", `🏚️ ${c.name} was evicted and is now sleeping in the park.`, 5, [c.id]);
-  remember(world, c, { text: "I was evicted. I'm sleeping in the park now.", kind: "financial", importance: 9, valence: -1, people: [] });
+  remember(world, c, { text: "I was evicted. I'm sleeping in the park now.", kind: "financial", importance: 9, valence: -1, people: [], feel: { fear: 25, shame: 25, sadness: 25 }, feelCtx: { fearOf: "homeless" } });
   c.reviewRequested = "evicted";
 }
 

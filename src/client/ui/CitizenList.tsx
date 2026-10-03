@@ -27,7 +27,7 @@ export function CitizenList() {
               <Avatar name={c.name} color={c.color} ring={OCC_COLORS[c.occupation]} />
               <div style={{ minWidth: 0 }}>
                 <div className="name">
-                  {c.name} {c.homeless && <span title="Homeless">🏚️</span>}
+                  {c.name} {c.emotion && <span title={`Feeling ${c.emotion.kind} (${c.emotion.level})`}>{c.emotion.emoji}</span>} {c.homeless && <span title="Homeless">🏚️</span>}
                   {c.awaitingAI && <span title="Thinking with Claude">🧠</span>}
                 </div>
                 <div className="sub">

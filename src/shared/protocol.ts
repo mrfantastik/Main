@@ -8,10 +8,14 @@ import type {
   ConversationLine,
   ConversationTopic,
   DecisionRecord,
+  Emotion,
+  Emotions,
   Goal,
   Memory,
   Needs,
   Occupation,
+  Personality,
+  Reflection,
   SimEvent,
   Skills,
   StatPoint,
@@ -80,6 +84,8 @@ export interface CitizenSummary {
   archetypes: string[];
   businessIds: string[];
   awaitingAI: boolean;
+  /** Their standout feeling right now (null when nothing stands out). */
+  emotion: { kind: Emotion; level: number; emoji: string } | null;
 }
 
 export interface BusinessSummary {
@@ -244,6 +250,11 @@ export interface CitizenDetail {
   research: { points: number; threshold: number; breakthroughs: number; patents: string[] };
   insights: string[];
   beliefs: { occupation: string; value: number; source: string }[];
+  personality: Personality & { summary: string };
+  emotions: Emotions;
+  emotion: CitizenSummary["emotion"];
+  /** Lessons from nightly reflection, strongest first. */
+  lessons: Reflection[];
   conversations: ConversationDTO[];
 }
 

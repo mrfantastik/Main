@@ -1,3 +1,5 @@
+import type { Emotion } from "../../sim/types";
+
 export function gbp(v: number | null | undefined, digits?: number): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   const sign = v < 0 ? "-" : "";
@@ -50,4 +52,29 @@ export const KIND_LABEL: Record<string, string> = {
   stall: "Market stall",
   cafe: "Café",
   agency: "Agency",
+};
+
+/** Emotions in the order the UI lists them, with an icon and a colour each. */
+export const EMOTION_UI: { key: Emotion; label: string; emoji: string; color: string }[] = [
+  { key: "joy", label: "Joy", emoji: "😄", color: "#f2c94c" },
+  { key: "love", label: "Love", emoji: "🥰", color: "#d65db1" },
+  { key: "gratitude", label: "Gratitude", emoji: "🙏", color: "#22c3d6" },
+  { key: "pride", label: "Pride", emoji: "😎", color: "#f59e2c" },
+  { key: "sadness", label: "Sadness", emoji: "😢", color: "#4f8ef7" },
+  { key: "anger", label: "Anger", emoji: "😠", color: "#e5484d" },
+  { key: "fear", label: "Fear", emoji: "😰", color: "#a46cf5" },
+  { key: "shame", label: "Shame", emoji: "😳", color: "#ff6f91" },
+  { key: "envy", label: "Envy", emoji: "😒", color: "#2fbf71" },
+  { key: "loneliness", label: "Loneliness", emoji: "😔", color: "#8d9ab0" },
+];
+
+export const VALUE_LABEL: Record<string, string> = {
+  family: "👪 Family",
+  status: "🏅 Status",
+  freedom: "🕊️ Freedom",
+  security: "🛡️ Security",
+  fairness: "⚖️ Fairness",
+  wealth: "💷 Wealth",
+  community: "🤝 Community",
+  knowledge: "📚 Knowledge",
 };

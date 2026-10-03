@@ -4,7 +4,7 @@ import { store } from "../net/store";
 import { Camera, TILE } from "./camera";
 import { drawCityLayer, lampPositions } from "./cityLayer";
 import { FrameInterpolator } from "./interpolation";
-import { ACTIVITY_ICON, KIND_COLORS, darkness, drawBubble, drawLabel, drawMoneyPopup, moneyText } from "./overlay";
+import { ACTIVITY_ICON, KIND_COLORS, darkness, drawBubble, drawEmotion, drawLabel, drawMoneyPopup, moneyText, showFeelingOnMap } from "./overlay";
 import type { CityRenderer, Pos } from "./types";
 
 // Draws the live city every animation frame. Citizen positions are
@@ -382,6 +382,10 @@ export class Renderer implements CityRenderer {
           ctx.textBaseline = "bottom";
           ctx.fillText(icon, sp.x + r * 1.1, sp.y - r * 0.6);
         }
+      }
+      // Strong feelings show as a little face to the left (always for the selected/hovered).
+      if (m.emotion && (showFeelingOnMap(m.emotion) || isSel || this.hover === id) && (s > 16 || isSel || this.hover === id)) {
+        drawEmotion(ctx, m.emotion.emoji, sp.x - r * 1.3, sp.y - r * 1.1, Math.max(10, r * 1.3));
       }
       if (isSel || this.hover === id || s > 44) {
         drawLabel(ctx, m.name, sp.x, sp.y + r + 3, isSel ? "#fff" : "rgba(255,255,255,0.9)");

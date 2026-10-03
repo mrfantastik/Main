@@ -81,7 +81,9 @@ export function runTradingSession(world: WorldState, c: Citizen): string {
   const signals = tradingSignals(world, c).sort((a, b) => b.signal - a.signal);
   const notes: string[] = [];
   const options: Option<null>[] = [];
-  const buyThreshold = 0.03 + (1 - c.traits.risk) * 0.015;
+  // Fear makes traders twitchy: they need a stronger signal and bet less.
+  const fear = c.emotions.fear / 100;
+  const buyThreshold = 0.03 + (1 - c.traits.risk) * 0.015 + fear * 0.03;
 
   // Sell first: take profits, cut losses, or exit on a bad signal.
   for (const sig of signals) {
@@ -116,7 +118,7 @@ export function runTradingSession(world: WorldState, c: Citizen): string {
   }
 
   // Then buy the strongest signals.
-  let budget = Math.max(0, (s.liquid - s.dailyCost * 3) * (0.4 + c.traits.risk * 0.5));
+  let budget = Math.max(0, (s.liquid - s.dailyCost * 3) * (0.4 + c.traits.risk * 0.5) * (1 - fear * 0.4));
   for (const sig of signals.slice(0, 3)) {
     const m = world.market[sig.pid];
     const price = round2(m.wholesale * (1 + SPREAD));

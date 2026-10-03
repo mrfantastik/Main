@@ -3,6 +3,7 @@ import { logEvent } from "../events";
 import { tryRehouse } from "../economy/housing";
 import { netWorth } from "../economy/valuation";
 import type { Citizen, Goal, WorldState } from "../types";
+import { tiltStrategy } from "../mind/behaviour";
 import { money } from "../util";
 import { inspiringStory } from "./beliefs";
 import { careerTargets, careerThought, currentExpected, fitScore, OCC_NOUN } from "./careers";
@@ -170,6 +171,7 @@ export function strategyOptions(world: WorldState, c: Citizen): StrategyOption[]
   const s = situation(world, c);
   const options: StrategyOption[] = [stayOption(world, c, s)];
   for (const p of providers) options.push(...p(world, c, s));
+  tiltStrategy(world, c, options);
   return options;
 }
 

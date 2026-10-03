@@ -123,3 +123,20 @@ export function darkness(gameT: number): number {
   if (h < 21) return (0.62 * (h - 18)) / 3;
   return 0.62;
 }
+
+/**
+ * Feelings strong enough to show next to someone on the map. Most people are
+ * content most of the time, so joy and love only show when they're intense;
+ * the badges are there to make the unusual feelings stand out.
+ */
+export function showFeelingOnMap(e: { kind: string; level: number }): boolean {
+  return e.level >= (e.kind === "joy" || e.kind === "love" ? 72 : 55);
+}
+
+/** Small emoji badge for a strong feeling, drawn beside a citizen. */
+export function drawEmotion(ctx: CanvasRenderingContext2D, emoji: string, x: number, y: number, size: number): void {
+  ctx.font = `${size}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(emoji, x, y);
+}

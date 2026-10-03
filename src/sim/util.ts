@@ -14,6 +14,11 @@ export function money(v: number): string {
   return `${sign}£${a >= 1000 ? Math.round(a).toLocaleString("en-GB") : a >= 100 ? Math.round(a) : a.toFixed(a % 1 === 0 ? 0 : 2)}`;
 }
 
+/** "the Marketplace" -> "The Marketplace" at the start of a sentence. */
+export function capitalise(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
 export function pct(v: number): string {
   return `${Math.round(v * 100)}%`;
 }

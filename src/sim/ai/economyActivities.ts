@@ -4,7 +4,7 @@ import { hourWeight, listingsFor, refPrice } from "../economy/market";
 import { rememberBetrayal } from "../memory/memory";
 import { peekRel } from "../social/relationships";
 import type { Business, Citizen, WorldState } from "../types";
-import { money } from "../util";
+import { capitalise, money } from "../util";
 import { makeAction } from "./actions";
 import { hoursFactor, registerActivityProvider, registerWorkProvider, travelPenalty, untilHour, type ActivityOption } from "./activity";
 import { costPenalty, type Situation } from "./situation";
@@ -245,7 +245,7 @@ function shoppingOptions(world: WorldState, c: Citizen, s: Situation): ActivityO
           seller: best.score * 0.3,
         },
         makeAction("SHOP", best.where, 25, `Shopping for ${p.name.toLowerCase()}`, { productId: pid, qty: 1, businessId: best.bid }),
-        friend ? `I'll get my ${p.name.toLowerCase()} from ${best.owner!.name} — gotta support friends.` : `I've wanted ${p.name.toLowerCase()} for a while. ${best.label} has them for ${money(best.price)}.`,
+        friend ? `I'll get my ${p.name.toLowerCase()} from ${best.owner!.name} — gotta support friends.` : `I've wanted ${p.name.toLowerCase()} for a while. ${capitalise(best.label)} has them for ${money(best.price)}.`,
       ),
     );
   }
@@ -284,7 +284,8 @@ function cafeOptions(world: WorldState, c: Citizen, s: Situation): ActivityOptio
   const hunger = s.hungry ** 1.6 * 2.7;
   const mealtime = (h >= 7 && h < 9.5) || (h >= 12 && h < 14) || (h >= 18 && h < 20.5) ? 0.35 : 0;
   for (const b of openBusinesses(world)) {
-    if (b.kind !== "cafe" || (b.inventory.food?.qty ?? 0) < 1) continue;
+    // Nobody behind the counter means no meal (and a wasted trip).
+    if (b.kind !== "cafe" || (b.inventory.food?.qty ?? 0) < 1 || staffOnDuty(world, b).length === 0) continue;
     const price = b.prices.food ?? 99;
     const owner = world.citizens[b.ownerId];
     const rel = owner ? peekRel(c, owner.id) : undefined;

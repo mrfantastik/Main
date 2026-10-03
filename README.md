@@ -57,7 +57,7 @@ In practice the city makes **~2–3 Claude calls per game day** (≈ $0.03/day w
 | **3D / 2D** | Switch views top-right of the map (3D is the default; your choice is remembered) |
 | **Pan / zoom / rotate** | Drag the map / mouse wheel or pinch (or WASD + `+`/`-`); in 3D, `Q`/`E` or ⟲ ⟳ turn the view 90° |
 | **🎬 Director** | (3D) the camera glides to deals, conversations, new businesses and big money moments on its own |
-| **Inspect a citizen** | Click them on the map or in the list. Tabs: Overview, 🧠 Mind (why they did things), Social (relationships, memories, conversations), Money |
+| **Inspect a citizen** | Click them on the map or in the list. Tabs: Overview (who they are, backstory, how they feel), 🧠 Mind (why they did things, lessons learned), Social (relationships, memories and the feelings attached, conversations), Money. Strong feelings show as an emoji next to people on the map and in the list |
 | **Inspect a business** | Click a shop |
 | **Speed** | ⏸ 1× 5× 20× 50× (1× = one game hour every 15 s) |
 | **Skip ahead** | ⏩ +1h, +1d, +1w: jumps instantly (same result as watching it; Claude is paused during a skip so it costs nothing) |
@@ -71,12 +71,15 @@ In practice the city makes **~2–3 Claude calls per game day** (≈ $0.03/day w
 ## What's simulated
 
 - **City**: houses, shops, marketplace, CityCorp offices, cowork hub, bank & exchange, pub, diner, park, research lab, wholesale depot. Day/night cycle. Citizens walk the roads. Shown as a retro low-poly 3D town (three.js, rendered at ~400 px tall and scaled up pixel-sharp) or as the original flat 2D map.
-- **Citizens**: name, age, personality (ambitious, risk-taking, conservative, lazy, friendly, competitive, entrepreneurial, greedy, generous, frugal, curious), skills that improve with practice, needs (energy, hunger, social, fun), mood, money, savings, credit score, inventory, home, goal, thoughts.
+- **Citizens**: name, age, archetypes (ambitious, risk-taking, conservative, lazy, friendly, competitive, entrepreneurial, greedy, generous, frugal, curious), skills that improve with practice, needs (energy, hunger, social, fun), money, savings, credit score, inventory, home, goal, thoughts.
+- **Personality**: Big Five scores built from those archetypes, 2–3 core values (family, status, freedom, security, fairness, wealth, community, knowledge), quirks and habits, a speaking style (formal, blunt, chatty, sarcastic, warm, nervous), likes and dislikes, a fear, a dream and a short backstory. Generated from the seed, so the same city always has the same people.
+- **Feelings**: joy, sadness, anger, fear, pride, shame, envy, gratitude, loneliness and love (0–100). Events push them (getting paid, losing a deal, being helped or cheated, rent arrears, a rival's good day, a good or bad conversation); each drifts back towards a target set by personality and circumstances at its own speed (anger cools in hours, love lingers). Neurotic people take bad news harder; extraverts get more joy from company. Mood is worked out from the feelings. They nudge behaviour within limits: anger means tougher terms and arguments, fear means saving and avoiding risk, loneliness means going out, envy means competitive moves, gratitude means generous terms for whoever helped, sadness means getting less done.
+- **Emotional memory and reflection**: memories keep the feelings they caused, and meeting that person again brings them back (grudges, loyalty). Each night people sleep on their day and keep one or two lessons ("Ethan can't be trusted", "Selling groceries works for me") that shift trust and beliefs. With Claude on, at most one lesson per game day (from someone having a strongly emotional day) is reworded by Claude in that citizen's own voice, from the same budget and paused during skip-ahead.
 - **Jobs**: employee (CityCorp or citizen businesses), freelancer, shopkeeper, reseller, trader, entrepreneur, researcher, unemployed — each behaves differently.
 - **Economy** (all virtual £): wholesale market with volatility and demand shocks, a marketplace with listings and clearance lots, shops/stalls/cafés/agencies competing on price, reputation and staffing, rent, wages, owner draws, dividends, bank savings & loans, peer loans, equity investments, bankruptcies, evictions, inventions with royalties.
-- **Memory**: short-term and long-term memories, importance-weighted, merging repeats, fading over time.
+- **Memory**: short-term and long-term memories, importance-weighted, merging repeats, fading over time, each carrying the feelings it caused.
 - **Relationships**: affinity, trust, familiarity and roles (family, friend, rival, employer, partner, creditor…). They change through encounters, deals, favours and betrayals — and they change decisions.
-- **Conversations**: loans, investment pitches, job requests/offers, debt collection, asking for help, sharing/selling research tips, arguments, gossip. The engine sets each side's real limits; templates or Claude write the words; outcomes move real money.
+- **Conversations**: loans, investment pitches, job requests/offers, debt collection, asking for help, sharing/selling research tips, arguments, gossip. The engine sets each side's real limits; templates or Claude write the words; outcomes move real money. Template lines are spoken in each citizen's style and current mood and bring up real shared history ("After what you did on Day 12? No chance."); Claude prompts include personality, feelings, values and lessons.
 
 ---
 
@@ -125,6 +128,7 @@ src/
     economy/           Ledger (all money moves here), market, businesses, bank,
                        jobs, services, trading, reselling, research, housing, shopping
     memory/            Memory system
+    mind/              Personality, emotions, nightly reflection, behaviour tilts, speaking voice
     social/            Relationships, encounters, conversations, negotiation, dialogue
     god.ts             God Mode commands + macro economy
     stats.ts           Economy statistics

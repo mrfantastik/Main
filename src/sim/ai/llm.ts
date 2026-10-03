@@ -3,8 +3,9 @@
 
 import { placeName } from "../places";
 import { recallAbout } from "../memory/memory";
+import { personalitySummary } from "../mind/personality";
 import { formatTime } from "../time";
-import type { Citizen, Conversation, WorldState } from "../types";
+import { EMOTIONS, type Citizen, type Conversation, type Memory, type Reflection, type WorldState } from "../types";
 import { money } from "../util";
 import { relLabel } from "../social/relationships";
 import { situation } from "./situation";
@@ -64,12 +65,44 @@ export function profile(world: WorldState, c: Citizen): string {
       ? `employee at ${c.employerId === "corp" ? "CityCorp" : world.businesses[c.employerId ?? ""]?.name ?? "a business"} (£${Math.round(c.wage)}/day)`
       : c.occupation + (biz.length ? ` (owns ${biz.map((b) => `${b.name}, ~${money(b.avgProfit)}/day profit`).join("; ")})` : s.occEarnAvg ? ` (earning ~${money(s.occEarnAvg)}/day lately)` : "");
   const debts = world.loans.filter((l) => l.borrower === c.id && l.status === "active").reduce((a, l) => a + l.totalDue - l.paid, 0);
-  return `${c.name} ${c.surname}, ${c.age}. Personality: ${traitWords(c)}. Job: ${job}. Cash ${money(c.money)}, savings ${money(c.savings)}${debts > 0 ? `, owes ${money(debts)}` : ""}. Goal: ${c.goal.label}. Mood ${Math.round(c.mood)}/100.${c.homeless ? " Homeless." : ""}`;
+  const p = c.personality;
+  return [
+    `${c.name} ${c.surname}, ${c.age}. Traits: ${traitWords(c)}. ${personalitySummary(p)} Speaking style: ${p.style}.`,
+    `Quirks: ${p.quirks.join("; ") || "none"}. Likes ${p.likes.join(", ")}; dislikes ${p.dislikes.join(", ")}. Afraid of ${p.fear}; dreams of ${p.dream}.`,
+    `Job: ${job}. Cash ${money(c.money)}, savings ${money(c.savings)}${debts > 0 ? `, owes ${money(debts)}` : ""}. Goal: ${c.goal.label}. Mood ${Math.round(c.mood)}/100. Feeling: ${feelingWords(c)}.${c.homeless ? " Homeless." : ""}`,
+  ].join(" ");
+}
+
+/** "anxious (fear 62), lonely (loneliness 48)" — the feelings that stand out. */
+export function feelingWords(c: Citizen): string {
+  const strong = EMOTIONS.map((e) => [e, Math.round(c.emotions[e])] as const)
+    .filter(([e, v]) => v >= (e === "joy" || e === "love" ? 45 : 25))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
+  return strong.length ? strong.map(([e, v]) => `${e} ${v}`).join(", ") : "calm";
+}
+
+function feltText(m: Memory): string {
+  const top = Object.entries(m.emotions ?? {})
+    .filter(([, v]) => (v ?? 0) >= 5)
+    .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+    .slice(0, 2)
+    .map(([e]) => e);
+  return top.length ? ` (felt ${top.join(" and ")})` : "";
 }
 
 function memoryLines(c: Citizen, limit: number, aboutId?: string): string[] {
   const mems = aboutId ? recallAbout(c, aboutId, limit) : [...c.memories.long].sort((a, b) => b.importance * b.strength - a.importance * a.strength).slice(0, limit);
-  return mems.map((m) => `- ${formatTime(m.t).replace(/ \d\d:\d\d$/, "")}: ${m.text}`);
+  return mems.map((m) => `- ${formatTime(m.t).replace(/ \d\d:\d\d$/, "")}: ${m.text}${feltText(m)}`);
+}
+
+/** Lessons they've drawn from experience (strongest first). */
+function lessonLines(c: Citizen, limit: number, about?: string): string[] {
+  return [...c.reflections]
+    .filter((r) => !about || r.about === about || r.kind !== "person")
+    .sort((a, b) => b.strength - a.strength)
+    .slice(0, limit)
+    .map((r) => `- ${r.text}`);
 }
 
 // --------------------------------------------------------- strategy prompt
@@ -87,6 +120,7 @@ export function strategyPrompt(world: WorldState, c: Citizen, options: { id: str
     `Citizen: ${profile(world, c)}`,
     s.worry ? `Worry: ${s.worry}` : "",
     memoryLines(c, 4).length ? `Important memories:\n${memoryLines(c, 4).join("\n")}` : "",
+    lessonLines(c, 3).length ? `Lessons they've learned:\n${lessonLines(c, 3).join("\n")}` : "",
     stories.length ? `What they've heard:\n${stories.join("\n")}` : "",
     `Options:\n${options.map((o) => `[${o.id}] ${o.label}`).join("\n")}`,
     `Return {"choice": one option id, "thought": their inner monologue, first person, max 35 words, mentioning the real reason}.`,
@@ -125,9 +159,13 @@ export function conversationPrompt(world: WorldState, conv: Conversation, brief:
     `B: ${profile(world, b)}`,
     `A sees B as: ${rel(a, b)}.${memA.length ? ` A remembers:\n${memA.join("\n")}` : ""}`,
     `B sees A as: ${rel(b, a)}.${memB.length ? ` B remembers:\n${memB.join("\n")}` : ""}`,
+    lessonLines(a, 2, b.id).length ? `A's lessons:\n${lessonLines(a, 2, b.id).join("\n")}` : "",
+    lessonLines(b, 2, a.id).length ? `B's lessons:\n${lessonLines(b, 2, a.id).join("\n")}` : "",
     `Situation and constraints: ${brief}`,
-    `Write 3-6 alternating lines, A first. Then the outcome.`,
-  ].join("\n");
+    `Write 3-6 alternating lines, A first. Each speaks in their own style (A ${a.personality.style}, B ${b.personality.style}), shows how they feel right now, and may bring up something they remember about the other. Then the outcome.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
   const props = (outcomeSchema as Record<string, unknown>) ?? {};
   const schema = {
     type: "object",
@@ -144,6 +182,46 @@ export function conversationPrompt(world: WorldState, conv: Conversation, brief:
       outcome: { type: "object", properties: props, required: Object.keys(props), additionalProperties: false },
     },
     required: ["lines", "outcome"],
+    additionalProperties: false,
+  };
+  return { user, schema };
+}
+
+// ------------------------------------------------------- reflection prompt
+
+export const REFLECTION_SYSTEM =
+  "You are the inner voice of a citizen of 'AI Hustle City', a British small-town economic life simulation, lying awake at night going over the day. " +
+  "Reword each lesson in their own voice and speaking style, first person, max 18 words. Keep its meaning and who it's about. Reply only with JSON.";
+
+export function reflectionPrompt(world: WorldState, c: Citizen, learned: Reflection[]): { user: string; schema: Record<string, unknown> } {
+  const since = world.time - 26 * 60;
+  const today = [...c.memories.long, ...c.memories.short]
+    .filter((m) => m.t >= since)
+    .sort((a, b) => Math.abs(b.valence) * b.importance - Math.abs(a.valence) * a.importance)
+    .slice(0, 5)
+    .map((m) => `- ${m.text}${feltText(m)}`);
+  const user = [
+    `Citizen: ${profile(world, c)}`,
+    today.length ? `The day's strongest memories:\n${today.join("\n")}` : "",
+    `Lessons to reword:\n${learned.map((r) => `[${r.key}] ${r.text}`).join("\n")}`,
+    `Return {"lessons": [{"key": the lesson key, "text": the lesson in their words}]} with one entry per lesson.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const schema = {
+    type: "object",
+    properties: {
+      lessons: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { key: { type: "string", enum: learned.map((r) => r.key) }, text: { type: "string" } },
+          required: ["key", "text"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["lessons"],
     additionalProperties: false,
   };
   return { user, schema };

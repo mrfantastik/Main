@@ -19,9 +19,11 @@ import { findTx } from "./economy/ledger";
 import { debtsOf, netWorth } from "./economy/valuation";
 import { breakthroughThreshold } from "./economy/research";
 import { recentMemories } from "./memory/memory";
+import { dominantEmotion, EMOTION_EMOJI } from "./mind/emotions";
+import { personalitySummary } from "./mind/personality";
 import { relLabel } from "./social/relationships";
 import { dayOf, formatTime } from "./time";
-import type { Business, Citizen, Conversation, Loan, Transaction, WorldState } from "./types";
+import type { Business, Citizen, Conversation, Emotions, Loan, Transaction, WorldState } from "./types";
 import { avg, round2 } from "./util";
 
 // Converts the internal world state into compact messages for the UI.
@@ -85,7 +87,13 @@ export function citizenSummary(world: WorldState, c: Citizen): CitizenSummary {
     archetypes: c.archetypes,
     businessIds: c.businessIds,
     awaitingAI: c.awaitingAI,
+    emotion: emotionDTO(c),
   };
+}
+
+function emotionDTO(c: Citizen): CitizenSummary["emotion"] {
+  const d = dominantEmotion(c);
+  return d ? { kind: d.emotion, level: d.level, emoji: EMOTION_EMOJI[d.emotion] } : null;
 }
 
 export function businessSummary(world: WorldState, b: Business): BusinessSummary {
@@ -308,6 +316,10 @@ export function citizenDetail(world: WorldState, id: string): CitizenDetail | nu
     research: { points: Math.round(c.research.points), threshold: breakthroughThreshold(c), breakthroughs: c.research.breakthroughs, patents: c.research.patents },
     insights: c.beliefs.insights.map((i) => `${world.products[i.productId]?.name ?? i.productId} ${i.kind === "hype" ? "boom" : "slump"} around Day ${dayOf(i.startT)}`),
     beliefs: Object.entries(c.beliefs.occupationIncome).map(([occ, b]) => ({ occupation: occ, value: Math.round(b!.value), source: b!.source })),
+    personality: { ...c.personality, summary: personalitySummary(c.personality) },
+    emotions: Object.fromEntries(Object.entries(c.emotions).map(([k, v]) => [k, Math.round(v)])) as Emotions,
+    emotion: emotionDTO(c),
+    lessons: [...c.reflections].sort((a, b) => b.strength - a.strength),
     conversations: [...world.conversations, ...world.conversationLog]
       .filter((x) => (x.a === c.id || x.b === c.id) && x.lines.length > 0)
       .sort((x, y) => y.startedT - x.startedT)

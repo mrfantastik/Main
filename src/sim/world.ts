@@ -2,6 +2,8 @@ import { CONFIG } from "./config";
 import { generateCity } from "./city/map";
 import { ARCHETYPES, BASE_TRAITS, CITIZEN_COLORS, FIRST_NAMES, SURNAMES } from "./data/people";
 import { STARTING_PRODUCTS, INVENTIONS } from "./data/products";
+import { neutralEmotions } from "./mind/emotions";
+import { neutralPersonality } from "./mind/personality";
 import { rand, randInt, randRange, shuffle, type RngHolder } from "./rng";
 import { adjustRel, addRole } from "./social/relationships";
 import type {
@@ -154,6 +156,11 @@ function makeCitizen(world: WorldState, i: number, name: string, surname: string
     insideId: null,
     spot: null,
     needs: { energy: randRange(rng, 55, 80), hunger: randRange(rng, 45, 70), social: randRange(rng, 40, 80), fun: randRange(rng, 40, 80) },
+    // The real personality is filled in by setup once families are known.
+    personality: neutralPersonality(),
+    emotions: neutralEmotions(),
+    reflections: [],
+    lastReflectionDay: 0,
     wants: {},
     mood: 60,
     activity: { kind: "idle", label: "Idle", buildingId: null, startedAt: t, endsAt: t, action: null },
