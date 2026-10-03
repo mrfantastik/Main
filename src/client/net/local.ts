@@ -230,6 +230,8 @@ export class LocalHost {
       pending: this.director.pending,
       reason: this.director.available ? null : "the free AI is switched off for this page.",
       writer: this.director.writer,
+      doing: this.director.doing(this.world),
+      done: { ...this.director.tally },
       free: true,
       connection: this.brain ? null : this.director.freeStatus(),
       endpoint: this.endpoint ? { url: this.endpoint.url, model: this.endpoint.model } : null,
@@ -363,7 +365,15 @@ export class LocalHost {
           } catch {
             // a private window: the choice lasts until the page closes
           }
-          this.toast(msg.mode === "llm" ? "🌐 The free AI is writing conversations again." : "⚙️ Built-in AI only: no calls leave this page.");
+          this.toast(
+            msg.mode === "llm"
+              ? this.brain
+                ? "🧠 The town's brain is running things again."
+                : "🌐 The free AI is writing conversations again."
+              : this.brain
+                ? "⏸ The town's brain is resting: the built-in AI runs things."
+                : "⚙️ Built-in AI only: no calls leave this page.",
+          );
         }
         this.pushState();
         break;
@@ -376,10 +386,9 @@ export class LocalHost {
         this.toast(`⏩ Skipped ${describeSkip(minutes)} — ${n} things happened. It's now ${snap.describeTime(w.time)}.`);
         break;
       }
-      case "unscripted":
       case "invent": {
-        const why = msg.type === "unscripted" ? this.director.unscripted(w, Number(msg.convId)) : this.director.invent(w, typeof msg.idea === "string" ? msg.idea : "");
-        this.toast(why ?? (msg.type === "unscripted" ? "✨ The free AI is writing their conversation…" : "✨ The free AI is dreaming something up…"), why ? "error" : "info");
+        const why = this.director.invent(w, typeof msg.idea === "string" ? msg.idea : "");
+        this.toast(why ?? "✨ The free AI is dreaming something up…", why ? "error" : "info");
         break;
       }
       case "save":

@@ -162,6 +162,22 @@ export function smallChoicePrompt(world: WorldState, c: Citizen, options: { id: 
   return { system: SMALL_CHOICE_SYSTEM, user, prefill: "", kind: "choice", options: options.map((o) => o.id) };
 }
 
+/** What they'll do once they've finished what they're doing (asked while they're still at it). */
+export function smallPlanPrompt(world: WorldState, c: Citizen, options: { id: string; label: string }[]): SmallPrompt {
+  const s = situation(world, c);
+  const body = [s.hungry > 0.75 ? "very hungry" : s.hungry > 0.5 ? "hungry" : "", s.tired > 0.75 ? "exhausted" : s.tired > 0.5 ? "tired" : ""].filter(Boolean);
+  const doing = c.activity.label.charAt(0).toLowerCase() + c.activity.label.slice(1);
+  const user = [
+    sketch(world, c),
+    `It's ${formatTime(world.time).replace(/^Day \d+ /, "")} ${partOfDay(world.time)}. ${c.name} is ${doing}${body.length ? `, and ${body.join(" and ")}` : ""}.`,
+    ...onTheirMind(world, c),
+    `Money: ${money(c.money)} in their pocket, ${money(c.savings)} saved. Goal: ${c.goal.label}.`,
+    `After this, what does ${c.name} do?`,
+    ...options.map((o, i) => `${i + 1}. ${o.label}`),
+  ].join("\n");
+  return { system: SMALL_CHOICE_SYSTEM, user, prefill: "", kind: "choice", options: options.map((o) => o.id) };
+}
+
 // ------------------------------------------------------------- readers
 
 /** Looks like words a person would say (not markup, not a model talking about itself, not noise). */

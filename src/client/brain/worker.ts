@@ -273,6 +273,53 @@ function sample(row: Float32Array, recent: number[], o: GenerateOptions, rand: (
   return top[cut - 1];
 }
 
+type Past = Record<string, ort.Tensor>;
+
+/** The model's work on shared prompt starts (the system part), kept for reuse: most recently used last. */
+const prefixes: { ids: number[]; past: Past }[] = [];
+const MAX_PREFIXES = 4;
+
+function startsWith(ids: number[], prefix: number[]): boolean {
+  if (prefix.length >= ids.length) return false;
+  for (let i = 0; i < prefix.length; i++) if (ids[i] !== prefix[i]) return false;
+  return true;
+}
+
+function presentNames(): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < cfg!.layers; i++) out.push(`present.${i}.key`, `present.${i}.value`);
+  return out;
+}
+
+/** Run the model over some tokens. Without `logits`, only the attention cache is fetched (reading a prompt: no scores needed). */
+async function forward(ids: number[], past: Past, pastLen: number, logits: boolean): Promise<{ past: Past; row: Float32Array | null }> {
+  const n = ids.length;
+  const names = session!.inputNames;
+  const feeds: Record<string, ort.Tensor> = {
+    input_ids: new ort.Tensor("int64", BigInt64Array.from(ids.map(BigInt)), [1, n]),
+    attention_mask: new ort.Tensor("int64", new BigInt64Array(pastLen + n).fill(1n), [1, pastLen + n]),
+    ...past,
+  };
+  if (names.includes("position_ids")) feeds.position_ids = new ort.Tensor("int64", BigInt64Array.from({ length: n }, (_, i) => BigInt(pastLen + i)), [1, n]);
+  if (names.includes("num_logits_to_keep")) feeds.num_logits_to_keep = new ort.Tensor("int64", BigInt64Array.from([1n]), []);
+  const res = logits ? await session!.run(feeds) : await session!.run(feeds, presentNames());
+  let row: Float32Array | null = null;
+  if (res.logits) {
+    if (logits) row = lastRow(res.logits);
+    res.logits.dispose();
+  }
+  const next: Past = {};
+  for (let i = 0; i < cfg!.layers; i++) {
+    next[`past_key_values.${i}.key`] = res[`present.${i}.key`];
+    next[`past_key_values.${i}.value`] = res[`present.${i}.value`];
+  }
+  return { past: next, row };
+}
+
+const disposeAll = (p: Past) => {
+  for (const t of Object.values(p)) t.dispose();
+};
+
 async function generate(id: number, o: GenerateOptions): Promise<void> {
   if (!session || !tokenizer || !cfg) throw new Error("the brain isn't loaded yet");
   const t0 = performance.now();
@@ -281,32 +328,42 @@ async function generate(id: number, o: GenerateOptions): Promise<void> {
   const forced = o.forced ? tok.encode(o.forced, { add_special_tokens: false }).ids.map(Number) : null;
   const rand = rng(o.seed ?? Math.floor(Math.random() * 2 ** 31));
   const special = new Set<number>(cfg.eos);
-  const names = session.inputNames;
-  let past = emptyPast();
-  let ids = promptIds;
-  let pastLen = 0;
+  // Start from the kept work on the shared start of the prompt, if there is one (making it if it's new).
+  let shared = prefixes.filter((p) => startsWith(promptIds, p.ids)).sort((a, b) => b.ids.length - a.ids.length)[0];
+  if (!shared && o.cachePrefix) {
+    const ids = tok.encode(o.cachePrefix, { add_special_tokens: false }).ids.map(Number);
+    if (startsWith(promptIds, ids)) {
+      shared = { ids, past: (await forward(ids, emptyPast(), 0, false)).past };
+      prefixes.push(shared);
+      if (prefixes.length > MAX_PREFIXES) disposeAll(prefixes.shift()!.past);
+    }
+  }
+  if (shared) prefixes.push(...prefixes.splice(prefixes.indexOf(shared), 1));
+  let past: Past = shared ? shared.past : emptyPast();
+  let pastLen = shared ? shared.ids.length : 0;
+  let owned = !shared; // the kept start isn't ours to throw away
   const out: number[] = [];
   let text = "";
+  let prefillMs = 0;
   try {
+    // Read the rest of the prompt: all but its last token without scores, then the last one with them.
+    const rest = promptIds.slice(pastLen);
+    if (rest.length > 1) {
+      const r = await forward(rest.slice(0, -1), past, pastLen, false);
+      if (owned) disposeAll(past);
+      past = r.past;
+      owned = true;
+      pastLen += rest.length - 1;
+    }
+    let ids = rest.slice(-1);
     for (let step = 0; step < o.maxNewTokens; step++) {
-      const n = ids.length;
-      const feeds: Record<string, ort.Tensor> = {
-        input_ids: new ort.Tensor("int64", BigInt64Array.from(ids.map(BigInt)), [1, n]),
-        attention_mask: new ort.Tensor("int64", new BigInt64Array(pastLen + n).fill(1n), [1, pastLen + n]),
-        ...past,
-      };
-      if (names.includes("position_ids")) feeds.position_ids = new ort.Tensor("int64", BigInt64Array.from({ length: n }, (_, i) => BigInt(pastLen + i)), [1, n]);
-      if (names.includes("num_logits_to_keep")) feeds.num_logits_to_keep = new ort.Tensor("int64", BigInt64Array.from([1n]), []);
-      const res = await session.run(feeds);
-      for (const t of Object.values(past)) t.dispose();
-      const row = lastRow(res.logits);
-      res.logits.dispose();
-      past = {};
-      for (let i = 0; i < cfg.layers; i++) {
-        past[`past_key_values.${i}.key`] = res[`present.${i}.key`];
-        past[`past_key_values.${i}.value`] = res[`present.${i}.value`];
-      }
-      pastLen += n;
+      const r = await forward(ids, past, pastLen, true);
+      if (owned) disposeAll(past);
+      past = r.past;
+      owned = true;
+      pastLen += ids.length;
+      if (step === 0) prefillMs = performance.now() - t0;
+      const row = r.row!;
       const next = forced ? (forced[step] ?? [...cfg.eos][0]) : sample(row, out.slice(-64), o, rand, step === 0 ? special : new Set());
       if (cfg.eos.has(next) || (forced && step >= forced.length)) break;
       out.push(next);
@@ -319,9 +376,9 @@ async function generate(id: number, o: GenerateOptions): Promise<void> {
       }
     }
   } finally {
-    for (const t of Object.values(past)) t.dispose();
+    if (owned) disposeAll(past);
   }
-  post({ type: "result", id, text, promptTokens: promptIds.length, newTokens: out.length, ms: Math.round(performance.now() - t0) });
+  post({ type: "result", id, text, promptTokens: promptIds.length, newTokens: out.length, ms: Math.round(performance.now() - t0), prefillMs: Math.round(prefillMs) });
 }
 
 self.onmessage = (ev: MessageEvent<BrainRequest>) => {

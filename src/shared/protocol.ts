@@ -148,8 +148,12 @@ export interface AIStatusDTO {
   maxCallsPerDay: number;
   pending: number;
   reason: string | null;
-  /** Who writes the AI conversations, and can rewrite one or invent an event on request (null: nobody). */
+  /** Who does the AI thinking and talking (null: nobody). */
   writer: string | null;
+  /** What the AI is working on right now, in words ("Deciding what Mike does next"). */
+  doing?: string | null;
+  /** What it has done so far (free AI): choices people acted on, conversations written, thoughts. */
+  done?: { plan: number; conversation: number; thought: number };
   /** The writer is a free public AI (no budget; rate limited). */
   free?: boolean;
   /** Free AI: which services answer, and whether this page can reach the internet at all. */
@@ -412,8 +416,6 @@ export type ClientMsg =
   | { type: "skip"; minutes: number }
   /** Replace the city with a saved one (the JSON from "Download world" / "Copy save"). */
   | { type: "import"; world: unknown }
-  /** Ask Claude to write this conversation from scratch. */
-  | { type: "unscripted"; convId: number }
   /** Ask Claude to invent something that happens in town. */
   | { type: "invent"; idea?: string };
 

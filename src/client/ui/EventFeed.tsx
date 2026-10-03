@@ -48,14 +48,14 @@ function EventText({ ev }: { ev: SimEvent }) {
 }
 
 function ConversationToggle({ id }: { id: number }) {
-  const free = useStore((s) => s.state?.ai.free);
+  const ai = useStore((s) => s.state?.ai);
   const conv = store.conversations.get(id);
   const [open, setOpen] = useState(false);
   if (!conv) return null;
   return (
     <div>
       <button className="chip" style={{ border: 0, marginTop: 3 }} onClick={() => setOpen(!open)}>
-        {open ? "Hide" : "💬 Read"} conversation{conv.source === "llm" ? ` · ${free ? "🌐" : "🧠"} ${aiName(free)}` : ""}
+        {open ? "Hide" : "💬 Read"} conversation{conv.source === "llm" ? ` · ${ai?.free && !ai.brain ? "🌐" : "🧠"} ${aiName(ai)}` : ""}
       </button>
       {open && <Transcript c={conv} />}
     </div>

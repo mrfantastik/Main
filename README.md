@@ -31,15 +31,18 @@ This makes `dist/ai-hustle-city.html`, a single file that runs the whole city in
 
 ### Who does the thinking and talking
 
-Citizens run on the built-in **utility AI** (needs, money, personality, memories, relationships). On top of that, in the browser game, **the town's brain**, a small open-source language model running **on your own computer**, writes:
+Citizens run on the built-in **utility AI** (needs, money, personality, memories, relationships). On top of that, in the browser game, **the town's brain**, a small open-source language model running **on your own computer**, runs the people all the time, with nothing to click:
 
-- **what they're thinking**: whoever you're looking at first, then everyone else in turn;
+- **what they do next**: while someone is busy, the brain is asked what they'll do after, choosing from the few things that make sense for them right now (eat, work, go to the pub, find someone...), from who they are, how they feel and what's on their mind. They act on it, and their reason becomes what they're thinking. If things change before they're done (they got hungrier, the shop shut), a pick that no longer makes sense is dropped;
+- **their tough calls**: jobs, money, starting or closing a business;
 - **what they say**: chats, deals, favours and arguments, rewritten in their own voices from the scene's beats and a rough draft, with who they are, how they feel, what they've heard and what they remember;
-- **their tough decisions**: close calls with real stakes.
+- **what they're thinking**, in between.
 
-The brain is [SmolLM2](https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct) by Hugging Face (Apache 2.0), run with [onnxruntime-web](https://onnxruntime.ai): on your graphics card if your browser has WebGPU (Chrome, Edge), otherwise on your processor. Nothing is sent anywhere; it's free. Click **🧠 Wake the town's brain** (top bar or the 🧠 AI panel). The first time, the model downloads (about 300 MB) and is kept in your browser's cache; after that it starts from there. On a processor it's slower, so it sticks to thoughts and the conversations of whoever you're watching.
+Whoever you're looking at comes first; then whoever is about to decide something. The brain does one thing at a time, so it can't get to everyone at once: the 🧠 AI panel shows what it's doing right now and how many choices, conversations and thoughts it has made, and a person's panel marks what the brain chose for them with 🧠.
 
-The town still decides what happens (who lends what, who gets the job, which news gets passed on), so a small model can't break the economy. Whatever it can't get to in time, or anything during a skip-ahead, the built-in AI improvises. AI-written lines have a gold border.
+The brain is [SmolLM2](https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct) by Hugging Face (Apache 2.0), run with [onnxruntime-web](https://onnxruntime.ai): on your graphics card if your browser has WebGPU (Chrome, Edge), otherwise on your processor. Nothing is sent anywhere; it's free. Click **🧠 Wake the town's brain** (top bar or the 🧠 AI panel). The first time, the model downloads (about 300 MB) and is kept in your browser's cache; after that it starts from there. On a processor it's slower, so it only writes the conversations of whoever you're watching (it still picks people's moves and thinks for them).
+
+The town keeps the rules (it only offers choices a person can actually make, and decides who lends what, who gets the job, which news gets passed on), so a small model can't break the economy. Whatever it can't get to in time, or anything during a skip-ahead, the built-in AI improvises. AI-written lines have a gold border.
 
 **Where the model comes from:**
 - **The single-file game** (`dist/ai-hustle-city.html`, opened in your browser): straight from Hugging Face, the first time you wake it.
@@ -151,7 +154,8 @@ src/
     city/              Map generation, A* pathfinding
     ai/                Decision system: actions, activity & strategy options, utility
                        scoring, beliefs, careers, thoughts, AI director, LLM prompts,
-                       the free AI client (freeai.ts), unscripted chats and invented events
+                       the free AI client (freeai.ts), small-model prompts (small.ts),
+                       invented events
     economy/           Ledger (all money moves here), market, businesses, bank,
                        jobs, services, trading, reselling, research, housing, shopping
     memory/            Memory system

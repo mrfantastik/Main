@@ -1,11 +1,11 @@
 // Town happenings, news spreading by word of mouth, improvised conversations,
-// and Claude's unscripted chats and invented events.
+// and invented events.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { advance, newWorld } from "../src/sim";
 import { AIDirector } from "../src/sim/ai/director";
 import type { LLMClient, LLMRequest } from "../src/sim/ai/llm";
-import { applyInvented, applyUnscripted, inventableKinds, inventPrompt, unscriptedPrompt } from "../src/sim/ai/unscripted";
+import { applyInvented, inventableKinds, inventPrompt } from "../src/sim/ai/unscripted";
 import { applyGodCommand } from "../src/sim/god";
 import { prepareLoadedWorld } from "../src/sim/migrate";
 import { applyNotes, improvise } from "../src/sim/social/improv";
@@ -192,31 +192,9 @@ test("old saves get news and happenings and keep running", () => {
   assert.ok(loaded.happenings.length >= 1, "things start happening");
 });
 
-test("Claude's unscripted conversations and invented events are checked before use", () => {
+test("invented events are checked before use", () => {
   const w = newWorld(69);
   at(w, 1, 14);
-  const conv = w.conversationLog.find((c) => c.topic === "chat")!;
-  assert.ok(conv, "a chat to rewrite");
-  const p = unscriptedPrompt(w, conv.id);
-  assert.equal(typeof p, "object");
-  const { prompt } = p as { prompt: string };
-  for (const id of [conv.a, conv.b]) assert.ok(prompt.includes(w.citizens[id].name));
-  assert.match(prompt, /JSON/);
-  assert.equal(unscriptedPrompt(w, -5), "That conversation has gone from memory.");
-
-  assert.throws(() => applyUnscripted(w, conv.id, { nope: true }), /wasn't a conversation/);
-  assert.throws(() => applyUnscripted(w, conv.id, { lines: [{ speaker: "A", text: "Hi." }, { speaker: "C", text: "Who?" }] }), /too short/);
-  const msg = applyUnscripted(w, conv.id, {
-    lines: [
-      { speaker: "A", text: "You look like you've seen a ghost." },
-      { speaker: "B", text: "Worse. I've seen my bank balance." },
-      { speaker: "A", text: "Ha. Drink?" },
-    ],
-  });
-  assert.match(msg, /3 lines/);
-  assert.equal(conv.source, "llm");
-  assert.deepEqual(conv.lines.map((l) => l.speaker), [conv.a, conv.b, conv.a]);
-
   const kinds = inventableKinds(w);
   assert.ok(kinds.length > 0);
   const ip = inventPrompt(w, "something at the pub");
@@ -253,7 +231,7 @@ function mockClient(calls: LLMRequest[]): LLMClient {
   };
 }
 
-test("the director: news chats stay within their share of calls; unscripted and invent on request", async () => {
+test("the director: news chats stay within their share of calls; invent on request", async () => {
   const calls: LLMRequest[] = [];
   let spent = 0;
   const director = new AIDirector(mockClient(calls), { total: () => spent, add: (u) => (spent += u) }, { maxConcurrent: 4, minIntervalMs: 0, timeoutMs: 5000 });
@@ -275,18 +253,13 @@ test("the director: news chats stay within their share of calls; unscripted and 
 
   at(w, 3, 12);
   await step(30);
-  const conv = [...w.conversationLog].reverse().find((c) => c.topic === "chat" && c.status === "done")!;
-  assert.equal(director.unscripted(w, conv.id) ?? "accepted", "accepted");
-  await step(10);
   assert.equal(director.invent(w, "a lucky ticket") ?? "accepted", "accepted");
   await step(60);
-  assert.equal(conv.source, "llm");
-  assert.equal(conv.lines[0].text, "Did you hear?");
   const last = w.happenings[w.happenings.length - 1];
   assert.equal(last.source, "llm");
   assert.equal(last.title, "A winning ticket");
   assert.ok(director.notices.some((n) => n.text.includes("A winning ticket")));
-  assert.ok(w.ai.log.some((l) => l.kind === "unscripted") && w.ai.log.some((l) => l.kind === "invent"), "both in the AI log");
+  assert.ok(w.ai.log.some((l) => l.kind === "invent"), "in the AI log");
 
   const off = new AIDirector(null, { total: () => 0, add: () => {} });
   assert.match(off.invent(w) ?? "", /isn't available/);

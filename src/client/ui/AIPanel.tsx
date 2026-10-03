@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { AIStatusDTO } from "../../shared/protocol";
 import { store, useStore } from "../net/store";
-import { when } from "./format";
+import { aiName, when } from "./format";
 import { Shell } from "./Overlays";
 import { Transcript } from "./Transcript";
 
@@ -84,13 +84,13 @@ export function AIPanel() {
         </div>
         )}
         <div className="box">
-          <h3>{ai.free ? "Free AI" : "Claude"} call log</h3>
+          <h3>{aiName(ai)} log</h3>
           {!dash?.aiLog?.length && <div className="empty">No AI calls yet.</div>}
           <div className="list">
             {dash?.aiLog?.map((l) => (
               <details key={l.id} className="item">
                 <summary style={{ cursor: "pointer" }}>
-                  <span className={`chip ${l.status === "ok" ? "good" : l.status === "error" ? "bad" : ""}`}>{l.status}</span> {l.kind} · {l.citizenName} · {when(l.t)}
+                  <span className={`chip ${l.status === "ok" ? "good" : l.status === "error" ? "bad" : ""}`}>{l.status}</span> {l.kind === "plan" ? "next move" : l.kind} · {l.citizenName} · {when(l.t)}
                   {ai.free ? "" : ` · $${l.costUsd.toFixed(4)}`} · {(l.ms / 1000).toFixed(1)}s
                   <div className="meta">{l.note}</div>
                 </summary>
@@ -240,13 +240,15 @@ export function BrainBox({ ai }: { ai: AIStatusDTO }) {
       <h3>The town's brain</h3>
       <p style={{ marginTop: 0 }}>
         An open-source AI (<b>SmolLM2</b> by Hugging Face, free under the Apache 2.0 licence) that runs <b>here, on your computer</b>: on your graphics
-        card if your browser has WebGPU, otherwise on your processor. Nothing is sent anywhere. Once it's awake it writes what people{" "}
-        <b>think</b> (whoever you're looking at first), what they <b>say</b> to each other, and their <b>tough decisions</b>, from who they are, how
-        they feel, what they've heard and what they remember.
+        card if your browser has WebGPU, otherwise on your processor. Nothing is sent anywhere. Once it's awake it runs the people, all the time: it{" "}
+        <b>chooses what they do next</b>, decides their <b>tough calls</b> (jobs, money, businesses), writes what they <b>say</b> to each other and
+        what they <b>think</b>, from who they are, how they feel, what they've heard and what they remember. Whoever you're looking at comes first.
       </p>
       <p>
-        The town still decides what happens (who lends what, what news gets passed on), so the brain can't break the economy. It's a small model, so
-        it's quick but not a genius: when it's busy, or anything during a skip, the built-in AI improvises. Lines it wrote have a gold border.
+        The town keeps the rules: it only offers choices a person can actually make, and it settles who lends what and what news gets passed on, so
+        the brain can't break the economy. It's a small model doing one thing at a time, so it can't get to everyone at once: whoever it misses (and
+        everyone during a skip) is looked after by the built-in AI. Its lines have a gold border, and its decisions are marked 🧠 in each person's
+        panel.
       </p>
       <div className="kv">
         <span className="k">Status</span>
@@ -274,6 +276,20 @@ export function BrainBox({ ai }: { ai: AIStatusDTO }) {
             <span className="k">Download</span>
             <span>
               {mb(b.loaded)} of {mb(b.total)}
+            </span>
+          </>
+        )}
+        {b.state === "ready" && ai.doing && (
+          <>
+            <span className="k">Right now</span>
+            <span>{ai.doing}</span>
+          </>
+        )}
+        {b.state === "ready" && ai.done && (
+          <>
+            <span className="k">So far</span>
+            <span>
+              {ai.done.plan} choices · {ai.done.conversation} conversations · {ai.done.thought} thoughts
             </span>
           </>
         )}

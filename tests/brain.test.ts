@@ -61,7 +61,7 @@ test("small prompts: who, where, how they speak, what's on their minds, what hap
 });
 
 /** A stand-in for the in-page brain: answers by the kind of small prompt it's given. */
-function fakeBrain(seen: LLMRequest[], opts: { ready?: () => boolean; slow?: () => boolean } = {}): LLMClient {
+function fakeBrain(seen: LLMRequest[], opts: { ready?: () => boolean; slow?: () => boolean; pick?: "first" | "last" } = {}): LLMClient {
   return {
     model: "brain",
     free: true,
@@ -77,7 +77,9 @@ function fakeBrain(seen: LLMRequest[], opts: { ready?: () => boolean; slow?: () 
           ? { lines: readLines(`${p.prefill} Fancy seeing you here!\n${p.names![1]}: I live round the corner, you know.\n${p.names![0]}: Course you do.`, p.names!) }
           : p.kind === "thought"
             ? { thought: readThought("Today feels like a lucky day, for once.", "") }
-            : readChoice("1. Feels right.", p.options!);
+            : opts.pick === "last"
+              ? readChoice(`${p.options!.length}. I fancy a change, honestly.`, p.options!)
+              : readChoice("1. Feels right.", p.options!);
       return { json, inputTokens: 0, outputTokens: 0, model: "brain" };
     },
   };
@@ -109,10 +111,12 @@ test("with the brain awake, people think and talk through it; asleep, nothing is
   for (let i = 0; i < 24; i++) {
     await run(w, d, 30);
     for (const c of w.conversationLog) seenConvs.set(c.id, c);
+    if (i === 1) {
+      assert.ok(seen.some((r) => r.small!.kind === "thought" && r.small!.user.startsWith(`${me.name} (`)), "the person in focus gets a thought straight away");
+      assert.ok(w.ai.log.some((l) => l.kind === "thought" && l.status === "ok" && l.citizenId === me.id), "and it's used");
+    }
   }
   assert.ok(seen.every((r) => r.small), "every request carries a short prompt");
-  assert.ok(seen.some((r) => r.small!.kind === "thought" && r.small!.user.includes(me.name)), "the person in focus gets thoughts");
-  assert.ok(w.ai.log.some((l) => l.kind === "thought" && l.status === "ok" && l.citizenId === me.id), "and they're used");
   const voiced = [...seenConvs.values()].filter((c) => c.source === "llm");
   assert.ok(voiced.length >= 3, `only ${voiced.length} conversations voiced`);
   for (const c of voiced) assert.equal(c.lines[1].text, "I live round the corner, you know.");
@@ -133,4 +137,54 @@ test("a slow brain (no graphics card) only voices the conversations you're watch
   const convPrompts = seen.filter((r) => r.small!.kind === "lines");
   const focusName = w.citizens[d.focus].name;
   assert.ok(convPrompts.every((r) => r.small!.names!.includes(focusName)), "only chats with the person in focus");
+});
+
+test("with the brain awake, people act on its choices: it picks their next move, and their reason is what they think", async () => {
+  const seen: LLMRequest[] = [];
+  const d = new AIDirector(fakeBrain(seen, { pick: "last" }), { total: () => 0, add: () => {} }, { maxConcurrent: 1, minIntervalMs: 0, timeoutMs: 5000 });
+  d.attach();
+  const w = newWorld(93);
+  w.ai.mode = "llm";
+  w.ai.maxCallsPerDay = 5000;
+  advance(w, 8 * 60);
+  const me = w.citizens[w.citizenOrder[2]];
+  d.focus = me.id;
+  await run(w, d, 8 * 60);
+  const plans = seen.filter((r) => /After this, what does/.test(r.small!.user));
+  assert.ok(plans.length >= 10, `${plans.length} next moves asked for`);
+  assert.ok(plans.some((r) => r.small!.user.startsWith(`${me.name} (`)), "the person in focus is asked");
+  for (const r of plans) assert.ok(r.small!.options!.length >= 2 && r.small!.options!.length <= 4, "a short list of sensible options");
+  const people = w.citizenOrder.map((id) => w.citizens[id]);
+  const byBrain = people.flatMap((c) => c.decisions.filter((x) => x.kind === "activity" && x.source === "llm"));
+  assert.ok(byBrain.length >= 8, `${byBrain.length} moves chosen by the brain`);
+  assert.ok(new Set(people.filter((c) => c.decisions.some((x) => x.source === "llm")).map((c) => c.id)).size >= 5, "not just the person in focus");
+  assert.ok(me.decisions.some((x) => x.source === "llm"), "the person in focus acts on it");
+  assert.ok(byBrain.every((x) => x.thought === "I fancy a change, honestly."), "their reason is the brain's");
+  assert.ok(byBrain.some((x) => x.chosen !== x.options[0].id), "and it isn't always what the utility AI would have picked");
+  assert.ok(people.some((c) => c.thoughtSource === "llm" && c.thought === "I fancy a change, honestly."), "what they think now");
+  assert.ok(d.tally.plan >= byBrain.length, "counted");
+  assert.ok(w.ai.log.some((l) => l.kind === "plan" && l.status === "ok" && /next: "I fancy a change/.test(l.note)), "in the AI log");
+  // Still a working town: the brain's whims don't leave more people starving or worn out than the utility AI does.
+  const plain = newWorld(93);
+  advance(plain, 16 * 60);
+  const worn = (ws: WorldState) => ws.citizenOrder.map((id) => ws.citizens[id]).filter((c) => c.needs.hunger < 10 || c.needs.energy < 5).length;
+  assert.ok(worn(w) <= worn(plain) + 2, `${worn(w)} worn out with the brain, ${worn(plain)} without`);
+});
+
+test("the brain's pick is dropped when it no longer makes sense, or comes too late", async () => {
+  const seen: LLMRequest[] = [];
+  const d = new AIDirector(fakeBrain(seen, { pick: "last" }), { total: () => 0, add: () => {} }, { maxConcurrent: 1, minIntervalMs: 0, timeoutMs: 5000 });
+  d.attach();
+  const w = newWorld(94);
+  w.ai.mode = "llm";
+  w.ai.maxCallsPerDay = 5000;
+  advance(w, 9 * 60);
+  await run(w, d, 4 * 60);
+  // Every brain-made move was one of the options it was offered, and still sensible when it was taken.
+  for (const c of w.citizenOrder.map((id) => w.citizens[id]))
+    for (const x of c.decisions.filter((r) => r.source === "llm")) {
+      const chosen = x.options.find((o) => o.id === x.chosen)!;
+      assert.ok(chosen, "a real option");
+      assert.ok(chosen.score >= x.options[0].score - 1.31, `${c.name}: ${chosen.label} (${chosen.score}) vs ${x.options[0].label} (${x.options[0].score})`);
+    }
 });

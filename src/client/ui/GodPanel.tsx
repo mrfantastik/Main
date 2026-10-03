@@ -100,7 +100,7 @@ export function GodPanel() {
             Make it happen
           </button>
         </div>
-        {writer && (
+        {writer && !st?.ai.brain && (
           <div className="god-row">
             <input aria-label="Your idea (optional)" placeholder="Your idea (optional)" value={idea} onChange={(e) => setIdea(e.target.value)} />
             <button className="btn unscripted" title={`${writer} invents something that happens, about real people here`} onClick={() => store.send({ type: "invent", idea })}>

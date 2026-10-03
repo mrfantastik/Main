@@ -16,8 +16,7 @@ const TOPIC: Record<string, string> = {
 };
 
 export function Transcript({ c }: { c: ConversationDTO }) {
-  const writer = useStore((s) => s.state?.ai.writer ?? null);
-  const ai = aiName(useStore((s) => s.state?.ai.free));
+  const ai = aiName(useStore((s) => s.state?.ai));
   return (
     <div className="item" style={{ borderColor: c.source === "llm" ? "var(--llm)" : undefined }}>
       <div className="meta" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -40,11 +39,6 @@ export function Transcript({ c }: { c: ConversationDTO }) {
         ))}
       </div>
       {c.summary && <div className="meta">➜ {c.summary}</div>}
-      {writer && (
-        <button className="btn unscripted" title={`${writer} writes what these two would really say, from scratch`} onClick={() => store.send({ type: "unscripted", convId: c.id })}>
-          ✨ {c.source === "llm" ? "Write it again" : "Hear it unscripted"}
-        </button>
-      )}
     </div>
   );
 }

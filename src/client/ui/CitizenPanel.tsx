@@ -82,7 +82,7 @@ function Who({ d }: { d: CitizenDetail }) {
 }
 
 function Decision({ d }: { d: DecisionRecord }) {
-  const ai = aiName(useStore((s) => s.state?.ai.free));
+  const ai = aiName(useStore((s) => s.state?.ai));
   return (
     <details className="item decision">
       <summary>
@@ -123,7 +123,7 @@ function Decision({ d }: { d: DecisionRecord }) {
 }
 
 function Overview({ d }: { d: CitizenDetail }) {
-  const ai = aiName(useStore((s) => s.state?.ai.free));
+  const ai = aiName(useStore((s) => s.state?.ai));
   return (
     <>
       <div className="section">💭 What is {d.name} thinking?</div>
@@ -140,7 +140,14 @@ function Overview({ d }: { d: CitizenDetail }) {
         <span className="k">Goal</span>
         <span>🎯 {d.goal.label}</span>
         <span className="k">Doing</span>
-        <span>{d.activity}</span>
+        <span>
+          {d.activity}
+          {d.decisions.find((x) => x.kind === "activity")?.source === "llm" && (
+            <span className="chip llm" title={`${ai} chose this`} style={{ marginLeft: 6 }}>
+              🧠 {ai}'s pick
+            </span>
+          )}
+        </span>
         <span className="k">Location</span>
         <span>{d.location}</span>
         <span className="k">Home</span>

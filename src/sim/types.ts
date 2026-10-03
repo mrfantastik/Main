@@ -906,7 +906,7 @@ export interface AILogEntry {
   id: number;
   t: number;
   citizenId: CitizenId | null;
-  kind: "strategy" | "conversation" | "reflection" | "unscripted" | "invent" | "thought";
+  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan";
   prompt: string;
   response: string;
   costUsd: number;

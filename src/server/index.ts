@@ -116,6 +116,8 @@ function aiStatus(world: WorldState): AIStatusDTO {
     pending: director.pending,
     reason: director.unavailableReason,
     writer: director.writer,
+    doing: director.doing(world),
+    done: { ...director.tally },
     free: director.free,
     connection: director.freeStatus(),
     endpoint: customEndpoint ? { url: customEndpoint.url, model: customEndpoint.model } : null,
@@ -223,10 +225,9 @@ function handle(client: Client, msg: ClientMsg): void {
       for (const c of clients) send(c.ws, { type: "toast", text: `⏩ Skipped ${describeSkip(minutes)} — ${events} things happened. It's now ${snap.describeTime(world.time)}.`, level: "info" });
       break;
     }
-    case "unscripted":
     case "invent": {
-      const why = msg.type === "unscripted" ? director.unscripted(world, Number(msg.convId)) : director.invent(world, typeof msg.idea === "string" ? msg.idea : "");
-      send(client.ws, why ? { type: "toast", text: why, level: "error" } : { type: "toast", text: msg.type === "unscripted" ? `✨ ${director.free ? "The free AI" : "Claude"} is writing their conversation…` : `✨ ${director.free ? "The free AI" : "Claude"} is dreaming something up…`, level: "info" });
+      const why = director.invent(world, typeof msg.idea === "string" ? msg.idea : "");
+      send(client.ws, { type: "toast", text: why ?? `✨ ${director.free ? "The free AI" : "Claude"} is dreaming something up…`, level: why ? "error" : "info" });
       break;
     }
     case "save":

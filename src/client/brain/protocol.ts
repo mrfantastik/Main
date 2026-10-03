@@ -24,6 +24,8 @@ export interface BrainSource {
 export interface GenerateOptions {
   /** The whole prompt, chat template already applied. */
   prompt: string;
+  /** The start of the prompt that many requests share (the system part): the model's work on it is kept and reused. */
+  cachePrefix?: string;
   maxNewTokens: number;
   temperature: number;
   topP: number;
@@ -43,5 +45,6 @@ export type BrainRequest =
 export type BrainEvent =
   | { type: "progress"; stage: "download" | "compile"; loaded: number; total: number; file: string }
   | { type: "ready"; device: "webgpu" | "wasm"; name: string; ms: number }
-  | { type: "result"; id: number; text: string; promptTokens: number; newTokens: number; ms: number }
+  /** `ms`: the whole request; `prefillMs`: the part spent reading the prompt (the rest is writing the reply). */
+  | { type: "result"; id: number; text: string; promptTokens: number; newTokens: number; ms: number; prefillMs: number }
   | { type: "error"; id?: number; message: string };

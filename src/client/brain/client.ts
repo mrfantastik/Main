@@ -66,9 +66,16 @@ export async function findBrainSource(): Promise<{ source: BrainSource; from: "p
   };
 }
 
-function chatml(system: string, user: string, prefill: string): string {
-  return `<|im_start|>system\n${system}<|im_end|>\n<|im_start|>user\n${user}<|im_end|>\n<|im_start|>assistant\n${prefill}`;
+/** The shared start of every prompt with this system message (the model's work on it is kept). */
+function chatmlStart(system: string): string {
+  return `<|im_start|>system\n${system}<|im_end|>\n<|im_start|>user\n`;
 }
+
+function chatml(system: string, user: string, prefill: string): string {
+  return `${chatmlStart(system)}${user}<|im_end|>\n<|im_start|>assistant\n${prefill}`;
+}
+
+type Reply = { text: string; promptTokens: number; newTokens: number; ms: number; prefillMs: number };
 
 export class BrainClient implements LLMClient {
   readonly model = "SmolLM2 (in your browser)";
@@ -81,7 +88,7 @@ export class BrainClient implements LLMClient {
   onChange: (() => void) | null = null;
   private worker: Worker | null = null;
   private seq = 1;
-  private waiting = new Map<number, { resolve: (r: { text: string; promptTokens: number; newTokens: number; ms: number }) => void; reject: (e: Error) => void }>();
+  private waiting = new Map<number, { resolve: (r: Reply) => void; reject: (e: Error) => void }>();
 
   ready(): boolean {
     return this.status.state === "ready";
@@ -179,14 +186,16 @@ export class BrainClient implements LLMClient {
     this.waiting.delete(m.id!);
     if (m.type === "error") w.reject(new Error(m.message));
     else {
-      const tps = m.newTokens / Math.max(0.001, m.ms / 1000);
-      this.set({ replies: this.status.replies + 1, speed: this.status.speed ? this.status.speed * 0.7 + tps * 0.3 : tps });
+      // Writing speed (reading the prompt is quicker, and not what people wait on line by line).
+      const writing = m.newTokens > 1 ? (m.newTokens - 1) / Math.max(0.001, (m.ms - m.prefillMs) / 1000) : 0;
+      const speed = !writing ? this.status.speed : this.status.speed ? this.status.speed * 0.7 + writing * 0.3 : writing;
+      this.set({ replies: this.status.replies + 1, speed });
       w.resolve(m);
     }
   }
 
   /** Generate a raw continuation (also used by tests). */
-  generate(opts: GenerateOptions): Promise<{ text: string; promptTokens: number; newTokens: number; ms: number }> {
+  generate(opts: GenerateOptions): Promise<Reply> {
     if (!this.worker || this.status.state !== "ready") return Promise.reject(new Error("the brain isn't awake"));
     const id = this.seq++;
     return new Promise((resolve, reject) => {
@@ -198,13 +207,14 @@ export class BrainClient implements LLMClient {
   async complete(req: LLMRequest): Promise<LLMResponse> {
     const p = req.small;
     if (!p) throw new Error("the in-page brain only takes short prompts");
-    const base = { prompt: chatml(p.system, p.user, p.prefill), topK: 50, seed: Math.floor(Math.random() * 2 ** 31) };
+    const base = { prompt: chatml(p.system, p.user, p.prefill), cachePrefix: chatmlStart(p.system), topK: 50, seed: Math.floor(Math.random() * 2 ** 31) };
     const opts: GenerateOptions =
       p.kind === "lines"
         ? { ...base, maxNewTokens: 220, temperature: 0.85, topP: 0.92, repetitionPenalty: 1.15, stop: ["<|im_", "\n\n\n"] }
         : p.kind === "thought"
           ? { ...base, maxNewTokens: 60, temperature: 0.9, topP: 0.92, repetitionPenalty: 1.1, stop: ["\n"] }
-          : { ...base, maxNewTokens: 48, temperature: 0.6, topP: 0.9, repetitionPenalty: 1.05, stop: ["\n\n"] };
+          : // A pick and a reason: stop before it starts listing the options again.
+            { ...base, maxNewTokens: 44, temperature: 0.6, topP: 0.9, repetitionPenalty: 1.05, stop: ["\n\n", "\n1", "\n2", "\n3", "\n4", "<|im_"] };
     if (this.forced) opts.forced = forcedReply(p.kind, p.names ?? []);
     const r = await this.generate(opts);
     const text = p.prefill + r.text;

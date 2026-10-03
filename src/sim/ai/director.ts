@@ -1,24 +1,33 @@
+import { MEAL_FILLS } from "../economy/living";
 import { logEvent } from "../events";
+import { updateNeeds } from "../systems/needs";
 import { setReflectionHook } from "../mind/reflection";
 import { resolveConversationAI, setConversationAIHook } from "../social/conversation";
 import { dayOf } from "../time";
 import type { AILogEntry, Citizen, Conversation, ConvValue, Reflection, WorldState } from "../types";
 import { newId, pushRing, round2 } from "../util";
-import { scoreOf } from "./decision";
-import { setThought } from "./decision";
-import { smallChoicePrompt, smallConversationPrompt, smallThoughtPrompt, type SmallPrompt } from "./small";
+import { activityOptions, type ActivityOption } from "./activity";
+import { setActivityHook } from "./brain";
+import { scoreOf, setThought } from "./decision";
+import { smallChoicePrompt, smallConversationPrompt, smallPlanPrompt, smallThoughtPrompt, type SmallPrompt } from "./small";
 import type { FreeAIClient, FreeAIStatus } from "./freeai";
 import { CONVERSATION_SYSTEM, conversationPrompt, costUsd, FREE_CONVERSATION_SYSTEM, freeConversationPrompt, REFLECTION_SYSTEM, reflectionPrompt, STRATEGY_SYSTEM, strategyPrompt, THOUGHT_SYSTEM, thoughtPrompt, type LLMClient } from "./llm";
 import { applyStrategy, setStrategyHook, strategyOptions, type StrategyOption } from "./strategy";
 import { cleanLines } from "./lines";
-import { applyInvented, applyUnscripted, INVENT_SCHEMA, INVENT_SYSTEM, inventableKinds, inventPrompt, UNSCRIPTED_SCHEMA, UNSCRIPTED_SYSTEM, unscriptedPrompt } from "./unscripted";
+import { applyInvented, INVENT_SCHEMA, INVENT_SYSTEM, inventableKinds, inventPrompt } from "./unscripted";
 
 // The AI Director decides WHEN it's worth asking a language model.
-// With the free AI (the default) there's no bill, only a rate limit, so it
-// writes the words of every conversation it can get to: chats, deals,
-// arguments. The town has already decided what happens; the model only says
-// it, so every conversation is its own but nothing breaks. Whatever it can't
-// get to in time is voiced by the built-in AI.
+// With a free AI (the town's brain running in the page, or a free service)
+// there's no bill, only time, so the model is kept busy all the time:
+//   - it picks what people do next: while someone is busy, it's asked what
+//     they'll do after, from the things the utility AI thinks make sense for
+//     them right now, and their reason becomes what they're thinking,
+//   - it writes the words of every conversation it can get to: chats, deals,
+//     arguments (the town has already decided what happens; the model says
+//     it, so every conversation is its own but nothing breaks),
+//   - in between, it says what's on someone's mind.
+// The person the player is looking at comes first. Whatever it can't get to
+// in time is done by the built-in AI.
 // With Claude (a paid API key), calls are kept for big moments:
 //   - genuine strategic dilemmas with real stakes (career, business, money),
 //   - conversations about money, jobs, debts and deals, and some news chats,
@@ -42,7 +51,7 @@ export interface DirectorOptions {
 
 interface Pending {
   id: number;
-  kind: "strategy" | "conversation" | "reflection" | "unscripted" | "invent" | "thought";
+  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan";
   world: WorldState;
   citizenId: string;
   convId?: number;
@@ -58,6 +67,37 @@ interface Done {
   ms: number;
   error?: string;
 }
+
+/** A citizen's next move, asked for while they're still busy. */
+interface Plan {
+  /** The request it came from. */
+  reqId: number;
+  /** Too late after this (game time): they've moved on. */
+  until: number;
+  /** The pick (an activity option id) and why, once the reply is in. */
+  choice: string | null;
+  thought: string | null;
+}
+
+/** A conversation waiting for the brain to be free (it does one thing at a time). */
+interface Queued {
+  world: WorldState;
+  convId: number;
+  citizenId: string;
+  /** The player is watching one of them. */
+  watched: boolean;
+  small: SmallPrompt;
+  user: string;
+  schema: Record<string, unknown>;
+  at: number;
+}
+
+/** Activities the next move can be planned during (not walking, talking or between things). */
+const PLANNABLE = new Set(["sleep", "work", "eat", "shop", "socialize", "rest", "bank", "browse", "trade", "research", "restock", "job_hunt", "manage"]);
+/** Options within this much of the best are the sensible ones to choose between. */
+const PLAN_MARGIN = 1.0;
+/** A queued conversation gives up after this long (ms) and the built-in AI speaks it. */
+const QUEUE_WAIT_MS = 15_000;
 
 const CONVERSATION_TOPICS = new Set(["ask_loan", "pitch_investment", "ask_job", "offer_job", "demand_repayment", "ask_help", "share_tip", "argue", "sell_stock"]);
 
@@ -79,10 +119,19 @@ export class AIDirector {
   private toldBlocked = false;
   /** The citizen the player is looking at: their thoughts come first. */
   focus: string | null = null;
-  /** Free AI: when the next inner thought may be asked for (real time). */
+  /** Free AI: when the next inner thought may be asked for (real time), for anyone and for the person in focus. */
   private nextThoughtAt = 0;
+  private nextFocusThoughtAt = 0;
+  /** Next moves asked for (by citizen). */
+  private plans = new Map<string, Plan>();
+  /** Conversations waiting for the town's brain. */
+  private queue: Queued[] = [];
+  /** What was asked for last (conversations and choices take turns). */
+  private lastKind: Pending["kind"] | null = null;
   /** Messages for the player (the server shows them as toasts). */
   readonly notices: { text: string; level: "info" | "error" }[] = [];
+  /** What the AI has done so far: choices people acted on, conversations it wrote, thoughts. */
+  readonly tally = { plan: 0, conversation: 0, thought: 0 };
 
   constructor(
     private client: LLMClient | null,
@@ -115,12 +164,12 @@ export class AIDirector {
 
   /** The free AI's connection report (null for Claude or no AI). */
   freeStatus(): FreeAIStatus | null {
-    return this.free ? (this.client as FreeAIClient).status() : null;
+    return this.free && !this.small ? (this.client as FreeAIClient).status() : null;
   }
 
   /** Free AI: try every service now (the "Test connection" button). */
   async probe(): Promise<FreeAIStatus | null> {
-    if (!this.free) return null;
+    if (!this.free || this.small) return null;
     this.backoffUntil = 0;
     this.failures = 0;
     const st = await (this.client as FreeAIClient).probe();
@@ -130,18 +179,37 @@ export class AIDirector {
 
   /** Free AI: the player's own endpoint (any OpenAI-style URL), tried first. */
   setCustomEndpoint(custom: { url: string; model?: string; key?: string } | null): void {
-    if (this.free) (this.client as FreeAIClient).setCustom(custom);
+    if (this.free && !this.small) (this.client as FreeAIClient).setCustom(custom);
     this.backoffUntil = 0;
     this.failures = 0;
   }
 
-  /** Short name for messages ("the free AI", "Claude"). */
+  /** Short name for messages ("The town's brain", "The free AI", "Claude"). */
   private get who(): string {
-    return this.free ? "The free AI" : "Claude";
+    return this.small ? "The town's brain" : this.free ? "The free AI" : "Claude";
   }
 
   get pending(): number {
     return this.inFlight.size;
+  }
+
+  /** What it's working on right now, in words (for the AI panel). */
+  doing(world: WorldState): string | null {
+    const p = [...this.inFlight.values()].find((x) => x.world === world);
+    if (!p) return null;
+    const name = world.citizens[p.citizenId]?.name ?? "someone";
+    const conv = p.convId !== undefined ? world.conversations.find((x) => x.id === p.convId) : undefined;
+    const other = conv ? world.citizens[conv.b]?.name : undefined;
+    const waiting = this.queue.length ? ` (${this.queue.length} conversation${this.queue.length > 1 ? "s" : ""} waiting)` : "";
+    const what: Record<Pending["kind"], string> = {
+      plan: `Deciding what ${name} does next`,
+      conversation: `Writing what ${name}${other ? ` and ${other}` : ""} say`,
+      thought: `Thinking as ${name}`,
+      strategy: `Weighing up a big decision for ${name}`,
+      reflection: `Putting ${name}'s lessons into words`,
+      invent: "Making up something that happens",
+    };
+    return what[p.kind] + waiting;
   }
 
   get unavailableReason(): string | null {
@@ -153,13 +221,16 @@ export class AIDirector {
     setStrategyHook((world, c, options, fallback) => this.strategyHook(world, c, options, fallback));
     setConversationAIHook((world, conv, brief, schema, stakes) => this.conversationHook(world, conv, brief, schema, stakes));
     setReflectionHook((world, c, learned) => this.reflectionHook(world, c, learned));
+    setActivityHook((world, c, options, utility) => this.activityHook(world, c, options, utility));
   }
 
-  private canCall(world: WorldState): boolean {
+  /** Whether a call can go now (`later`: whether one could once the calls in flight are done). */
+  private canCall(world: WorldState, later = false): boolean {
     const ai = world.ai;
     if (!this.available || ai.mode !== "llm") return false;
     if (this.client?.ready && !this.client.ready()) return false;
     if (Date.now() < this.backoffUntil) return false;
+    if (later) return ai.callsToday < ai.maxCallsPerDay;
     if (!this.free && this.ledger.total() >= ai.budgetUsd) {
       if (!ai.log.some((l) => l.note === "budget")) {
         pushRing(ai.log, { id: newId(world), t: world.time, citizenId: null, kind: "strategy", prompt: "", response: "", costUsd: 0, ms: 0, status: "fallback", note: "budget" }, 60);
@@ -199,12 +270,22 @@ export class AIDirector {
   private conversationHook(world: WorldState, conv: Conversation, brief: string, outcomeSchema: Record<string, unknown>, stakes: number): boolean {
     if (this.free) {
       // Free: voice every conversation there's room for.
-      if ((conv.topic !== "chat" && !CONVERSATION_TOPICS.has(conv.topic)) || !this.canCall(world)) return false;
+      if (conv.topic !== "chat" && !CONVERSATION_TOPICS.has(conv.topic)) return false;
+      const watched = conv.a === this.focus || conv.b === this.focus;
       // A slow in-page model only voices the conversations the player is watching (nobody waits long).
-      if (this.client?.slow?.() && conv.a !== this.focus && conv.b !== this.focus) return false;
+      if (this.client?.slow?.() && !watched) return false;
       const { user, schema } = freeConversationPrompt(world, conv, brief);
-      const small = this.small ? smallConversationPrompt(world, conv, brief) : undefined;
-      this.send(world, { kind: "conversation", citizenId: conv.a, convId: conv.id }, FREE_CONVERSATION_SYSTEM, user, schema, small);
+      if (!this.small) {
+        if (!this.canCall(world)) return false;
+        this.send(world, { kind: "conversation", citizenId: conv.a, convId: conv.id }, FREE_CONVERSATION_SYSTEM, user, schema);
+        return true;
+      }
+      // The town's brain does one thing at a time: the conversation waits its turn (briefly; see schedule).
+      if (!this.canCall(world, true) || (this.queue.length >= 2 && !watched)) return false;
+      const q: Queued = { world, convId: conv.id, citizenId: conv.a, watched, small: smallConversationPrompt(world, conv, brief), user, schema, at: Date.now() };
+      if (watched) this.queue.unshift(q);
+      else this.queue.push(q);
+      if (this.queue.length > 2) this.dropQueued(world, this.queue.pop()!);
       return true;
     }
     if (conv.topic === "chat") {
@@ -229,6 +310,134 @@ export class AIDirector {
     return true;
   }
 
+  // ------------------------------------------------ what's next (free AI)
+
+  /**
+   * Keep the free AI busy. First the person the player is looking at: a
+   * conversation they're in, their next move, what they're thinking. Then
+   * everyone else, conversations and next moves taking turns (whoever is
+   * about to decide goes first), and now and then what someone's thinking.
+   */
+  private schedule(world: WorldState): void {
+    for (const q of [...this.queue]) {
+      const waiting = world.conversations.some((x) => x.id === q.convId && x.status === "awaiting_ai");
+      if (q.world !== world || !waiting) this.queue.splice(this.queue.indexOf(q), 1);
+      else if (Date.now() - q.at > QUEUE_WAIT_MS) {
+        this.queue.splice(this.queue.indexOf(q), 1);
+        if (q.world === world) this.dropQueued(world, q);
+      }
+    }
+    if (!this.free || !this.canCall(world)) return;
+    const talk = (): boolean => {
+      const q = this.queue.shift();
+      if (q) this.send(world, { kind: "conversation", citizenId: q.citizenId, convId: q.convId }, FREE_CONVERSATION_SYSTEM, q.user, q.schema, q.small);
+      return !!q;
+    };
+    if ((this.queue[0]?.watched && talk()) || this.maybePlan(world, true) || this.maybeThink(world, true)) return;
+    const turns = this.lastKind === "conversation" ? [() => this.maybePlan(world, false), talk] : [talk, () => this.maybePlan(world, false)];
+    if (turns.some((f) => f())) return;
+    this.maybeThink(world, false);
+  }
+
+  /** A queued conversation that waited too long: the built-in AI speaks it. */
+  private dropQueued(world: WorldState, q: Queued): void {
+    const res = resolveConversationAI(world, q.convId, null);
+    if (res !== "gone") pushRing(world.ai.log, { id: newId(world), t: world.time, citizenId: q.citizenId, kind: "conversation", prompt: "", response: "", costUsd: 0, ms: Date.now() - q.at, status: "fallback", note: `${this.who.toLowerCase()} was busy: the built-in AI spoke this one` }, 60);
+  }
+
+  /**
+   * What someone could do once they've finished what they're doing: as
+   * they'll be by then (fed, rested, tired from work) and at that time of
+   * day, not as they are now (halfway through a meal they're still hungry).
+   */
+  private optionsAfter(world: WorldState, c: Citizen): ActivityOption[] {
+    const needs = { ...c.needs };
+    const now = world.time;
+    const left = Math.max(0, Math.min(12 * 60, c.activity.endsAt - now));
+    try {
+      for (let i = 0; i < left; i++) updateNeeds(c);
+      if (c.activity.action?.type === "EAT") c.needs.hunger = Math.min(100, c.needs.hunger + MEAL_FILLS);
+      world.time = now + left;
+      return activityOptions(world, c);
+    } finally {
+      Object.assign(c.needs, needs);
+      world.time = now;
+    }
+  }
+
+  /** The sensible things for someone to do next, best first (what the model chooses between). */
+  private sensible(world: WorldState, c: Citizen): ActivityOption[] {
+    const options = this.optionsAfter(world, c).sort((a, b) => scoreOf(b) - scoreOf(a));
+    if (!options.length) return [];
+    const best = scoreOf(options[0]);
+    return options.filter((o) => scoreOf(o) >= best - PLAN_MARGIN).slice(0, 4);
+  }
+
+  /** Ask what someone (the person in focus, or anyone else) will do once they've finished what they're doing. */
+  private maybePlan(world: WorldState, focusOnly: boolean): boolean {
+    for (const [id, p] of this.plans) if (world.time > p.until) this.plans.delete(id);
+    const left = (c: Citizen) => c.activity.endsAt - world.time;
+    const ready = (c: Citizen) => PLANNABLE.has(c.activity.kind) && c.path.length === 0 && !c.awaitingAI && !this.plans.has(c.id);
+    const focus = this.focus ? world.citizens[this.focus] : undefined;
+    let c: Citizen | undefined = focusOnly && focus && ready(focus) && left(focus) > 2 && left(focus) < 12 * 60 ? focus : undefined;
+    // A free service has a rate limit to share with the conversations: only the person being watched.
+    if (!focusOnly && this.small) {
+      c = world.citizenOrder
+        .map((cid) => world.citizens[cid])
+        .filter((x) => ready(x) && left(x) > 8 && left(x) < 180)
+        .sort((x, y) => left(x) - left(y))[0];
+    }
+    if (!c) return false;
+    const options = this.sensible(world, c);
+    // A chat on the way out can hold them up; the pick is still checked against how things are by then.
+    const until = c.activity.endsAt + 120;
+    if (options.length < 2) {
+      // Nothing to choose between (e.g. bedtime): don't ask again during this activity.
+      this.plans.set(c.id, { reqId: -1, until, choice: null, thought: null });
+      return false;
+    }
+    const list = options.map((o) => ({ id: o.id, label: o.label }));
+    const { user, schema } = strategyPrompt(world, c, list);
+    const reqId = this.send(world, { kind: "plan", citizenId: c.id }, STRATEGY_SYSTEM, user, schema, this.small ? smallPlanPrompt(world, c, list) : undefined);
+    this.plans.set(c.id, { reqId, until, choice: null, thought: null });
+    return true;
+  }
+
+  private applyPlanResult(world: WorldState, d: Done): void {
+    const c = world.citizens[d.pending.citizenId];
+    const plan = this.plans.get(d.pending.citizenId);
+    if (!c) return;
+    if (!plan || plan.reqId !== d.pending.id) {
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : `too late: ${c.name} had already moved on`);
+      return;
+    }
+    const reply = d.json as { choice?: unknown; thought?: unknown } | null;
+    const choice = reply && typeof reply.choice === "string" ? reply.choice : null;
+    const option = choice ? this.optionsAfter(world, c).find((o) => o.id === choice) : undefined;
+    if (!option) {
+      // Left unanswered (not asked again during this activity): the utility AI decides.
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : "no usable choice: the utility AI decides");
+      return;
+    }
+    const raw = typeof reply!.thought === "string" ? reply!.thought.replace(/\s+/g, " ").trim() : "";
+    plan.choice = option.id;
+    plan.thought = raw.length >= 4 && raw.length <= 240 ? raw : null;
+    this.log(world, d, "ok", JSON.stringify(reply), `${c.name} will ${option.label.charAt(0).toLowerCase()}${option.label.slice(1)} next${plan.thought ? `: "${plan.thought}"` : ""}`);
+  }
+
+  /** The model's pick, when it's in and still makes sense; otherwise the utility AI decides. */
+  private activityHook(world: WorldState, c: Citizen, options: ActivityOption[], utility: ActivityOption): { option: ActivityOption; thought: string | null } | null {
+    const plan = this.plans.get(c.id);
+    if (!plan || plan.reqId < 0 || world.time > plan.until) return null;
+    this.plans.delete(c.id);
+    if (!plan.choice) return null; // not answered in time
+    const option = options.find((o) => o.id === plan.choice);
+    // Things change (they got hungrier, the shop shut): a pick that no longer makes sense is dropped.
+    if (!option || scoreOf(option) < scoreOf(utility) - PLAN_MARGIN * 1.3) return null;
+    this.tally.plan++;
+    return { option, thought: plan.thought };
+  }
+
   // --------------------------------------------------------- thoughts
 
   /**
@@ -236,23 +445,25 @@ export class AIDirector {
    * person the player is looking at comes first; otherwise whoever's been
    * longest without one. It's only words: nothing in the world changes.
    */
-  private maybeThink(world: WorldState): void {
-    if (!this.free || Date.now() < this.nextThoughtAt || !this.canCall(world)) return;
+  private maybeThink(world: WorldState, focusOnly: boolean): boolean {
     const awake = (c: Citizen) => c.activity.kind !== "sleep" && !c.awaitingAI;
     const since = (c: Citizen) => world.time - (c.cooldowns.llmThought ?? -1e9);
     const focus = this.focus ? world.citizens[this.focus] : undefined;
-    const c =
-      focus && awake(focus) && since(focus) >= 30
-        ? focus
-        : world.citizenOrder
-            .map((id) => world.citizens[id])
-            .filter((x) => awake(x) && since(x) >= 240)
-            .sort((x, y) => since(y) - since(x))[0];
-    if (!c) return;
+    let c: Citizen | undefined;
+    if (focusOnly) c = focus && awake(focus) && since(focus) >= 30 && Date.now() >= this.nextFocusThoughtAt ? focus : undefined;
+    else if (Date.now() >= this.nextThoughtAt)
+      c = world.citizenOrder
+        .map((id) => world.citizens[id])
+        .filter((x) => awake(x) && since(x) >= 240)
+        .sort((x, y) => since(y) - since(x))[0];
+    if (!c) return false;
     c.cooldowns.llmThought = world.time;
-    this.nextThoughtAt = Date.now() + (this.small ? 6_000 : 10_000);
+    // Fast-forwarding mustn't turn into nothing but thoughts.
+    if (focusOnly) this.nextFocusThoughtAt = Date.now() + (this.small ? 8_000 : 10_000);
+    else this.nextThoughtAt = Date.now() + (this.small ? 6_000 : 10_000);
     const { user, schema } = thoughtPrompt(world, c);
     this.send(world, { kind: "thought", citizenId: c.id }, THOUGHT_SYSTEM, user, schema, this.small ? smallThoughtPrompt(world, c) : undefined);
+    return true;
   }
 
   private applyThoughtResult(world: WorldState, d: Done): void {
@@ -265,6 +476,7 @@ export class AIDirector {
       return;
     }
     setThought(world, c, text, Math.max(3, c.thoughtPriority), "llm");
+    this.tally.thought++;
     this.log(world, d, "ok", JSON.stringify(d.json), `${c.name}: "${text}"`);
   }
 
@@ -300,42 +512,17 @@ export class AIDirector {
     this.log(world, d, changed ? "ok" : d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), changed ? `${c.name} put ${changed} lesson${changed > 1 ? "s" : ""} in their own words` : d.error ? `error: ${d.error}` : "invalid reply — template wording kept");
   }
 
-  // ------------------------------------------- on request: unscripted
-
-  /** The player asked Claude to write a conversation from scratch. Returns a reason it can't, or null. */
-  unscripted(world: WorldState, convId: number): string | null {
-    if (!this.available) return `The AI isn't available: ${this.unavailableReason ?? "no AI configured"}`;
-    if (world.ai.mode !== "llm") return "The AI is switched off. Turn it on in the 🧠 AI panel.";
-    if (!this.canCall(world)) return `${this.who} is busy${this.free ? "" : " or out of budget"} right now. Try again in a moment.`;
-    const p = unscriptedPrompt(world, convId);
-    if (typeof p === "string") return p;
-    // A small model rewrites what was said rather than starting from nothing.
-    const small = this.small ? smallConversationPrompt(world, { ...p.conv, fallback: { lines: p.conv.lines, outcome: {} } }, p.conv.summary) : undefined;
-    this.send(world, { kind: "unscripted", citizenId: p.conv.a, convId }, UNSCRIPTED_SYSTEM, p.prompt, UNSCRIPTED_SCHEMA, small);
-    return null;
-  }
+  // ------------------------------------------------ on request: invent
 
   /** The player asked Claude to invent something that happens in town. */
   invent(world: WorldState, idea = ""): string | null {
     if (!this.available) return `The AI isn't available: ${this.unavailableReason ?? "no AI configured"}`;
     if (world.ai.mode !== "llm") return "The AI is switched off. Turn it on in the 🧠 AI panel.";
     if (!this.canCall(world)) return `${this.who} is busy${this.free ? "" : " or out of budget"} right now. Try again in a moment.`;
-    if (this.small) return "Making up events needs a bigger AI than the one running in your browser. Pick one from the list instead.";
+    if (this.small) return "Making up events needs a bigger AI than the town's brain. Pick one from the list instead.";
     if (inventableKinds(world).length === 0) return "Nothing can happen right now. Try at another time of day.";
     this.send(world, { kind: "invent", citizenId: world.citizenOrder[0] }, INVENT_SYSTEM, inventPrompt(world, idea), INVENT_SCHEMA);
     return null;
-  }
-
-  private applyUnscriptedResult(world: WorldState, d: Done): void {
-    try {
-      if (d.error || !d.json) throw new Error(d.error ?? "no reply");
-      const msg = applyUnscripted(world, d.pending.convId ?? -1, d.json);
-      this.log(world, d, "ok", JSON.stringify(d.json), "wrote a conversation from scratch");
-      this.notices.push({ text: msg, level: "info" });
-    } catch (err) {
-      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), (err as Error).message);
-      this.notices.push({ text: `${this.who} couldn't write it: ${(err as Error).message}`, level: "error" });
-    }
   }
 
   private applyInventResult(world: WorldState, d: Done): void {
@@ -351,8 +538,10 @@ export class AIDirector {
 
   // ---------------------------------------------------------- calls
 
-  private send(world: WorldState, p: Omit<Pending, "id" | "world" | "startedAt" | "prompt">, system: string, user: string, schema: Record<string, unknown>, small?: SmallPrompt): void {
+  /** Send a request (the reply is applied in pump); returns its id. */
+  private send(world: WorldState, p: Omit<Pending, "id" | "world" | "startedAt" | "prompt">, system: string, user: string, schema: Record<string, unknown>, small?: SmallPrompt): number {
     const pending: Pending = { ...p, id: this.seq++, world, startedAt: Date.now(), prompt: small ? `${small.system}\n\n${small.user}\n\n${small.prefill}` : user };
+    this.lastKind = p.kind;
     this.inFlight.set(pending.id, pending);
     this.lastCallAt = Date.now();
     world.ai.calls++;
@@ -371,11 +560,17 @@ export class AIDirector {
         else if (err.status === 401 || err.status === 403) this.disabledReason = `Claude API rejected the key (${err.status})`;
         this.finish({ pending, json: null, costUsd: 0, ms: Date.now() - pending.startedAt, error: err.message?.slice(0, 200) ?? "error" });
       });
+    return pending.id;
   }
 
   /** The free AI is rate limited or unreachable: wait longer each time it happens, then try again. */
   private slowDown(status: number): void {
     this.failures++;
+    if (this.small) {
+      // The town's brain doesn't get busy, but it can stumble (e.g. the graphics card was reset): a short pause.
+      this.backoffUntil = Date.now() + Math.min(30_000, 2_000 * this.failures);
+      return;
+    }
     const wait = Math.min(120_000, 5_000 * 2 ** (this.failures - 1));
     this.backoffUntil = Date.now() + wait;
     const st = this.freeStatus();
@@ -405,18 +600,19 @@ export class AIDirector {
         this.done.push({ pending: p, json: null, costUsd: 0, ms: now - p.startedAt, error: "timed out" });
       }
     }
-    this.maybeThink(world);
     const batch = this.done.splice(0);
     for (const d of batch) {
       if (d.pending.world !== world) continue; // world was reset meanwhile
       world.ai.spentUsd = round2((world.ai.spentUsd + d.costUsd) * 10000) / 10000;
       if (d.pending.kind === "strategy") this.applyStrategyResult(world, d);
       else if (d.pending.kind === "reflection") this.applyReflectionResult(world, d);
-      else if (d.pending.kind === "unscripted") this.applyUnscriptedResult(world, d);
       else if (d.pending.kind === "invent") this.applyInventResult(world, d);
       else if (d.pending.kind === "thought") this.applyThoughtResult(world, d);
+      else if (d.pending.kind === "plan") this.applyPlanResult(world, d);
       else this.applyConversationResult(world, d);
     }
+    // Replies first, so the next request goes out as soon as the last one is in.
+    this.schedule(world);
   }
 
   private log(world: WorldState, d: Done, status: AILogEntry["status"], response: string, note: string): void {
@@ -444,6 +640,7 @@ export class AIDirector {
     }
     this.log(world, d, "ok", JSON.stringify(reply), `${c.name} chose "${chosen.label}"${chosen.id !== fallback.id ? ` (utility AI would have picked "${fallback.label}")` : ""}`);
     applyStrategy(world, c, options, chosen, "llm", thought);
+    this.tally.plan++;
     if (chosen.id !== fallback.id) logEvent(world, "ai", `🧠 ${c.name} thought it over: "${thought}"`, 2, [c.id]);
   }
 
@@ -459,6 +656,7 @@ export class AIDirector {
       parsed = { lines: cleanLines(world, conv, reply.lines), outcome: outcome as Record<string, ConvValue> };
     }
     const res = resolveConversationAI(world, convId, parsed);
+    if (res === "ok") this.tally.conversation++;
     this.log(world, d, res === "ok" ? "ok" : d.error ? "error" : "fallback", JSON.stringify(d.json ?? d.error), res === "ok" ? `outcome ${JSON.stringify(conv.outcome)}` : d.error ? `error: ${d.error}` : "invalid reply — template used");
   }
 }

@@ -4,7 +4,7 @@ import { aiName } from "./format";
 /** What's going on in town right now, over the map. Click to look at who or where. */
 export function TownNews() {
   const list = useStore((s) => s.state?.happenings ?? []);
-  const ai = aiName(useStore((s) => s.state?.ai.free));
+  const ai = aiName(useStore((s) => s.state?.ai));
   const active = list.filter((h) => h.active && h.kind !== "sculpture").slice(0, 3);
   if (active.length === 0) return null;
   return (
