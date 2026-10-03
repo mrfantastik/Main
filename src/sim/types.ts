@@ -484,6 +484,8 @@ export interface Citizen {
   agent?: AgentMind;
   /** The last thing that happened to them out of the blue (God Mode), for reacting to it. */
   shock?: { t: number; text: string };
+  /** Wordings they've used lately in conversation (so they don't keep saying the same thing). */
+  said?: string[];
   thoughtT: number;
   /** 1 mundane, 2 urgent need, 3 strategic/social, 4 major life event. */
   thoughtPriority: number;
@@ -977,6 +979,8 @@ export interface WorldState {
   conversations: Conversation[];
   /** Finished conversations (most recent last), for the UI. */
   conversationLog: Conversation[];
+  /** Wordings used lately in conversations around town (so the same ones don't keep coming up). */
+  talkRecent?: string[];
   events: SimEvent[];
   transactions: Transaction[];
   txCount: number;

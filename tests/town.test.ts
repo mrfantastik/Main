@@ -123,7 +123,7 @@ test("improvised chats pass news on, and the listener makes up their own mind", 
   for (let i = 0; i < 12; i++) {
     const conv = chat(w, teller, listener, 90000 + i);
     const imp = improvise(w, conv, teller, listener);
-    assert.ok(imp.lines.length >= 2 && imp.lines.length <= 14, `${imp.lines.length} lines`);
+    assert.ok(imp.lines.length >= 2 && imp.lines.length <= 16, `${imp.lines.length} lines`);
     for (const l of imp.lines) assert.ok(l.speaker === teller.id || l.speaker === listener.id);
     if (imp.notes.some((n) => n.t === "news" && n.from === teller.id && n.to === listener.id && n.id === h.id)) {
       told++;

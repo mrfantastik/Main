@@ -19,6 +19,7 @@ import type { Citizen, Conversation, ConversationTopic, ConvValue, EventCategory
 import { clamp, money, newId, pct, pushRing, round2 } from "../util";
 import { hotNews, knows } from "../town/happenings";
 import { applyNotes, improvise } from "./improv";
+import { talkIn } from "./talk";
 import { argueDialogue, helpDialogue, investDialogue, jobDialogue, loanDialogue, repaymentDialogue, tipDialogue } from "./dialogue";
 import { compatibility } from "./encounters";
 import { helpTerms, investmentTerms, jobTerms, loanTerms, lookWealthy as lookWealthyRaw, MAX_STAFF, settleLoan } from "./negotiation";
@@ -676,7 +677,13 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
   // Seeing each other brings back how they feel about each other.
   recallPerson(world, a, b.id);
   recallPerson(world, b, a.id);
-  const prepared = handlers[topic].prepare(world, conv, a, b, world);
+  const was = talkIn((world.talkRecent ??= []));
+  let prepared: ReturnType<(typeof handlers)[typeof topic]["prepare"]>;
+  try {
+    prepared = handlers[topic].prepare(world, conv, a, b, world);
+  } finally {
+    talkIn(was);
+  }
   if (!prepared) return null;
   prepared.lines = voiceConversation(conv.id, topic === "chat" ? "improv" : topic, a, b, prepared.lines, typeof prepared.outcome.agreed === "boolean" ? prepared.outcome.agreed : null, dayOf(world.time));
   conv.terms = prepared.terms;
