@@ -96,6 +96,7 @@ function aiStatus(world: WorldState): AIStatusDTO {
     maxCallsPerDay: ai.maxCallsPerDay,
     pending: director.pending,
     reason: director.unavailableReason,
+    writer: director.available ? `Claude (${director.model})` : null,
   };
 }
 
@@ -184,6 +185,12 @@ function handle(client: Client, msg: ClientMsg): void {
       const events = runner.skip(minutes);
       broadcastState();
       for (const c of clients) send(c.ws, { type: "toast", text: `⏩ Skipped ${describeSkip(minutes)} — ${events} things happened. It's now ${snap.describeTime(world.time)}.`, level: "info" });
+      break;
+    }
+    case "unscripted":
+    case "invent": {
+      const why = msg.type === "unscripted" ? director.unscripted(world, Number(msg.convId)) : director.invent(world, typeof msg.idea === "string" ? msg.idea : "");
+      send(client.ws, why ? { type: "toast", text: why, level: "error" } : { type: "toast", text: msg.type === "unscripted" ? "✨ Claude is writing their conversation…" : "✨ Claude is dreaming something up…", level: "info" });
       break;
     }
     case "save":
@@ -348,7 +355,10 @@ async function main(): Promise<void> {
     ws.on("close", () => clients.delete(client));
   });
 
-  runner.afterSteps = (w) => director.pump(w);
+  runner.afterSteps = (w) => {
+    director.pump(w);
+    for (const n of director.notices.splice(0)) for (const c of clients) send(c.ws, { type: "toast", text: n.text, level: n.level });
+  };
   runner.start();
   setInterval(() => saveWorld("autosave"), AUTOSAVE_MS);
   const shutdown = () => {

@@ -1,3 +1,4 @@
+import { firstHappeningT } from "./town/happenings";
 import { neutralEmotions } from "./mind/emotions";
 import { generatePersonality } from "./mind/personality";
 import type { WorldState } from "./types";
@@ -28,6 +29,8 @@ function migrate(raw: unknown): WorldState | null {
   w.loans ??= [];
   w.shocks ??= [];
   w.inventionPool ??= [];
+  w.happenings ??= [];
+  w.nextHappeningT ??= firstHappeningT(w);
   w.ai.log ??= [];
   w.economy.rentIndex ??= 1;
   for (const id of w.citizenOrder) {
@@ -44,6 +47,7 @@ function migrate(raw: unknown): WorldState | null {
     c.emotions ??= neutralEmotions();
     c.reflections ??= [];
     c.lastReflectionDay ??= 0;
+    c.news ??= [];
   }
   for (const pid of w.productOrder) {
     const m = w.market[pid];

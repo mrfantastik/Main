@@ -11,6 +11,7 @@ const FILTERS: { id: string; label: string; cats: string[] }[] = [
   { id: "money", label: "💷 Money", cats: ["finance"] },
   { id: "social", label: "💬 Social", cats: ["social", "conversation"] },
   { id: "market", label: "📈 Market", cats: ["market"] },
+  { id: "town", label: "🗞️ Town", cats: ["town"] },
   { id: "life", label: "🏠 Life", cats: ["life"] },
   { id: "god", label: "⚡ God/AI", cats: ["god", "ai"] },
 ];

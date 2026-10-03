@@ -1,7 +1,10 @@
-// A small, warm palette: every surface in the 3D city picks from these, so
-// the whole town reads as one retro scene.
+// Every surface in the 3D city picks its colour from `P`, so the whole town
+// reads as one scene. Two looks share the same shapes: the warm retro town,
+// and the dreamscape (marble and pastels under a purple sky).
 
-export const P = {
+export type Look = "dream" | "retro";
+
+const RETRO = {
   grass: 0x8fb35a,
   grassDark: 0x6f9a47,
   meadow: 0x7da650,
@@ -43,11 +46,69 @@ export const P = {
   windowLit: 0xffc865,
   crate: 0xc79a5b,
   metal: 0x8d8f94,
-} as const;
+};
+
+type Palette = Record<keyof typeof RETRO, number>;
+
+/** The dreamscape: white marble, pastel stone, glassy teal, under a lilac sky. */
+const DREAM: Palette = {
+  grass: 0x9fd6c4,
+  grassDark: 0x7fbfae,
+  meadow: 0xb7dfc9,
+  pavement: 0xe9e3ef,
+  paving: 0xf1ecf5,
+  path: 0xdcd3e6,
+  asphalt: 0x4c4650,
+  lane: 0xf5f0fa,
+  kerb: 0xd9d2e2,
+  cream: 0xf6f1ea,
+  sand: 0xeee3dc,
+  stone: 0xe4dde8,
+  terracotta: 0xf2a7c3,
+  brick: 0xd99ab8,
+  rust: 0xf0b98f,
+  ochre: 0xf4d58d,
+  olive: 0x9cc9b4,
+  moss: 0x7fb39e,
+  leaf: 0x3f7f73,
+  leafDark: 0x2f6b62,
+  leafLight: 0x5a9c8c,
+  trunk: 0xe9e3ef,
+  teal: 0x5cc8c0,
+  tealLight: 0xa9eee6,
+  sky: 0x9fb5ff,
+  slate: 0x8e9ad8,
+  slateDark: 0x6e78b8,
+  charcoal: 0x4a4458,
+  plum: 0xb48ad8,
+  white: 0xfbf8ff,
+  red: 0xf27b9b,
+  glass: 0x7fd0e6,
+  door: 0x5c4a7a,
+  water: 0x63b6e8,
+  waterLight: 0x9ad8f5,
+  lampPost: 0xf3eef8,
+  lampOff: 0xd8d0e6,
+  lampOn: 0xffe6b0,
+  windowLit: 0xffd59a,
+  crate: 0xe8c9a8,
+  metal: 0xc9c4d6,
+};
+
+/** The colours in use (switched by setLook before the city is built). */
+export const P: Palette = { ...RETRO };
 
 /** Roof colours for houses, picked per house. */
-export const ROOFS = [P.terracotta, P.brick, P.rust, P.slate, P.olive, P.plum, P.ochre];
+export const ROOFS: number[] = [];
 /** Wall colours for houses. */
-export const WALLS = [P.cream, P.sand, P.white, P.stone];
+export const WALLS: number[] = [];
+
+/** Switch every colour to the given look. */
+export function setLook(look: Look): void {
+  Object.assign(P, look === "dream" ? DREAM : RETRO);
+  ROOFS.splice(0, ROOFS.length, P.terracotta, P.brick, P.rust, P.slate, P.olive, P.plum, P.ochre);
+  WALLS.splice(0, WALLS.length, P.cream, P.sand, P.white, P.stone);
+}
+setLook("retro");
 /** Skin tones for citizens. */
 export const SKIN = [0xf1c9a5, 0xd9a47e, 0xb67a52, 0x8a5636, 0xe8b88f];

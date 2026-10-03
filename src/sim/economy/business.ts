@@ -3,6 +3,7 @@ import { getBuildingIndexed } from "../city/lookup";
 import { logEvent } from "../events";
 import { remember } from "../memory/memory";
 import { workMood } from "../mind/emotions";
+import { businessFactor, isClosedByHappening, townDemand } from "../town/happenings";
 import { chance, gauss, poisson, weightedPick } from "../rng";
 import { addRole, adjustRel } from "../social/relationships";
 import { hourOf } from "../time";
@@ -195,7 +196,7 @@ function recordBusinessSale(world: WorldState, b: Business, pid: ProductId, pric
  * Money goes to the business; goods to the buyer (unless eaten on the spot).
  */
 export function buyFromBusiness(world: WorldState, b: Business, buyer: Citizen, pid: ProductId, qty: number, consumeNow = false): number {
-  if (!b.open || staffOnDuty(world, b).length === 0) return 0;
+  if (!b.open || staffOnDuty(world, b).length === 0 || isClosedByHappening(world, b)) return 0;
   const stock = b.inventory[pid]?.qty ?? 0;
   qty = Math.min(qty, stock);
   const price = b.prices[pid];
@@ -229,14 +230,18 @@ export function salesHourly(world: WorldState): void {
 
   const staffCount = new Map<string, number>();
   const capLeft = new Map<string, number>();
+  const appealOf = new Map<string, number>();
+  const demand = townDemand(world);
   for (const b of openBusinesses(world)) {
     if (b.kind === "agency") continue;
     const staff = staffOnDuty(world, b);
     const n = staff.length;
     staffCount.set(b.id, n);
-    // A miserable shop assistant serves fewer customers.
+    // A miserable shop assistant serves fewer customers; a fire or power cut stops trade.
     const spirit = n ? staff.reduce((s, c) => s + workMood(c), 0) / n : 1;
-    capLeft.set(b.id, capacityPerHour(b, n) * spirit);
+    const town = businessFactor(world, b);
+    capLeft.set(b.id, capacityPerHour(b, n) * spirit * town.capacity);
+    appealOf.set(b.id, town.appeal);
   }
   const marketIsOpen = marketOpen(world);
 
@@ -246,7 +251,7 @@ export function salesHourly(world: WorldState): void {
     const p = world.products[pid];
     const m = world.market[pid];
     const ref = refPrice(world, pid);
-    const lambda = p.externalDemand * m.trend * world.economy.multiplier * weight;
+    const lambda = p.externalDemand * m.trend * world.economy.multiplier * weight * demand;
     const customers = poisson(world, lambda);
     if (customers === 0) continue;
     const shops = sellersOf(world, pid);
@@ -277,7 +282,7 @@ export function salesHourly(world: WorldState): void {
       const pickC = weightedPick(world, cands, (c) => {
         const priceTerm = Math.exp(-3.2 * (c.price / ref - 1));
         if (c.kind === "list") return priceTerm * 0.55;
-        return priceTerm * KIND_INFO[c.b.kind].appeal * (0.55 + c.b.reputation / 110);
+        return priceTerm * KIND_INFO[c.b.kind].appeal * (0.55 + c.b.reputation / 110) * (appealOf.get(c.b.id) ?? 1);
       })!;
       if (pickC.kind === "list") {
         buyListing(world, "external", pickC.l, 1);
@@ -450,7 +455,7 @@ function spreadSuccess(world: WorldState, owner: Citizen, b: Business, profit: n
     const rival = c.relationships[owner.id]?.roles.includes("rival") ?? false;
     if (rival || (c.traits.competitiveness > 0.6 && earned < profit / 3 && fam > 10)) {
       remember(world, c, {
-        text: `${owner.name}'s ${b.name} made ${money(profit)} in a day.`,
+        text: `${b.name.startsWith(owner.name) ? b.name : `${owner.name}'s ${b.name}`} made ${money(profit)} in a day.`,
         kind: "business",
         importance: 3,
         valence: -0.3,

@@ -449,6 +449,8 @@ export interface Citizen {
   reflections: Reflection[];
   /** Day number of the last nightly reflection. */
   lastReflectionDay: number;
+  /** Town news they know about (most recent last). */
+  news: KnownNews[];
   /** Daily "wants" for durable goods: 0..100. */
   wants: Record<ProductId, number>;
   mood: number;
@@ -629,6 +631,8 @@ export interface Business {
   /** Shopping hours in which someone was serving. */
   staffedHoursToday: number;
   staffedHoursYesterday: number;
+  /** Shut by a town happening (fire, food scare) until this time. */
+  closedUntil?: number;
 }
 
 export interface Loan {
@@ -673,7 +677,9 @@ export type TxKind =
   | "capital"
   | "leisure"
   | "fee"
-  | "liquidation";
+  | "liquidation"
+  | "theft"
+  | "prize";
 
 export interface Transaction {
   id: number;
@@ -695,7 +701,8 @@ export type EventCategory =
   | "god"
   | "life"
   | "ai"
-  | "conversation";
+  | "conversation"
+  | "town";
 
 export interface SimEvent {
   id: number;
@@ -754,6 +761,80 @@ export interface Conversation {
   summary: string;
   source: "template" | "llm";
   endT: number;
+  /** What an improvised chat changes when it ends (news passed on, minds changed...). */
+  notes?: ConvNote[];
+  /** What they talked about, for the UI ("the fire at Mike's stall", "money worries"). */
+  topics?: string[];
+}
+
+/** One consequence of an improvised conversation, applied when it ends. */
+export type ConvNote =
+  | { t: "news"; from: CitizenId; to: CitizenId; id: number }
+  | { t: "stance"; who: CitizenId; id: number; delta: number }
+  | { t: "rel"; who: CitizenId; about: CitizenId; affinity: number; trust: number }
+  | { t: "feel"; who: CitizenId; e: Partial<Emotions> }
+  | { t: "gift"; from: CitizenId; to: CitizenId; amount: number; why: string }
+  | { t: "memory"; who: CitizenId; text: string; importance: number; valence: number; people: CitizenId[] };
+
+// ------------------------------------------------------- town happenings
+
+export type HappeningKind =
+  | "fire"
+  | "burglary"
+  | "festival"
+  | "storm"
+  | "power_cut"
+  | "lottery"
+  | "celebrity"
+  | "food_poisoning"
+  | "rent_rise"
+  | "sculpture"
+  | "party";
+
+/** Something that happens in town: news people react to and talk about. */
+export interface Happening {
+  id: number;
+  kind: HappeningKind;
+  t: number;
+  /** When its effects end (a storm passes, a shop reopens). */
+  until: number;
+  /** Headline: "Fire at Mike's Grocer Stall". */
+  title: string;
+  /** How people refer to it mid-sentence: "the fire at Mike's Grocer Stall". */
+  about: string;
+  /** A sentence or two on what happened. */
+  text: string;
+  buildingId: BuildingId | null;
+  /** Who it happened to (victim, winner, host). */
+  subject: CitizenId | null;
+  businessId: BusinessId | null;
+  /** Money involved (stock lost, cash stolen, prize). */
+  amount: number;
+  /** 1 (minor) .. 3 (big news). */
+  scale: number;
+  /** How the town broadly takes it: -1 bad .. 1 good. */
+  tone: number;
+  source: "world" | "god" | "llm";
+  /** Set once its after-effects have been wrapped up. */
+  ended?: boolean;
+  /** Friends who chipped in to help (capped). */
+  gifts?: number;
+  /** Who turned up (festival, party). */
+  crowd?: CitizenId[];
+}
+
+/** A piece of news a citizen knows, and their take on it. */
+export interface KnownNews {
+  id: number;
+  t: number;
+  /** Who told them (a citizen id), or "saw" (they were there), "paper", "self". */
+  via: string;
+  /** Their take: -1 (sorry/angry/worried) .. 1 (glad). */
+  stance: number;
+  /** People they've already told. */
+  told: CitizenId[];
+  /** How many times they've talked it over (old news gets boring). */
+  talked?: number;
 }
 
 // --------------------------------------------------------------- world
@@ -825,7 +906,7 @@ export interface AILogEntry {
   id: number;
   t: number;
   citizenId: CitizenId | null;
-  kind: "strategy" | "conversation" | "reflection";
+  kind: "strategy" | "conversation" | "reflection" | "unscripted" | "invent";
   prompt: string;
   response: string;
   costUsd: number;
@@ -880,4 +961,8 @@ export interface WorldState {
   ai: AIState;
   /** Inventions not yet discovered. */
   inventionPool: string[];
+  /** Town happenings (most recent last). */
+  happenings: Happening[];
+  /** When the next unplanned happening is due. */
+  nextHappeningT: number;
 }

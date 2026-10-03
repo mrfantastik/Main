@@ -2,6 +2,7 @@ import { CONFIG } from "../config";
 import { expectedDailySales, KIND_INFO, openBusinesses, staffOnDuty } from "../economy/business";
 import { hourWeight, listingsFor, refPrice } from "../economy/market";
 import { rememberBetrayal } from "../memory/memory";
+import { isClosedByHappening } from "../town/happenings";
 import { peekRel } from "../social/relationships";
 import type { Business, Citizen, WorldState } from "../types";
 import { capitalise, money } from "../util";
@@ -198,7 +199,7 @@ function shoppingOptions(world: WorldState, c: Citizen, s: Situation): ActivityO
   const h = s.hour;
   if (h < 8 || h >= 20) return [];
   const out: ActivityOption[] = [];
-  const businesses = openBusinesses(world).filter((b) => b.kind !== "agency" && b.ownerId !== c.id);
+  const businesses = openBusinesses(world).filter((b) => b.kind !== "agency" && b.ownerId !== c.id && !isClosedByHappening(world, b));
 
   const bestSeller = (pid: string, qty: number) => {
     let best: { score: number; label: string; bid: string | null; price: number; where: string; owner: Citizen | null } | null = null;
@@ -285,7 +286,7 @@ function cafeOptions(world: WorldState, c: Citizen, s: Situation): ActivityOptio
   const mealtime = (h >= 7 && h < 9.5) || (h >= 12 && h < 14) || (h >= 18 && h < 20.5) ? 0.35 : 0;
   for (const b of openBusinesses(world)) {
     // Nobody behind the counter means no meal (and a wasted trip).
-    if (b.kind !== "cafe" || (b.inventory.food?.qty ?? 0) < 1 || staffOnDuty(world, b).length === 0) continue;
+    if (b.kind !== "cafe" || (b.inventory.food?.qty ?? 0) < 1 || staffOnDuty(world, b).length === 0 || isClosedByHappening(world, b)) continue;
     const price = b.prices.food ?? 99;
     const owner = world.citizens[b.ownerId];
     const rel = owner ? peekRel(c, owner.id) : undefined;

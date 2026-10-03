@@ -7,6 +7,7 @@ import { newId, pushRing, round2 } from "../util";
 import { scoreOf } from "./decision";
 import { CONVERSATION_SYSTEM, conversationPrompt, costUsd, REFLECTION_SYSTEM, reflectionPrompt, STRATEGY_SYSTEM, strategyPrompt, type LLMClient } from "./llm";
 import { applyStrategy, setStrategyHook, strategyOptions, type StrategyOption } from "./strategy";
+import { applyInvented, applyUnscripted, INVENT_SCHEMA, INVENT_SYSTEM, inventableKinds, inventPrompt, UNSCRIPTED_SCHEMA, UNSCRIPTED_SYSTEM, unscriptedPrompt } from "./unscripted";
 
 // The AI Director decides WHEN it's worth asking Claude, and keeps costs
 // under control. Routine life never touches the LLM. Only:
@@ -31,7 +32,7 @@ export interface DirectorOptions {
 
 interface Pending {
   id: number;
-  kind: "strategy" | "conversation" | "reflection";
+  kind: "strategy" | "conversation" | "reflection" | "unscripted" | "invent";
   world: WorldState;
   citizenId: string;
   convId?: number;
@@ -59,6 +60,11 @@ export class AIDirector {
 
   /** Game day of the last reflection sent (one a night is plenty). */
   private reflectedDay = -1;
+  /** News chats sent to Claude today (they get at most a third of the daily calls). */
+  private chatDay = -1;
+  private chatCalls = 0;
+  /** Messages for the player (the server shows them as toasts). */
+  readonly notices: { text: string; level: "info" | "error" }[] = [];
 
   constructor(
     private client: LLMClient | null,
@@ -127,6 +133,20 @@ export class AIDirector {
   // --------------------------------------------------- conversations
 
   private conversationHook(world: WorldState, conv: Conversation, brief: string, outcomeSchema: Record<string, unknown>, stakes: number): boolean {
+    if (conv.topic === "chat") {
+      // Chats where someone has news to share are worth Claude's words, a few a day.
+      if (conv.terms.news !== true || !this.canCall(world)) return false;
+      const day = dayOf(world.time);
+      if (this.chatDay !== day) {
+        this.chatDay = day;
+        this.chatCalls = 0;
+      }
+      if (this.chatCalls >= Math.max(1, Math.floor(world.ai.maxCallsPerDay / 3))) return false;
+      this.chatCalls++;
+      const { user, schema } = conversationPrompt(world, conv, brief, outcomeSchema);
+      this.send(world, { kind: "conversation", citizenId: conv.a, convId: conv.id }, CONVERSATION_SYSTEM, user, schema);
+      return true;
+    }
     if (!CONVERSATION_TOPICS.has(conv.topic)) return false;
     if (stakes < 20 && conv.topic !== "argue" && conv.topic !== "ask_help") return false;
     if (!this.canCall(world)) return false;
@@ -164,6 +184,50 @@ export class AIDirector {
       }
     }
     this.log(world, d, changed ? "ok" : d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), changed ? `${c.name} put ${changed} lesson${changed > 1 ? "s" : ""} in their own words` : d.error ? `error: ${d.error}` : "invalid reply — template wording kept");
+  }
+
+  // ------------------------------------------- on request: unscripted
+
+  /** The player asked Claude to write a conversation from scratch. Returns a reason it can't, or null. */
+  unscripted(world: WorldState, convId: number): string | null {
+    if (!this.available) return `Claude isn't available: ${this.unavailableReason ?? "no API key"}`;
+    if (!this.canCall(world)) return "Claude is busy or out of budget right now. Try again in a moment.";
+    const p = unscriptedPrompt(world, convId);
+    if (typeof p === "string") return p;
+    this.send(world, { kind: "unscripted", citizenId: p.conv.a, convId }, UNSCRIPTED_SYSTEM, p.prompt, UNSCRIPTED_SCHEMA);
+    return null;
+  }
+
+  /** The player asked Claude to invent something that happens in town. */
+  invent(world: WorldState, idea = ""): string | null {
+    if (!this.available) return `Claude isn't available: ${this.unavailableReason ?? "no API key"}`;
+    if (!this.canCall(world)) return "Claude is busy or out of budget right now. Try again in a moment.";
+    if (inventableKinds(world).length === 0) return "Nothing can happen right now. Try at another time of day.";
+    this.send(world, { kind: "invent", citizenId: world.citizenOrder[0] }, INVENT_SYSTEM, inventPrompt(world, idea), INVENT_SCHEMA);
+    return null;
+  }
+
+  private applyUnscriptedResult(world: WorldState, d: Done): void {
+    try {
+      if (d.error || !d.json) throw new Error(d.error ?? "no reply");
+      const msg = applyUnscripted(world, d.pending.convId ?? -1, d.json);
+      this.log(world, d, "ok", JSON.stringify(d.json), "wrote a conversation from scratch");
+      this.notices.push({ text: msg, level: "info" });
+    } catch (err) {
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), (err as Error).message);
+      this.notices.push({ text: `Claude couldn't write it: ${(err as Error).message}`, level: "error" });
+    }
+  }
+
+  private applyInventResult(world: WorldState, d: Done): void {
+    const h = d.json ? applyInvented(world, d.json) : (d.error ?? "no reply");
+    if (typeof h === "string") {
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), h);
+      this.notices.push({ text: `Claude's idea didn't work out: ${h}`, level: "error" });
+      return;
+    }
+    this.log(world, d, "ok", JSON.stringify(d.json), `invented: ${h.title}`);
+    this.notices.push({ text: `✨ ${h.title}.`, level: "info" });
   }
 
   // ---------------------------------------------------------- calls
@@ -209,6 +273,8 @@ export class AIDirector {
       world.ai.spentUsd = round2((world.ai.spentUsd + d.costUsd) * 10000) / 10000;
       if (d.pending.kind === "strategy") this.applyStrategyResult(world, d);
       else if (d.pending.kind === "reflection") this.applyReflectionResult(world, d);
+      else if (d.pending.kind === "unscripted") this.applyUnscriptedResult(world, d);
+      else if (d.pending.kind === "invent") this.applyInventResult(world, d);
       else this.applyConversationResult(world, d);
     }
   }

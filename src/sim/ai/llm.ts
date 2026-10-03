@@ -161,8 +161,12 @@ export function conversationPrompt(world: WorldState, conv: Conversation, brief:
     `B sees A as: ${rel(b, a)}.${memB.length ? ` B remembers:\n${memB.join("\n")}` : ""}`,
     lessonLines(a, 2, b.id).length ? `A's lessons:\n${lessonLines(a, 2, b.id).join("\n")}` : "",
     lessonLines(b, 2, a.id).length ? `B's lessons:\n${lessonLines(b, 2, a.id).join("\n")}` : "",
+    conv.topic === "chat" && newsKnown(world, a).length ? `Town news A knows:\n${newsKnown(world, a).join("\n")}` : "",
+    conv.topic === "chat" && newsKnown(world, b).length ? `Town news B knows:\n${newsKnown(world, b).join("\n")}` : "",
     `Situation and constraints: ${brief}`,
-    `Write 3-6 alternating lines, A first. Each speaks in their own style (A ${a.personality.style}, B ${b.personality.style}), shows how they feel right now, and may bring up something they remember about the other. Then the outcome.`,
+    conv.topic === "chat"
+      ? `Write 5-10 alternating lines, A first: a natural chat that covers those beats, in their own styles (A ${a.personality.style}, B ${b.personality.style}), with their real feelings and opinions. Then the outcome (an empty object).`
+      : `Write 3-6 alternating lines, A first. Each speaks in their own style (A ${a.personality.style}, B ${b.personality.style}), shows how they feel right now, and may bring up something they remember about the other. Then the outcome.`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -185,6 +189,16 @@ export function conversationPrompt(world: WorldState, conv: Conversation, brief:
     additionalProperties: false,
   };
   return { user, schema };
+}
+
+/** What a citizen has heard about lately, and their take. */
+function newsKnown(world: WorldState, c: Citizen): string[] {
+  return c.news.slice(-4).flatMap((k) => {
+    const h = world.happenings.find((x) => x.id === k.id);
+    if (!h) return [];
+    const take = k.stance <= -0.4 ? "upset" : k.stance < -0.1 ? "sorry about it" : k.stance >= 0.4 ? "pleased" : k.stance > 0.1 ? "quietly glad" : "not bothered";
+    return [`- ${h.title}: ${h.text} (${take})`];
+  });
 }
 
 // ------------------------------------------------------- reflection prompt

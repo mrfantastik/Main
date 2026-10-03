@@ -302,9 +302,25 @@ function Mind({ d }: { d: CitizenDetail }) {
   );
 }
 
+function stanceLabel(s: number): string {
+  return s <= -0.5 ? "😟 upset" : s < -0.1 ? "😕 sorry about it" : s >= 0.5 ? "😄 pleased" : s > 0.1 ? "🙂 quietly glad" : "😐 not bothered";
+}
+
 function Social({ d }: { d: CitizenDetail }) {
   return (
     <>
+      <div className="section">What they've heard</div>
+      <div className="list">
+        {d.news.length === 0 && <div className="empty">No news yet. People pass it on when they talk.</div>}
+        {d.news.slice(0, 8).map((n) => (
+          <div key={n.id} className="item news-item">
+            {n.icon} {n.title}
+            <div className="meta">
+              {when(n.t)} · {n.via} · <span className="stance">{stanceLabel(n.stance)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
       <div className="section">Recent conversations</div>
       <div className="list">
         {d.conversations.length === 0 && <div className="empty">Hasn't talked to anyone yet.</div>}

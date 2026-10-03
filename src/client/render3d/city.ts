@@ -2,13 +2,16 @@ import { Box3, BufferGeometry, Vector3 } from "three";
 import type { Building, CityMap } from "../../sim/types";
 import { lampPositions } from "../render/cityLayer";
 import { GeoBuilder, hash } from "./geometry";
-import { P, ROOFS, WALLS } from "./palette";
+import { P, ROOFS, setLook, WALLS, type Look } from "./palette";
 
 // Builds the static 3D city once per map: everything that never moves is
 // merged into a few geometries (one draw call each).
 
 /** Height of the raised city blocks (pavement / gardens) above the road. */
 export const SLAB = 0.12;
+
+/** Which look is being built (set by buildCity). */
+let LOOK: Look = "retro";
 
 /** How citizens inside a building are shown. */
 export type InsideMode = "home" | "open" | "roof";
@@ -95,6 +98,12 @@ function door(c: Ctx, b: Building, cx: number, cz: number, w: number, d: number,
 }
 
 function tree(g: GeoBuilder, x: number, z: number, y: number, size: number, seed: number) {
+  if (LOOK === "dream") {
+    // Cypresses and the odd stray column instead of leafy trees.
+    if (seed < 0.25) g.column(x, y, z, 1.2 + size * 0.8, 0.09, P.white, seed < 0.08);
+    else g.cypress(x, y, z, 1.5 + size * 1.1, [P.leaf, P.leafDark, P.leafLight][Math.floor(seed * 3) % 3], P.trunk);
+    return;
+  }
   const trunkH = 0.35 + size * 0.25;
   g.box(x, y, z, 0.14, trunkH, 0.14, P.trunk);
   const greens = [P.leaf, P.leafDark, P.leafLight, P.moss];
@@ -108,6 +117,10 @@ function tree(g: GeoBuilder, x: number, z: number, y: number, size: number, seed
 }
 
 function bush(g: GeoBuilder, x: number, z: number, y: number, r: number, seed: number) {
+  if (LOOK === "dream") {
+    g.sphere(x, y + r * 0.8, z, r * 0.9, seed > 0.5 ? P.leafDark : P.moss, 10);
+    return;
+  }
   g.ico(x, y + r * 0.6, z, r, seed > 0.5 ? P.leafDark : P.moss, 0.7);
 }
 
@@ -267,7 +280,11 @@ function addBuilding(c: Ctx, b: Building, info: Map<string, BuildingInfo>) {
       // portico: steps, columns, pediment
       const fz = bz + d / 2;
       g.box(cx, y, fz + 0.35, w, 0.12, 0.7, P.cream);
-      for (let i = 0; i < 4; i++) g.cylinder(b.x + 0.45 + i * ((b.w - 0.9) / 3), y + 0.12, fz + 0.45, 0.1, h - 0.3, P.cream, 6);
+      for (let i = 0; i < 4; i++) {
+        const px = b.x + 0.45 + i * ((b.w - 0.9) / 3);
+        if (LOOK === "dream") g.column(px, y + 0.12, fz + 0.45, h - 0.32, 0.1, P.white);
+        else g.cylinder(px, y + 0.12, fz + 0.45, 0.1, h - 0.3, P.cream, 6);
+      }
       g.box(cx, y + h - 0.2, fz + 0.35, w, 0.2, 0.75, P.cream);
       g.gable(cx, y + h, cz, w + 0.1, b.h - 0.5, 0.6, P.cream, true);
       g.panel(cx, y, fz + 0.012, 0.6, 1, 0, P.door);
@@ -382,6 +399,13 @@ function addBuilding(c: Ctx, b: Building, info: Map<string, BuildingInfo>) {
       }
       g.box(cx + 1.2, y, cz + 0.6, 0.8, 0.2, 0.25, P.trunk);
       g.box(cx - 1.2, y, cz - 0.6, 0.8, 0.2, 0.25, P.trunk);
+      if (LOOK === "dream" && b.id !== "park") {
+        // A little ring of columns round the fountain: the town's folly.
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2 + 0.3;
+          g.column(cx + Math.cos(a) * 1.75, y, cz + Math.sin(a) * 1.75, 2.4, 0.11, P.white, i === 4);
+        }
+      }
       top = y;
       break;
     }
@@ -418,15 +442,21 @@ function blockSurface(map: CityMap, x0: number, y0: number): number {
   return P.pavement;
 }
 
-export function buildCity(map: CityMap): CityGeometry {
+export function buildCity(map: CityMap, look: Look = "retro"): CityGeometry {
+  LOOK = look;
+  setLook(look);
   const c: Ctx = { g: new GeoBuilder(), win: new GeoBuilder(), winRanges: new Map() };
   const g = c.g;
   const W = map.width;
   const H = map.height;
+  const dream = look === "dream";
 
-  // Ground: countryside around the town, asphalt for the street grid.
-  g.flat(W / 2, -0.03, H / 2, W + 90, H + 90, P.grassDark);
-  g.flat(W / 2, 0, H / 2, W, H, P.asphalt);
+  // Ground: countryside around the town, asphalt for the street grid. (The
+  // dreamscape stands on a reflective tiled floor drawn separately.)
+  if (!dream) {
+    g.flat(W / 2, -0.03, H / 2, W + 90, H + 90, P.grassDark);
+    g.flat(W / 2, 0, H / 2, W, H, P.asphalt);
+  }
 
   // Raised blocks with a kerb rim.
   for (let y0 = 2; y0 < H; y0 += 10) {
@@ -448,15 +478,15 @@ export function buildCity(map: CityMap): CityGeometry {
   }
 
   // Lane markings and zebra crossings.
-  for (let k = 0; k * 10 <= H - 2; k++) {
+  for (let k = 0; !dream && k * 10 <= H - 2; k++) {
     const zc = k * 10 + 1;
     for (let x = 0; x < W; x += 2) if (x % 10 >= 2) g.flat(x + 0.5, 0.008, zc, 0.9, 0.07, P.lane);
   }
-  for (let k = 0; k * 10 <= W - 2; k++) {
+  for (let k = 0; !dream && k * 10 <= W - 2; k++) {
     const xc = k * 10 + 1;
     for (let y = 0; y < H; y += 2) if (y % 10 >= 2) g.flat(xc, 0.008, y + 0.5, 0.07, 0.9, P.lane);
   }
-  for (let iy = 0; iy < H; iy += 10) {
+  for (let iy = 0; !dream && iy < H; iy += 10) {
     for (let ix = 0; ix < W; ix += 10) {
       for (let k = 0; k < 4; k++) {
         if (ix + 2 < W) g.flat(ix + 2.35, 0.009, iy + 0.25 + k * 0.5, 0.45, 0.25, P.lane);
@@ -465,8 +495,18 @@ export function buildCity(map: CityMap): CityGeometry {
     }
   }
 
+  // Dreamscape: columns standing about on the endless floor, some fallen short.
+  for (let i = 0; dream && i < 70; i++) {
+    const a = hash(i, 23, 4) * Math.PI * 2;
+    const rr = hash(i, 5, 19);
+    const x = W / 2 + Math.cos(a) * (W / 2 + 4 + rr * 40);
+    const z = H / 2 + Math.sin(a) * (H / 2 + 4 + rr * 34);
+    const tall = 2.5 + hash(i, 9, 1) * 5.5;
+    g.column(x, 0, z, tall, 0.16 + tall * 0.025, P.white, hash(i, 2, 8) < 0.22);
+  }
+
   // Countryside: scattered trees and hedges around the edge of town.
-  for (let i = 0; i < 140; i++) {
+  for (let i = 0; !dream && i < 140; i++) {
     const a = hash(i, 17, 4) * Math.PI * 2;
     const rr = 0.5 + hash(i, 5, 9) * 0.9;
     const x = W / 2 + Math.cos(a) * (W / 2 + 2 + rr * 14);

@@ -1,5 +1,6 @@
 import { describeSkip, type AIStatusDTO, type ClientMsg, type HelloMsg, type ServerMsg } from "../../shared/protocol";
 import { newWorld as createWorld } from "../../sim";
+import { applyInvented, applyUnscripted, INVENT_SYSTEM, inventableKinds, inventPrompt, UNSCRIPTED_SYSTEM, unscriptedPrompt } from "../../sim/ai/unscripted";
 import { applyGodCommand, GodError } from "../../sim/god";
 import { prepareLoadedWorld } from "../../sim/migrate";
 import { SimRunner } from "../../sim/runner";
@@ -9,7 +10,9 @@ import type { WorldState } from "../../sim/types";
 // The "server" for the standalone build: runs the whole simulation inside the
 // browser tab and talks to the UI with exactly the same messages the Node
 // server sends over its WebSocket. Saves go to the browser's IndexedDB.
-// Claude is not available here (that needs the API key on a server).
+// Citizens run on the built-in AI. When the page is opened on claude.ai, the
+// viewer can also ask Claude (on their own account, one click at a time) to
+// write a conversation from scratch or invent something that happens in town.
 
 const DB_NAME = "ai-hustle-city";
 const STORE = "worlds";
@@ -53,8 +56,24 @@ async function writeSave(json: string): Promise<boolean> {
   }
 }
 
+/** The claude.ai page capability for asking Claude (absent anywhere else). */
+type Sample = { json: (input: string, opts?: { cache?: boolean; modelTier?: string }) => Promise<unknown> };
+
+const SAMPLE_ERRORS: Record<string, string> = {
+  not_granted: "You didn't allow Claude for this page, so the town stays on the built-in AI.",
+  sampling_disabled: "Claude isn't available for this account.",
+  rate_limited: "Claude is busy (or you've hit a usage limit). Try again a bit later.",
+  session_expired: "Sign in to claude.ai again to use Claude.",
+  refused: "Claude declined to write that one. Try another.",
+  invalid_json: "Claude's reply didn't come back in a usable form. Try again.",
+  empty_completion: "Claude didn't write anything. Try again.",
+};
+const PERMANENT = new Set(["not_granted", "sampling_disabled", "not_declared", "capability_disabled", "capability_removed"]);
+
 export class LocalHost {
   private runner!: SimRunner;
+  private sample: Sample | null = null;
+  private writing = false;
   private selected: { kind: "citizen" | "business"; id: string } | null = null;
   private dashboardOpen = false;
   private lastEventId = 0;
@@ -83,6 +102,7 @@ export class LocalHost {
     this.runner = new SimRunner(world ?? this.fresh());
     this.configureAI(this.runner.world);
     this.sendHello();
+    void this.connectClaude();
     this.runner.start();
     this.timers.push(setInterval(() => this.deliver(snap.frame(this.world, this.runner.speed, this.runner.paused)), 100));
     this.timers.push(setInterval(() => this.pushState(), 500));
@@ -103,6 +123,60 @@ export class LocalHost {
     return w;
   }
 
+  /** On claude.ai the page may ask Claude; anywhere else this stays null. */
+  private async connectClaude(): Promise<void> {
+    const use = (window as unknown as { claude?: { use?: (name: string) => Promise<unknown> } }).claude?.use;
+    if (typeof use !== "function") return;
+    try {
+      this.sample = ((await use("sample")) as Sample | null) ?? null;
+    } catch {
+      this.sample = null;
+    }
+    if (this.sample) this.pushState();
+  }
+
+  /** Ask Claude (the viewer's account) for JSON; report failures as toasts. */
+  private ask(kind: "unscripted" | "invent", prompt: string, apply: (reply: unknown) => string, busy: string): void {
+    if (!this.sample) {
+      this.toast("Claude isn't available here. Open the game on claude.ai, or run the full version with an API key.", "error");
+      return;
+    }
+    if (this.writing) {
+      this.toast("Claude is still working on the last request.", "error");
+      return;
+    }
+    const world = this.world;
+    const started = Date.now();
+    this.writing = true;
+    this.toast(busy);
+    this.sample
+      .json(prompt, { cache: false })
+      .then((reply) => {
+        if (this.world !== world) return;
+        const text = apply(reply);
+        this.logAI(kind, prompt, JSON.stringify(reply), "ok", text, started);
+        this.toast(text);
+        this.pushState();
+      })
+      .catch((err: { code?: string; message?: string }) => {
+        const code = err?.code ?? "";
+        const text = SAMPLE_ERRORS[code] ?? (err?.message && !code ? `Claude couldn't do it: ${err.message}` : "Claude couldn't do it this time. Try again.");
+        if (PERMANENT.has(code)) this.sample = null;
+        if (this.world === world) this.logAI(kind, prompt, code || String(err?.message ?? err), code === "refused" ? "rejected" : "error", text, started);
+        this.toast(text, "error");
+        this.pushState();
+      })
+      .finally(() => {
+        this.writing = false;
+      });
+  }
+
+  private logAI(kind: "unscripted" | "invent", prompt: string, response: string, status: "ok" | "rejected" | "error", note: string, started: number): void {
+    const w = this.world;
+    w.ai.log.push({ id: w.nextId++, t: w.time, citizenId: null, kind, prompt, response, costUsd: 0, ms: Date.now() - started, status, note });
+    if (w.ai.log.length > 60) w.ai.log.shift();
+  }
+
   private configureAI(world: WorldState): void {
     world.ai.mode = "off";
   }
@@ -119,7 +193,10 @@ export class LocalHost {
       callsToday: ai.callsToday,
       maxCallsPerDay: ai.maxCallsPerDay,
       pending: 0,
-      reason: "this browser version runs on the built-in utility AI only. Run the full version (npm start) with an API key to use Claude.",
+      reason: this.sample
+        ? "citizens run on the built-in AI. You can ask Claude (on your claude.ai account) to write any conversation from scratch, or to invent something that happens in town."
+        : "this browser version runs on the built-in utility AI only. Open it on claude.ai to have Claude write conversations, or run the full version (npm start) with an API key.",
+      writer: this.sample ? "Claude (your claude.ai account)" : null,
     };
   }
 
@@ -210,6 +287,29 @@ export class LocalHost {
         this.pushState();
         if (this.dashboardOpen) this.deliver(snap.dashboard(w));
         this.toast(`⏩ Skipped ${describeSkip(minutes)} — ${n} things happened. It's now ${snap.describeTime(w.time)}.`);
+        break;
+      }
+      case "unscripted": {
+        const p = unscriptedPrompt(w, Number(msg.convId));
+        if (typeof p === "string") this.toast(p, "error");
+        else this.ask("unscripted", `${UNSCRIPTED_SYSTEM}\n\n${p.prompt}`, (reply) => applyUnscripted(this.world, p.conv.id, reply), "✨ Claude is writing their conversation…");
+        break;
+      }
+      case "invent": {
+        if (inventableKinds(w).length === 0) {
+          this.toast("Nothing can happen right now. Try at another time of day.", "error");
+          break;
+        }
+        this.ask(
+          "invent",
+          `${INVENT_SYSTEM}\n\n${inventPrompt(w, typeof msg.idea === "string" ? msg.idea : "")}`,
+          (reply) => {
+            const h = applyInvented(this.world, reply);
+            if (typeof h === "string") throw { message: h };
+            return `✨ ${h.title}.`;
+          },
+          "✨ Claude is dreaming something up…",
+        );
         break;
       }
       case "save":

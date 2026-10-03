@@ -15,7 +15,10 @@ import {
   MeshBasicMaterial,
   MeshLambertMaterial,
   Object3D,
+  MeshPhongMaterial,
   OrthographicCamera,
+  PCFShadowMap,
+  PerspectiveCamera,
   Plane,
   Raycaster,
   RingGeometry,
@@ -35,13 +38,22 @@ import type { CityRenderer, Pos } from "../render/types";
 import { OCC_COLORS } from "../ui/format";
 import { buildDecor, decorKey, type BusinessDecor } from "./businesses";
 import { buildCity, SLAB, type BuildingInfo } from "./city";
-import { CitizenMeshes, FIGURE_H, MAX_CITIZENS } from "./citizens";
-import { P } from "./palette";
+import { CitizenMeshes, FIGURE_H, MAX_CITIZENS, type Figures } from "./citizens";
+import { MirrorFloor } from "./dream/floor";
+import { MannequinMeshes, MANNEQUIN_H } from "./dream/mannequins";
+import { DreamSky } from "./dream/sky";
+import { TownEffects } from "./effects";
+import { P, type Look } from "./palette";
 
-// A retro low-poly 3D view of the same city. The scene is rendered into a
-// small drawing buffer (about 400 px tall) and the browser scales it up with
-// nearest-neighbour filtering, giving chunky pixels. Text (names, icons,
-// money, speech) is drawn crisply on a 2D overlay canvas on top.
+// The 3D view of the city, in one of two looks:
+//  - dream (default): marble and pastel buildings and glossy mannequins on an
+//    endless reflective hex-tiled floor, under a purple-clouded sky dome;
+//    rendered smoothly at full resolution.
+//  - retro: the low-poly town rendered into a small drawing buffer (about
+//    400 px tall) and scaled up with nearest-neighbour filtering.
+// Either can be seen from the usual tilted overhead camera, or from ground
+// level (a perspective camera behind the selected person, or circling the
+// town). Text (names, icons, money, speech) is drawn crisply on a 2D overlay.
 
 const ELEVATION = 0.64; // radians above the ground (~37°)
 const DISTANCE = 160;
@@ -103,6 +115,17 @@ const COL = {
   windowLit: new Color(P.windowLit),
 };
 
+/** Dreamscape light: lilac daylight, rose sunsets, violet nights. */
+const DREAM_COL = {
+  hemiDay: new Color(0xf6ecff),
+  hemiNight: new Color(0x5a4aa8),
+  groundDay: new Color(0x8a7a8e),
+  groundNight: new Color(0x1c1630),
+  dusk: new Color(0xff9fb0),
+  sunLow: new Color(0xffa58a),
+  sunHigh: new Color(0xfff4ec),
+};
+
 export class Renderer3D implements CityRenderer {
   private gl: WebGLRenderer;
   private scene = new Scene();
@@ -121,7 +144,20 @@ export class Renderer3D implements CityRenderer {
   private decor: BusinessDecor | null = null;
   private decorMesh: Mesh | null = null;
   private decorKey = "";
-  private people = new CitizenMeshes();
+  private people: Figures;
+  private readonly look: Look;
+  private readonly figureH: number;
+  private dreamSky: DreamSky | null = null;
+  private floor: MirrorFloor | null = null;
+  private fx = new TownEffects();
+  private persp = new PerspectiveCamera(50, 1, 0.1, 900);
+  /** Ground-level view (perspective) instead of the overhead one. */
+  private groundOn = false;
+  private gYaw = Math.PI / 4;
+  private gDist = 5;
+  private gSubject: string | null = null;
+  private gEye = new Vector3();
+  private gLook = new Vector3();
   private vis = new Map<string, Vis>();
   private selRing: Mesh;
   private hoverRing: Mesh;
@@ -180,12 +216,25 @@ export class Renderer3D implements CityRenderer {
   private directorFxSeen: unknown = null;
   private driftUntil = 0;
 
-  constructor(private canvas: HTMLCanvasElement) {
-    this.gl = new WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" });
+  constructor(
+    private canvas: HTMLCanvasElement,
+    look: Look = "dream",
+  ) {
+    this.look = look;
+    const dream = look === "dream";
+    this.gl = new WebGLRenderer({ canvas, antialias: dream, powerPreference: "high-performance" });
     this.gl.setPixelRatio(1);
     this.gl.shadowMap.enabled = true;
-    this.gl.shadowMap.type = BasicShadowMap;
-    canvas.style.imageRendering = "pixelated";
+    this.gl.shadowMap.type = dream ? PCFShadowMap : BasicShadowMap;
+    canvas.style.imageRendering = dream ? "auto" : "pixelated";
+    this.people = dream ? new MannequinMeshes(MAX_CITIZENS) : new CitizenMeshes();
+    this.figureH = dream ? MANNEQUIN_H : FIGURE_H;
+    if (dream) {
+      this.dreamSky = new DreamSky();
+      this.floor = new MirrorFloor();
+      this.scene.add(this.dreamSky.dome, this.dreamSky.stars, this.floor.mesh);
+    }
+    this.scene.add(this.fx.group);
 
     this.overlay = document.createElement("canvas");
     this.overlay.className = "overlay-3d";
@@ -199,7 +248,7 @@ export class Renderer3D implements CityRenderer {
     this.sun.target = this.sunTarget;
     this.moon.target = this.sunTarget;
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(1024, 1024);
+    this.sun.shadow.mapSize.set(dream ? 2048 : 1024, dream ? 2048 : 1024);
     this.sun.shadow.bias = -0.0015;
     this.sun.shadow.normalBias = 0.02;
     for (const m of this.people.meshes) this.scene.add(m);
@@ -224,10 +273,12 @@ export class Renderer3D implements CityRenderer {
   setMap(map: CityMap): void {
     this.map = map;
     this.disposeCity();
-    const geo = buildCity(map);
+    const geo = buildCity(map, this.look);
     this.info = geo.info;
-    const flat = new MeshLambertMaterial({ vertexColors: true, flatShading: true });
-    this.cityMesh = new Mesh(geo.city, flat);
+    COL.lampOff.setHex(P.lampOff);
+    COL.lampOn.setHex(P.lampOn);
+    COL.windowLit.setHex(P.windowLit);
+    this.cityMesh = new Mesh(geo.city, this.surfaceMaterial());
     this.cityMesh.castShadow = true;
     this.cityMesh.receiveShadow = true;
     this.cityMesh.matrixAutoUpdate = false;
@@ -244,7 +295,7 @@ export class Renderer3D implements CityRenderer {
     const cz = map.height / 2;
     this.sunTarget.position.set(cx, 0, cz);
     const sc = this.sun.shadow.camera;
-    const r = Math.max(map.width, map.height) * 0.75;
+    const r = Math.max(map.width, map.height) * (this.look === "dream" ? 1.1 : 0.75);
     sc.left = -r;
     sc.right = r;
     sc.top = r;
@@ -275,6 +326,9 @@ export class Renderer3D implements CityRenderer {
     this.canvas.removeEventListener("pointerleave", this.onLeave);
     this.disposeCity();
     this.people.dispose();
+    this.fx.dispose();
+    this.dreamSky?.dispose();
+    this.floor?.dispose();
     for (const m of [this.selRing, this.hoverRing]) (m.material as Material).dispose();
     this.selRing.geometry.dispose();
     this.bizOutline.geometry.dispose();
@@ -334,11 +388,38 @@ export class Renderer3D implements CityRenderer {
 
   /** Turn the view 90° (dir = 1 clockwise, -1 anticlockwise). */
   rotate(dir: number): void {
+    if (this.groundOn && dir !== 0) {
+      this.gYaw -= (dir * Math.PI) / 4;
+      return;
+    }
     this.azGoal = Math.round((this.azGoal + (dir * Math.PI) / 2 - Math.PI / 4) / (Math.PI / 2)) * (Math.PI / 2) + Math.PI / 4;
   }
 
   get director(): boolean {
     return this.directorOn;
+  }
+
+  get groundView(): boolean {
+    return this.groundOn;
+  }
+
+  /** See the town from ground level: behind the selected person, or circling the middle of town. */
+  setGroundView(on: boolean): void {
+    this.groundOn = on;
+    this.gDist = 5;
+    this.needsResize = true;
+    this.updateCamera();
+  }
+
+  private surfaceMaterial(): Material {
+    return this.look === "dream"
+      ? new MeshPhongMaterial({ vertexColors: true, shininess: 40, specular: new Color(0x2c2636) })
+      : new MeshLambertMaterial({ vertexColors: true, flatShading: true });
+  }
+
+  /** The camera in use. */
+  private cam(): OrthographicCamera | PerspectiveCamera {
+    return this.groundOn ? this.persp : this.camera;
   }
 
   /** The director camera glides to interesting moments on its own. */
@@ -353,6 +434,10 @@ export class Renderer3D implements CityRenderer {
 
   private updateCamera(): void {
     const aspect = this.cssW / this.cssH;
+    if (this.groundOn) {
+      this.updateGroundCamera(aspect);
+      return;
+    }
     const c = this.camera;
     c.left = -this.halfH * aspect;
     c.right = this.halfH * aspect;
@@ -365,8 +450,39 @@ export class Renderer3D implements CityRenderer {
     c.updateMatrixWorld();
     this.right.set(Math.cos(this.az), 0, -Math.sin(this.az));
     this.fwd.set(-Math.sin(this.az), 0, -Math.cos(this.az));
-    this.fog.near = DISTANCE - 10;
-    this.fog.far = DISTANCE + 110;
+    this.fog.near = this.look === "dream" ? DISTANCE + 5 : DISTANCE - 10;
+    this.fog.far = this.look === "dream" ? DISTANCE + 190 : DISTANCE + 110;
+  }
+
+  /** Ground level: just behind and above the subject's shoulder, looking past them towards the horizon. */
+  private updateGroundCamera(aspect: number): void {
+    const sel = store.s.selection;
+    const subject = this.gSubject ?? (sel?.kind === "citizen" ? sel.id : null);
+    const p = subject ? this.vis.get(subject) : undefined;
+    let fx = this.target.x;
+    let fz = this.target.z;
+    let fy = 0;
+    if (p?.visible) {
+      fx = p.hx;
+      fz = p.hz;
+      fy = p.fy;
+    }
+    const d = p?.visible ? this.gDist : this.gDist * 4;
+    const c = this.persp;
+    c.aspect = aspect;
+    c.fov = 52;
+    c.near = 0.1;
+    c.far = 900;
+    c.updateProjectionMatrix();
+    this.gEye.set(fx + Math.sin(this.gYaw) * d, fy + 0.75 + d * 0.16, fz + Math.cos(this.gYaw) * d);
+    this.gLook.set(fx - Math.sin(this.gYaw) * 6, fy + 0.95 + d * 0.05, fz - Math.cos(this.gYaw) * 6);
+    c.position.copy(this.gEye);
+    c.lookAt(this.gLook);
+    c.updateMatrixWorld();
+    this.right.set(Math.cos(this.gYaw), 0, -Math.sin(this.gYaw));
+    this.fwd.set(-Math.sin(this.gYaw), 0, -Math.cos(this.gYaw));
+    this.fog.near = 30;
+    this.fog.far = this.look === "dream" ? 260 : 160;
   }
 
   /** Show the whole city, centred. */
@@ -408,7 +524,7 @@ export class Renderer3D implements CityRenderer {
   /** Ground point under a CSS-pixel position (written into this.hit). */
   private groundAt(sx: number, sy: number): Vector3 | null {
     this.ndc.set((sx / this.cssW) * 2 - 1, -(sy / this.cssH) * 2 + 1);
-    this.raycaster.setFromCamera(this.ndc, this.camera);
+    this.raycaster.setFromCamera(this.ndc, this.cam());
     return this.raycaster.ray.intersectPlane(this.ground, this.hit);
   }
 
@@ -434,7 +550,7 @@ export class Renderer3D implements CityRenderer {
 
   /** CSS-pixel screen position of a world point, into this.sp. */
   private project(x: number, y: number, z: number): boolean {
-    this.v.set(x, y, z).project(this.camera);
+    this.v.set(x, y, z).project(this.cam());
     this.sp.x = ((this.v.x + 1) / 2) * this.cssW;
     this.sp.y = ((1 - this.v.y) / 2) * this.cssH;
     return this.v.z < 1 && this.sp.x > -80 && this.sp.y > -80 && this.sp.x < this.cssW + 80 && this.sp.y < this.cssH + 80;
@@ -442,7 +558,14 @@ export class Renderer3D implements CityRenderer {
 
   /** Horizontal CSS pixels per tile (like the 2D camera's scale). */
   private get pxPerTile(): number {
-    return this.cssH / (2 * this.halfH);
+    return this.groundOn ? this.cssH / (2 * 12 * Math.tan((this.persp.fov * Math.PI) / 360)) : this.cssH / (2 * this.halfH);
+  }
+
+  /** Pixels per tile at a point (from ground level, near things look bigger). */
+  private scaleAt(x: number, y: number, z: number): number {
+    if (!this.groundOn) return this.cssH / (2 * this.halfH);
+    const d = Math.max(0.5, this.v2.set(x, y, z).distanceTo(this.gEye));
+    return this.cssH / (2 * d * Math.tan((this.persp.fov * Math.PI) / 360));
   }
 
   // ------------------------------------------------------------ input
@@ -466,6 +589,10 @@ export class Renderer3D implements CityRenderer {
 
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
+    if (this.groundOn) {
+      this.gDist = Math.min(30, Math.max(1.6, this.gDist * Math.exp(e.deltaY * 0.0012)));
+      return;
+    }
     const p = this.local(e);
     this.zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.0015));
     this.directorPause();
@@ -477,7 +604,7 @@ export class Renderer3D implements CityRenderer {
     this.canvas.setPointerCapture(e.pointerId);
     if (this.pointers.size === 1) {
       const g = this.groundAt(p.x, p.y);
-      this.drag = g ? { anchor: g.clone(), moved: false, sx: p.x, sy: p.y } : null;
+      this.drag = g || this.groundOn ? { anchor: (g ?? this.target).clone(), moved: false, sx: p.x, sy: p.y } : null;
     } else if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
       this.pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y), halfH: this.halfH };
@@ -496,6 +623,16 @@ export class Renderer3D implements CityRenderer {
         this.zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, this.halfH / want);
       }
       this.directorPause();
+      return;
+    }
+    if (this.drag && this.groundOn) {
+      if (Math.abs(p.x - this.drag.sx) + Math.abs(p.y - this.drag.sy) > 4) this.drag.moved = true;
+      if (this.drag.moved) {
+        this.gYaw -= (p.x - this.drag.sx) * 0.006;
+        this.drag.sx = p.x;
+        this.drag.sy = p.y;
+        this.directorPause();
+      }
       return;
     }
     if (this.drag) {
@@ -553,6 +690,11 @@ export class Renderer3D implements CityRenderer {
     }
     if (k === "+" || k === "=") this.zoomAt(this.cssW / 2, this.cssH / 2, 1.2);
     if (k === "-") this.zoomAt(this.cssW / 2, this.cssH / 2, 1 / 1.2);
+    if (this.groundOn) {
+      if (k === "q" || k === "Q") this.gYaw += Math.PI / 4;
+      if (k === "e" || k === "E") this.gYaw -= Math.PI / 4;
+      return;
+    }
     if (k === "q" || k === "Q") this.rotate(-1);
     if (k === "e" || k === "E") this.rotate(1);
   };
@@ -562,16 +704,15 @@ export class Renderer3D implements CityRenderer {
   /** What's under the pointer: the nearest citizen (as in 2D), else a business. */
   private pick(sx: number, sy: number): { citizen: string | null; business: string | null } {
     this.ndc.set((sx / this.cssW) * 2 - 1, -(sy / this.cssH) * 2 + 1);
-    this.raycaster.setFromCamera(this.ndc, this.camera);
+    this.raycaster.setFromCamera(this.ndc, this.cam());
     const ray = this.raycaster.ray;
-    const worldPerPx = (2 * this.halfH) / this.cssH;
     let best: string | null = null;
     let bestD = 14;
     for (const [id, v] of this.vis) {
       if (!v.visible) continue;
-      // Distance from the ray to the middle of the figure, in screen pixels.
-      this.v.set(v.hx, (v.hy + v.fy) / 2, v.hz);
-      const d = ray.distanceToPoint(this.v) / worldPerPx + (v.inside ? 7 : -4);
+      // Distance from the pointer to the middle of the figure, in screen pixels.
+      if (!this.project(v.hx, (v.hy + v.fy) / 2, v.hz)) continue;
+      const d = Math.hypot(this.sp.x - sx, this.sp.y - sy) + (v.inside ? 7 : -4);
       if (d < bestD) {
         bestD = d;
         best = id;
@@ -638,8 +779,15 @@ export class Renderer3D implements CityRenderer {
     this.cssH = Math.max(1, r.height);
     const dpr = window.devicePixelRatio || 1;
     const devH = this.cssH * dpr;
-    const scale = Math.max(1, Math.round(devH / TARGET_PIXELS_TALL));
-    this.gl.setSize(Math.max(1, Math.ceil((this.cssW * dpr) / scale)), Math.max(1, Math.ceil(devH / scale)), false);
+    if (this.look === "dream") {
+      // Smooth and full resolution (capped, to keep the mirror pass cheap).
+      const r = Math.min(dpr, 1.5);
+      this.gl.setSize(Math.max(1, Math.round(this.cssW * r)), Math.max(1, Math.round(this.cssH * r)), false);
+      this.floor?.setSize(this.cssW * r, this.cssH * r);
+    } else {
+      const scale = Math.max(1, Math.round(devH / TARGET_PIXELS_TALL));
+      this.gl.setSize(Math.max(1, Math.ceil((this.cssW * dpr) / scale)), Math.max(1, Math.ceil(devH / scale)), false);
+    }
     this.overlay.width = Math.round(this.cssW * dpr);
     this.overlay.height = Math.round(this.cssH * dpr);
   }
@@ -656,6 +804,7 @@ export class Renderer3D implements CityRenderer {
       this.bizById.set(b.id, b);
       if (b.open && !this.shopIn.has(b.buildingId)) this.shopIn.set(b.buildingId, b);
     }
+    if (this.map) this.fx.sync(st.happenings ?? [], this.info);
   }
 
   /** CPU time of the last frame in ms, smoothed (for profiling: window.hustle.renderer.cpuMs). */
@@ -681,6 +830,8 @@ export class Renderer3D implements CityRenderer {
 
     this.az += angleDelta(this.az, this.azGoal) * Math.min(1, dt * 8);
     const sel = store.s.selection;
+    this.gSubject = this.directorOn && this.shot?.citizen ? this.shot.citizen : null;
+    if (this.groundOn && !this.gSubject && !(sel?.kind === "citizen")) this.gYaw += dt * 0.06; // a slow look around town
     if (this.directorOn) this.direct(now, dt);
     else if (store.s.followSelected && sel?.kind === "citizen") {
       const p = this.interp.positions.get(sel.id);
@@ -699,8 +850,13 @@ export class Renderer3D implements CityRenderer {
     }
     this.updateLighting();
     this.updatePeople(dt);
+    if (this.groundOn) this.updateCamera(); // follows the subject's freshly placed figure
     this.updateSelection();
-    this.gl.render(this.scene, this.camera);
+    this.fx.animate(now, dt, this.groundOn ? this.gEye : this.target);
+    const cam = this.cam();
+    if (this.dreamSky) this.dreamSky.centre(cam.position.x, cam.position.z);
+    if (this.floor) this.floor.render(this.gl, this.scene, cam, [this.sun, this.moon]);
+    this.gl.render(this.scene, cam);
     this.drawOverlay(now);
   }
 
@@ -715,7 +871,8 @@ export class Renderer3D implements CityRenderer {
     // Rises in the east (+x), sets in the west, a little to the south.
     this.v.set(Math.cos(theta), 0.2 + e * 1.2, 0.55).normalize();
     this.sun.position.set(map.width / 2, 0, map.height / 2).addScaledVector(this.v, 90);
-    this.sun.intensity = Math.min(1, e * 3) * 2.6 * (1 - n * 0.9);
+    const storm = this.fx.storm;
+    this.sun.intensity = Math.min(1, e * 3) * 2.6 * (1 - n * 0.9) * (1 - storm * 0.7);
     this.sun.color.copy(COL.sunLow).lerp(COL.sunHigh, Math.min(1, e * 1.6));
     this.sun.castShadow = this.sun.intensity > 0.05;
     this.moon.position.set(map.width / 2 - 40, 70, map.height / 2 - 25);
@@ -728,9 +885,25 @@ export class Renderer3D implements CityRenderer {
     this.sky.copy(COL.skyDay).lerp(COL.skyDusk, golden).lerp(COL.skyNight, n);
     this.hemi.color.lerp(COL.skyDusk, golden * 0.45);
     this.fog.color.copy(this.sky);
-    (this.lampHeads!.material as MeshBasicMaterial).color.copy(COL.lampOff).lerp(COL.lampOn, n);
-    (this.lampPools!.material as MeshBasicMaterial).opacity = n * 0.75;
-    (this.windowMesh!.material as MeshBasicMaterial).opacity = Math.min(1, n * 1.6);
+    const lit = this.fx.powerCut ? 0 : n;
+    (this.lampHeads!.material as MeshBasicMaterial).color.copy(COL.lampOff).lerp(COL.lampOn, lit);
+    (this.lampPools!.material as MeshBasicMaterial).opacity = lit * 0.75;
+    (this.windowMesh!.material as MeshBasicMaterial).opacity = this.fx.powerCut ? 0 : Math.min(1, n * 1.6);
+    if (this.dreamSky) {
+      // The dreamscape: lilac light, a painted sky, fog the colour of the horizon.
+      this.sun.color.copy(DREAM_COL.sunLow).lerp(DREAM_COL.sunHigh, Math.min(1, e * 1.6));
+      this.hemi.color.copy(DREAM_COL.hemiDay).lerp(DREAM_COL.hemiNight, n).lerp(DREAM_COL.dusk, golden * 0.35);
+      this.hemi.groundColor.copy(DREAM_COL.groundDay).lerp(DREAM_COL.groundNight, n);
+      this.hemi.intensity = (1.3 + n * 0.4) * (1 - storm * 0.35);
+      this.dreamSky.setTime(Math.min(1, n + storm * 0.55), golden);
+      this.sky.copy(this.dreamSky.horizon);
+      this.fog.color.copy(this.dreamSky.horizon);
+      this.floor!.setNight(n);
+    } else if (storm > 0.01) {
+      this.hemi.intensity *= 1 - storm * 0.3;
+      this.sky.lerp(COL.skyNight, storm * 0.35);
+      this.fog.color.copy(this.sky);
+    }
   }
 
   /** Light up windows where someone is awake inside (and the pub/diner). */
@@ -743,7 +916,7 @@ export class Renderer3D implements CityRenderer {
     let changed = false;
     for (const [id, range] of this.windowRanges) {
       const type = this.info.get(id)?.b.type;
-      const lit = awake.has(id) || type === "pub" || type === "diner" || type === "townhall";
+      const lit = !this.fx.powerCut && (awake.has(id) || type === "pub" || type === "diner" || type === "townhall");
       if (this.windowLit.get(id) === lit) continue;
       this.windowLit.set(id, lit);
       changed = true;
@@ -768,7 +941,7 @@ export class Renderer3D implements CityRenderer {
       (this.decorMesh.material as Material).dispose();
     }
     this.decor = buildDecor(st.businesses, this.info);
-    this.decorMesh = new Mesh(this.decor.geometry, new MeshLambertMaterial({ vertexColors: true, flatShading: true }));
+    this.decorMesh = new Mesh(this.decor.geometry, this.surfaceMaterial());
     this.decorMesh.castShadow = true;
     this.decorMesh.receiveShadow = true;
     this.scene.add(this.decorMesh);
@@ -820,8 +993,8 @@ export class Renderer3D implements CityRenderer {
       v.x = x;
       v.z = z;
       const walking = moved > 0.0005 && moved < 2 && !p.inside;
-      const bob = walking ? Math.abs(Math.sin(v.phase)) * 0.07 : 0;
-      this.people.place(i, x, y + bob, z, v.yaw, scale);
+      const bob = walking ? Math.abs(Math.sin(v.phase)) * (this.look === "dream" ? 0.025 : 0.07) : 0;
+      this.people.place(i, x, y + bob, z, v.yaw, scale, walking ? Math.sin(v.phase) : 0);
       const meta = this.citizenMeta.get(id);
       const key = meta ? meta.occupation + meta.color : "";
       if (meta && key !== v.colorKey) {
@@ -832,7 +1005,7 @@ export class Renderer3D implements CityRenderer {
       this.people.paint(i, v.seed, v.body, v.hat);
       colorsChanged = true;
       v.hx = x;
-      v.hy = y + (FIGURE_H + 0.05) * scale;
+      v.hy = y + (this.figureH + 0.05) * scale;
       v.fy = y;
       v.hz = z;
       v.visible = true;
@@ -890,6 +1063,7 @@ export class Renderer3D implements CityRenderer {
           name = biz ? biz.name : s > 26 ? "To let" : null;
         }
         if (!name) continue;
+        if (this.groundOn && this.scaleAt(b.x + b.w / 2, bi.top, b.y + b.h / 2) < 9) continue;
         if (!this.project(b.x + b.w / 2, bi.top + 0.35, b.y + b.h / 2)) continue;
         drawLabel(ctx, name, this.sp.x, this.sp.y - 16, "#ffe9b0", (b.w + 1.6) * s);
       }
@@ -900,18 +1074,20 @@ export class Renderer3D implements CityRenderer {
       if (!v.visible) continue;
       const isSel = sel?.kind === "citizen" && sel.id === id;
       const isHover = this.hover === id;
-      const showIcon = s > 26 || isSel || isHover;
-      const showName = isSel || isHover || s > 44;
+      // From ground level, it's how close each person is that counts.
+      const sv = this.groundOn ? this.scaleAt(v.hx, v.hy, v.hz) : s;
+      const showIcon = sv > 26 || isSel || isHover;
+      const showName = isSel || isHover || sv > (this.groundOn ? 70 : 44);
       const meta = this.citizenMeta.get(id);
-      const feeling = meta?.emotion && (showFeelingOnMap(meta.emotion) || isSel || isHover) && (s > 16 || isSel || isHover) ? meta.emotion : null;
+      const feeling = meta?.emotion && (showFeelingOnMap(meta.emotion) || isSel || isHover) && (sv > 16 || isSel || isHover) ? meta.emotion : null;
       if (!showIcon && !showName && !feeling) continue;
       if (!this.project(v.hx, v.hy, v.hz)) continue;
-      if (feeling) drawEmotion(ctx, feeling.emoji, this.sp.x - 9, this.sp.y - 6, Math.max(11, Math.min(17, s * 0.42)));
+      if (feeling) drawEmotion(ctx, feeling.emoji, this.sp.x - 9, this.sp.y - 6, Math.max(11, Math.min(17, sv * 0.42)));
       const p = this.interp.positions.get(id);
       if (showIcon && p) {
         const icon = ACTIVITY_ICON[p.kind];
         if (icon) {
-          ctx.font = `${Math.max(11, Math.min(18, s * 0.45))}px sans-serif`;
+          ctx.font = `${Math.max(11, Math.min(18, sv * 0.45))}px sans-serif`;
           ctx.textAlign = "center";
           ctx.textBaseline = "bottom";
           ctx.fillText(icon, this.sp.x + 8, this.sp.y - 2);

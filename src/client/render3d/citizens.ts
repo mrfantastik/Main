@@ -19,7 +19,16 @@ function part(w: number, h: number, d: number, y0: number): BoxGeometry {
   return g;
 }
 
-export class CitizenMeshes {
+/** What the renderer needs from a crowd of figures (block people or mannequins). */
+export interface Figures {
+  readonly meshes: InstancedMesh[];
+  paint(i: number, seed: number, body: Color, hat: Color): void;
+  place(i: number, x: number, y: number, z: number, yaw: number, scale: number, stride?: number): void;
+  finish(count: number, colorsChanged: boolean): void;
+  dispose(): void;
+}
+
+export class CitizenMeshes implements Figures {
   readonly legs: InstancedMesh;
   readonly body: InstancedMesh;
   readonly head: InstancedMesh;
