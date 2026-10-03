@@ -45,7 +45,9 @@ async function fetchFile(url: string, onBytes: (n: number, total: number) => voi
   try {
     res = await fetch(url);
   } catch {
-    throw new Error("couldn't reach Hugging Face. Check your internet connection and try again (pages published on claude.ai can't download it: open the game file instead)");
+    throw new Error(
+      "this page couldn't reach Hugging Face. If your internet is working, the page is open somewhere that blocks downloads (a preview inside an app, or claude.ai). Open ai-hustle-city.html in Chrome, Edge, Firefox or Safari and try again, or use the links under the model to download its four files yourself and load them here",
+    );
   }
   if (res.status === 404) throw new Missing(url);
   if (!res.ok) throw new Error(`Hugging Face said ${res.status} for ${url.split("/").pop()}`);
@@ -102,4 +104,36 @@ export function saveToDisk(blob: Blob, name = "hustle-model.bin"): void {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+}
+
+/** The four files of a model, for downloading by hand when the page can't reach Hugging Face itself. */
+export function modelFiles(choice: ModelChoice): { name: string; url: string }[] {
+  return ["config.json", "tokenizer.json", "tokenizer_config.json", "onnx/model_q4.onnx"].map((f) => ({
+    name: f.split("/").pop()!,
+    url: `https://huggingface.co/${choice.repo}/resolve/main/${f}?download=true`,
+  }));
+}
+
+/**
+ * Put a model's files, downloaded by hand, together as one model file. Takes
+ * config.json, tokenizer.json, tokenizer_config.json and the .onnx file, however
+ * the browser named them ("config (1).json" is fine).
+ */
+export async function packFromFiles(files: File[]): Promise<Blob> {
+  const base = (f: File) => f.name.toLowerCase().replace(/\s*\(\d+\)(?=\.)/, "");
+  const find = (test: (n: string) => boolean) => files.find((f) => test(base(f)));
+  const tokCfg = find((n) => n.startsWith("tokenizer_config") && n.endsWith(".json"));
+  const tok = find((n) => n.startsWith("tokenizer") && !n.startsWith("tokenizer_config") && n.endsWith(".json"));
+  const config = find((n) => n.startsWith("config") && n.endsWith(".json"));
+  const onnx = find((n) => n.endsWith(".onnx"));
+  const missing = [!config && "config.json", !tok && "tokenizer.json", !tokCfg && "tokenizer_config.json", !onnx && "the .onnx model file"].filter(Boolean);
+  if (missing.length) throw new Error(`pick all four of the model's files together (missing: ${missing.join(", ")})`);
+  const cfg = JSON.parse(await config!.text()) as { _name_or_path?: string; model_type?: string };
+  const known = MODEL_CHOICES.find((c) => cfg._name_or_path && c.repo.endsWith(cfg._name_or_path.split("/").pop()!));
+  const name = known?.name ?? (cfg._name_or_path ? cfg._name_or_path.split("/").pop()!.replace(/-/g, " ") : `Your model (${cfg.model_type ?? "unknown"})`);
+  const model = `onnx/${base(onnx!)}`;
+  return makePack(
+    { name, model, pastType: /f16|fp16/.test(model) ? "float16" : "float32", ...(known ? { repo: known.repo } : {}) },
+    { "config.json": config!, "tokenizer.json": tok!, "tokenizer_config.json": tokCfg!, [model]: onnx! },
+  );
 }

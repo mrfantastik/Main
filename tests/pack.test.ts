@@ -30,3 +30,29 @@ test("a file that isn't a model file, or is cut short, is turned away", async ()
   const { "onnx/model_q4.onnx": _, ...rest } = files;
   await assert.rejects(packInfo(makePack({ name: "Broken", model: "onnx/model_q4.onnx", pastType: "float32" }, rest)), /incomplete/);
 });
+
+test("a model's four files, downloaded by hand, become one model file", async () => {
+  // Node has no `document`, which models.ts only touches when saving.
+  const { packFromFiles, modelFiles, MODEL_CHOICES } = await import("../src/client/brain/models");
+  const file = (name: string, bytes: Uint8Array) => new File([bytes as BlobPart], name);
+  const cfg = enc('{"_name_or_path":"Qwen/Qwen2.5-0.5B-Instruct","model_type":"qwen2"}');
+  // However the browser named them: "config (1).json" from a second download is fine.
+  const pack = await packFromFiles([
+    file("model_q4.onnx", files["onnx/model_q4.onnx"]),
+    file("tokenizer_config.json", files["tokenizer_config.json"]),
+    file("config (1).json", cfg),
+    file("tokenizer.json", files["tokenizer.json"]),
+  ]);
+  const p = await openPack(pack);
+  assert.equal(p.meta.name, "Qwen2.5 0.5B Instruct");
+  assert.equal(p.meta.model, "onnx/model_q4.onnx");
+  assert.equal(p.meta.pastType, "float32");
+  assert.deepEqual(await p.file("onnx/model_q4.onnx"), files["onnx/model_q4.onnx"]);
+  assert.deepEqual(await p.file("config.json"), cfg);
+  assert.deepEqual(await p.file("tokenizer.json"), files["tokenizer.json"]);
+  await assert.rejects(packFromFiles([file("config.json", cfg), file("model_q4.onnx", files["onnx/model_q4.onnx"])]), /missing: tokenizer.json, tokenizer_config.json/);
+  // The links point at Hugging Face's download for each of the four.
+  const links = modelFiles(MODEL_CHOICES[0]);
+  assert.deepEqual(links.map((l) => l.name), ["config.json", "tokenizer.json", "tokenizer_config.json", "model_q4.onnx"]);
+  assert.match(links[3].url, /^https:\/\/huggingface\.co\/HuggingFaceTB\/SmolLM2-360M-Instruct\/resolve\/main\/onnx\/model_q4\.onnx\?download=true$/);
+});

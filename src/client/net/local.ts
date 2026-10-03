@@ -2,6 +2,7 @@ import { describeSkip, type AIStatusDTO, type ClientMsg, type HelloMsg, type Ser
 import { newWorld as createWorld } from "../../sim";
 import { AIDirector } from "../../sim/ai/director";
 import { BrainClient } from "../brain/client";
+import { packFromFiles, saveToDisk } from "../brain/models";
 import { createFreeAIClient } from "../../sim/ai/freeai";
 import { applyGodCommand, GodError } from "../../sim/god";
 import { prepareLoadedWorld } from "../../sim/migrate";
@@ -218,12 +219,25 @@ export class LocalHost {
     this.pushState();
   }
 
-  /** The player's model file (hustle-model.bin), picked from disk. */
-  loadBrainFile(file: Blob): void {
-    if (!this.brain) return;
-    if (this.brain.status.state === "ready") this.brain.unload();
-    this.toast("🧠 Loading your model file…");
-    this.wakeBrain(file);
+  /** The player's model file (hustle-model.bin), or a model's four files downloaded by hand, picked from disk. */
+  loadBrainFiles(files: File[]): void {
+    const b = this.brain;
+    if (!b || !files.length) return;
+    if (b.status.state === "ready") b.unload();
+    if (files.length === 1) {
+      this.toast("🧠 Loading your model file…");
+      this.wakeBrain(files[0]);
+      return;
+    }
+    // Loose files: put them together as hustle-model.bin (the player's copy of the third file), then wake.
+    packFromFiles(files).then(
+      (pack) => {
+        this.toast("🧠 Put the files together as hustle-model.bin (saved to your downloads; keep it with the other two files). Waking the brain…");
+        saveToDisk(pack);
+        this.wakeBrain(pack);
+      },
+      (err: Error) => this.toast(`🧠 Couldn't use those files: ${err.message}.`, "error"),
+    );
   }
 
   private configureAI(world: WorldState): void {

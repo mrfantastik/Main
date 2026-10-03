@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { MODEL_CHOICES } from "../brain/models";
+import { MODEL_CHOICES, modelFiles } from "../brain/models";
 import type { AIStatusDTO } from "../../shared/protocol";
 import { store, useStore } from "../net/store";
 import { aiName, when } from "./format";
@@ -336,7 +336,9 @@ export function BrainBox({ ai }: { ai: AIStatusDTO }) {
           </button>
         ) : (
           !b.needsModel &&
-          b.engine && (
+          b.engine &&
+          // After a failed download there's nothing to wake yet.
+          (b.from !== "huggingface" || b.stored) && (
             <button className="btn unscripted" onClick={() => store.send({ type: "ai", brain: "load" })}>
               🧠 Wake the town's brain
             </button>
@@ -392,6 +394,8 @@ function ThreeFiles({ b }: { b: Brain }) {
 function ModelChooser({ b, open }: { b: Brain; open: boolean }) {
   const input = useRef<HTMLInputElement>(null);
   const busy = b.state === "loading";
+  // The page itself couldn't download: show the links for downloading by hand straight away.
+  const cantReach = b.state === "error" && /reach Hugging Face/.test(b.error ?? "");
   return (
     <details open={open} style={{ margin: "8px 0" }}>
       <summary style={{ cursor: "pointer" }}>{b.stored || b.state === "ready" ? "Change the model" : "Choose the model"}</summary>
@@ -401,7 +405,8 @@ function ModelChooser({ b, open }: { b: Brain; open: boolean }) {
         this browser. Put that file next to the other two, and next time (or on another computer) just load it.
       </p>
       {MODEL_CHOICES.map((m) => (
-        <div key={m.id} className="item" style={{ display: "flex", gap: 8, alignItems: "center", margin: "6px 0" }}>
+        <div key={m.id} className="item" style={{ margin: "6px 0" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <div style={{ flex: 1 }}>
             <b>{m.name}</b> <span className="muted">· about {m.mb >= 1000 ? `${(m.mb / 1000).toFixed(1)} GB` : `${m.mb} MB`}</span>
             <div className="muted" style={{ fontSize: 12 }}>
@@ -411,11 +416,25 @@ function ModelChooser({ b, open }: { b: Brain; open: boolean }) {
           <button className="btn" disabled={busy} onClick={() => store.send({ type: "ai", brain: "get", model: m.id })}>
             ⬇ Get it
           </button>
+          </div>
+          <details open={cantReach} style={{ fontSize: 12, marginTop: 4 }}>
+            <summary style={{ cursor: "pointer" }} className="muted">
+              Or download its four files yourself
+            </summary>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", margin: "4px 0" }}>
+              {modelFiles(m).map((f) => (
+                <a key={f.name} href={f.url} target="_blank" rel="noopener noreferrer" download>
+                  {f.name}
+                </a>
+              ))}
+            </div>
+            <span className="muted">Then click 📂 below and pick all four together.</span>
+          </details>
         </div>
       ))}
       <div className="god-row">
         <button className="btn unscripted" disabled={busy} onClick={() => input.current?.click()}>
-          📂 Load hustle-model.bin
+          📂 Load hustle-model.bin (or the four files)
         </button>
         {b.stored && (
           <button className="btn" disabled={busy} onClick={() => store.send({ type: "ai", brain: "forget" })}>
@@ -425,12 +444,13 @@ function ModelChooser({ b, open }: { b: Brain; open: boolean }) {
         <input
           ref={input}
           type="file"
-          accept=".bin"
+          accept=".bin,.json,.onnx"
+          multiple
           aria-label="Model file"
           style={{ display: "none" }}
           onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) store.brainFile(f);
+            const files = [...(e.target.files ?? [])];
+            if (files.length) store.brainFiles(files);
             e.target.value = "";
           }}
         />
