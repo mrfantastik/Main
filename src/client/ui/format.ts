@@ -93,3 +93,8 @@ export const HAPPENING_UI: { kind: HappeningKind; icon: string; label: string; t
   { kind: "rent_rise", icon: "🏠", label: "Rent rise", target: null },
   { kind: "sculpture", icon: "🏛️", label: "Mysterious column in the park", target: null },
 ];
+
+/** The AI that writes conversations, as labels show it ("Free AI" or "Claude"). */
+export function aiName(free: boolean | undefined): string {
+  return free ? "Free AI" : "Claude";
+}

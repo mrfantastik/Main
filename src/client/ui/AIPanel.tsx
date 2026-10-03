@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { AIStatusDTO } from "../../shared/protocol";
 import { store, useStore } from "../net/store";
 import { when } from "./format";
 import { Shell } from "./Overlays";
@@ -14,6 +15,7 @@ export function AIPanel() {
   return (
     <Shell title="🧠 AI engine">
       <div className="grid2">
+        {ai.free ? <FreeAIBox ai={ai} /> : (
         <div className="box">
           <h3>How citizens think</h3>
           <p style={{ marginTop: 0 }}>
@@ -80,15 +82,16 @@ export function AIPanel() {
             utility AI.
           </p>
         </div>
+        )}
         <div className="box">
-          <h3>Claude call log</h3>
-          {!dash?.aiLog?.length && <div className="empty">No Claude calls yet.</div>}
+          <h3>{ai.free ? "Free AI" : "Claude"} call log</h3>
+          {!dash?.aiLog?.length && <div className="empty">No AI calls yet.</div>}
           <div className="list">
             {dash?.aiLog?.map((l) => (
               <details key={l.id} className="item">
                 <summary style={{ cursor: "pointer" }}>
-                  <span className={`chip ${l.status === "ok" ? "good" : l.status === "error" ? "bad" : ""}`}>{l.status}</span> {l.kind} · {l.citizenName} · {when(l.t)} · $
-                  {l.costUsd.toFixed(4)} · {(l.ms / 1000).toFixed(1)}s
+                  <span className={`chip ${l.status === "ok" ? "good" : l.status === "error" ? "bad" : ""}`}>{l.status}</span> {l.kind} · {l.citizenName} · {when(l.t)}
+                  {ai.free ? "" : ` · $${l.costUsd.toFixed(4)}`} · {(l.ms / 1000).toFixed(1)}s
                   <div className="meta">{l.note}</div>
                 </summary>
                 <div className="section">Prompt</div>
@@ -110,5 +113,49 @@ export function AIPanel() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+/** The free AI: what it does, whether it's on, how busy it is. */
+function FreeAIBox({ ai }: { ai: AIStatusDTO }) {
+  const on = ai.available && ai.mode === "llm";
+  return (
+    <div className="box">
+      <h3>Who's talking</h3>
+      <p style={{ marginTop: 0 }}>
+        Citizens decide what to do with the built-in <b>utility AI</b> (needs, money, personality, memories, relationships). What they{" "}
+        <b>say</b> to each other is written by a <b>free public AI</b>: no account, no key, no cost. Every conversation is written fresh from who
+        they are, how they feel, what they've heard and what they remember about each other.
+      </p>
+      <p>
+        The town still decides what happens (who lends what, what news gets passed on), so the AI can't break the economy, only put it in
+        their own words. It's a smaller model than Claude and it's rate limited: when it can't keep up (or you skip time), the built-in AI
+        improvises the rest. Conversations it wrote have a gold border.
+      </p>
+      <div className="kv">
+        <span className="k">Status</span>
+        <span>
+          {on ? <span className="chip llm">🌐 ON</span> : ai.available ? <span className="chip">Paused</span> : <span className="chip bad">Off</span>}{" "}
+          <span className="muted">{ai.writer ?? ai.reason}</span>
+        </span>
+        <span className="k">Model</span>
+        <span>{ai.model}</span>
+        <span className="k">Calls</span>
+        <span>
+          {ai.calls} total · {ai.callsToday} today (game day) · {ai.pending} in flight
+        </span>
+        <span className="k">Cost</span>
+        <span>Free</span>
+      </div>
+      <div className="god-row">
+        <button className="btn" disabled={!ai.available} onClick={() => store.send({ type: "ai", mode: on ? "off" : "llm" })}>
+          {on ? "⏸ Built-in AI only (nothing leaves the page)" : "▶ Let the free AI write conversations"}
+        </button>
+      </div>
+      <p className="muted" style={{ fontSize: 11 }}>
+        Conversations are sent to text.pollinations.ai (names and details of the made-up townsfolk only). Running the server with
+        AI_PROVIDER=claude and an API key uses Claude instead.
+      </p>
+    </div>
   );
 }

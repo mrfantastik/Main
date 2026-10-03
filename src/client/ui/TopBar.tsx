@@ -51,7 +51,7 @@ export function TopBar() {
         </span>
         {ai && (
           <span className={`chip ${ai.mode === "llm" ? "llm" : ""}`} title="AI decision engine">
-            🧠 {ai.mode === "llm" ? `Claude · $${ai.spentUsd.toFixed(3)} / $${ai.budgetUsd}` : "Utility AI"}
+            {ai.mode === "llm" ? (ai.free ? "🌐 Free AI talking" : `🧠 Claude · $${ai.spentUsd.toFixed(3)} / $${ai.budgetUsd}`) : "🧠 Utility AI"}
           </span>
         )}
         <button className={`tool ${panel === "dashboard" ? "on" : ""}`} onClick={() => store.setPanel("dashboard")}>

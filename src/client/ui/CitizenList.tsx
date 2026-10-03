@@ -28,7 +28,7 @@ export function CitizenList() {
               <div style={{ minWidth: 0 }}>
                 <div className="name">
                   {c.name} {c.emotion && <span title={`Feeling ${c.emotion.kind} (${c.emotion.level})`}>{c.emotion.emoji}</span>} {c.homeless && <span title="Homeless">🏚️</span>}
-                  {c.awaitingAI && <span title="Thinking with Claude">🧠</span>}
+                  {c.awaitingAI && <span title="Thinking it over with the AI">🧠</span>}
                 </div>
                 <div className="sub">
                   <span style={{ color: OCC_COLORS[c.occupation] }}>{OCC_LABEL[c.occupation]}</span> · {c.activity}

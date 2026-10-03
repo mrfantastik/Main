@@ -1,8 +1,10 @@
 import { store, useStore } from "../net/store";
+import { aiName } from "./format";
 
 /** What's going on in town right now, over the map. Click to look at who or where. */
 export function TownNews() {
   const list = useStore((s) => s.state?.happenings ?? []);
+  const ai = aiName(useStore((s) => s.state?.ai.free));
   const active = list.filter((h) => h.active && h.kind !== "sculpture").slice(0, 3);
   if (active.length === 0) return null;
   return (
@@ -18,7 +20,7 @@ export function TownNews() {
           }}
         >
           <span aria-hidden>{h.icon}</span> {h.title}
-          {h.source === "llm" && <span className="chip llm">✨ Claude</span>}
+          {h.source === "llm" && <span className="chip llm">✨ {ai}</span>}
         </button>
       ))}
     </div>

@@ -148,8 +148,10 @@ export interface AIStatusDTO {
   maxCallsPerDay: number;
   pending: number;
   reason: string | null;
-  /** Who can write unscripted conversations and invent events on request (null: nobody). */
+  /** Who writes the AI conversations, and can rewrite one or invent an event on request (null: nobody). */
   writer: string | null;
+  /** The writer is a free public AI (no budget; rate limited). */
+  free?: boolean;
 }
 
 /** A town happening, for the top bar, the map and the feed. */

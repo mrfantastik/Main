@@ -26,6 +26,10 @@ export interface LLMResponse {
 
 export interface LLMClient {
   readonly model: string;
+  /** No cost and no budget: a free public AI (rate limited instead). */
+  readonly free?: boolean;
+  /** What the player sees ("Free AI (Pollinations)"); defaults to "Claude (model)". */
+  readonly label?: string;
   complete(req: LLMRequest): Promise<LLMResponse>;
 }
 
@@ -187,6 +191,52 @@ export function conversationPrompt(world: WorldState, conv: Conversation, brief:
     },
     required: ["lines", "outcome"],
     additionalProperties: false,
+  };
+  return { user, schema };
+}
+
+export const FREE_CONVERSATION_SYSTEM =
+  "You write short, natural, spoken dialogue between two residents of Hustle City, a small British town in a life simulation. " +
+  "Every conversation is different: give them real opinions, jokes, questions, little details from their lives, and let their personalities and moods show. " +
+  "Spoken words only: no narration, no stage directions, no names in front of lines. Plain British English.";
+
+/**
+ * The prompt for the free AI. It writes the words; the town has already
+ * decided what happens (who agrees, how much, what news gets passed on), so
+ * a smaller model can't break the economy.
+ */
+export function freeConversationPrompt(world: WorldState, conv: Conversation, brief: string): { user: string; schema: Record<string, unknown> } {
+  const a = world.citizens[conv.a];
+  const b = world.citizens[conv.b];
+  const chat = conv.topic === "chat";
+  const rel = (x: Citizen, y: Citizen) => {
+    if (x.family.includes(y.id)) return "family";
+    const r = x.relationships[y.id];
+    return r ? relLabel(r).toLowerCase() : "strangers";
+  };
+  const mem = (x: Citizen, y: Citizen) => memoryLines(x, 2, y.id);
+  const gist = chat
+    ? `What they talk about (cover these points in order, in your own words): ${brief.replace(/^A casual chat\. Beats, in order \(keep to them, in your own words\): /, "")}`
+    : `What happens. This is already decided: keep the same decision, amounts and facts, but write it fresh, in your own words:\n${(conv.fallback?.lines ?? []).map((l) => `${l.speaker === conv.a ? "A" : "B"}: ${l.text}`).join("\n")}`;
+  const user = [
+    `Where: ${placeName(world, conv.buildingId)}, ${formatTime(world.time)}.`,
+    `A is ${profile(world, a)}`,
+    `B is ${profile(world, b)}`,
+    `A sees B as: ${rel(a, b)}.${mem(a, b).length ? ` A remembers:\n${mem(a, b).join("\n")}` : ""}`,
+    `B sees A as: ${rel(b, a)}.${mem(b, a).length ? ` B remembers:\n${mem(b, a).join("\n")}` : ""}`,
+    chat && newsKnown(world, a).length ? `News A has heard:\n${newsKnown(world, a).join("\n")}` : "",
+    chat && newsKnown(world, b).length ? `News B has heard:\n${newsKnown(world, b).join("\n")}` : "",
+    gist,
+    `Write ${chat ? "6 to 10" : "3 to 6"} lines of dialogue, A (${a.name}) speaking first, mostly taking turns. Each line under 25 words. In the dialogue, call them ${a.name} and ${b.name}, never "A" or "B". A speaks in a ${a.personality.style} way, B in a ${b.personality.style} way.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const schema = {
+    type: "object",
+    properties: {
+      lines: { type: "array", items: { type: "object", properties: { speaker: { type: "string", enum: ["A", "B"] }, text: { type: "string" } }, required: ["speaker", "text"] } },
+    },
+    required: ["lines"],
   };
   return { user, schema };
 }

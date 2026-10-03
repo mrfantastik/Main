@@ -104,7 +104,7 @@ export function GodPanel() {
           <div className="god-row">
             <input aria-label="Your idea (optional)" placeholder="Your idea (optional)" value={idea} onChange={(e) => setIdea(e.target.value)} />
             <button className="btn unscripted" title={`${writer} invents something that happens, about real people here`} onClick={() => store.send({ type: "invent", idea })}>
-              ✨ Let Claude invent one
+              ✨ Let the AI invent one
             </button>
           </div>
         )}
@@ -287,7 +287,7 @@ export function GodPanel() {
         </div>
         {confirmReset && <div className="neg" style={{ fontSize: 12, marginBottom: 6 }}>The current city will be replaced and can't be brought back (unless you copied a save).</div>}
         <div className="muted" style={{ fontSize: 11 }}>
-          The same seed always produces the same city and the same story (with Claude switched off).
+          The same seed always produces the same city and the same story (with the AI switched off).
         </div>
       </div>
     </Shell>

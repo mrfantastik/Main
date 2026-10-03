@@ -9,6 +9,7 @@ import { applyGodCommand, GodError } from "../sim/god";
 import * as snap from "../sim/snapshot";
 import type { WorldState } from "../sim/types";
 import { AIDirector } from "../sim/ai/director";
+import { createFreeAIClient } from "../sim/ai/freeai";
 import type { SpendLedger } from "../sim/ai/director";
 import { prepareLoadedWorld } from "../sim/migrate";
 import { createClaudeClient } from "./anthropic";
@@ -48,10 +49,16 @@ interface Client {
 const clients = new Set<Client>();
 let runner: SimRunner;
 
-// ---- AI (Claude) configuration. Everything works without it.
-const AI_MODEL = process.env.AI_MODEL || "claude-opus-5-5";
+// ---- AI configuration. Everything works without it.
+// AI_PROVIDER=free (default): citizens' conversations are written by a free,
+// keyless public AI (Pollinations). AI_PROVIDER=claude: Claude, with an
+// ANTHROPIC_API_KEY and a budget. AI_PROVIDER=off: built-in AI only.
+const AI_PROVIDER = (process.env.AI_PROVIDER || "free").toLowerCase();
+const FREE = AI_PROVIDER === "free";
+// (An AI_MODEL left over from a Claude setup doesn't apply to the free AI.)
+const AI_MODEL = FREE ? (process.env.AI_MODEL && !/^claude/.test(process.env.AI_MODEL) ? process.env.AI_MODEL : "openai") : process.env.AI_MODEL || "claude-opus-5-5";
 const AI_BUDGET_USD = Number(process.env.AI_BUDGET_USD ?? 2);
-const AI_MAX_CALLS_PER_DAY = Number(process.env.AI_MAX_CALLS_PER_DAY ?? 12);
+const AI_MAX_CALLS_PER_DAY = Number(process.env.AI_MAX_CALLS_PER_DAY ?? (FREE ? 5000 : 12));
 const DATA_DIR = process.env.DATA_DIR ?? path.join(root, "data");
 const AUTOSAVE_MS = Number(process.env.AUTOSAVE_SECONDS ?? 30) * 1000;
 
@@ -65,7 +72,16 @@ const ledger: SpendLedger = {
   total: () => Number(store?.getMeta("aiSpendUsd") ?? 0),
   add: (usd) => store?.setMeta("aiSpendUsd", String(ledger.total() + usd)),
 };
-const director = new AIDirector(createClaudeClient(AI_MODEL), ledger);
+const director =
+  AI_PROVIDER === "off"
+    ? new AIDirector(null, ledger)
+    : FREE
+      ? new AIDirector(createFreeAIClient({ model: AI_MODEL, url: process.env.FREE_AI_URL || undefined }), ledger, {
+          maxConcurrent: 1,
+          minIntervalMs: Number(process.env.FREE_AI_INTERVAL_MS ?? 4000),
+          timeoutMs: 45_000,
+        })
+      : new AIDirector(createClaudeClient(AI_MODEL), ledger);
 director.attach();
 
 function configureAI(world: WorldState): void {
@@ -96,7 +112,8 @@ function aiStatus(world: WorldState): AIStatusDTO {
     maxCallsPerDay: ai.maxCallsPerDay,
     pending: director.pending,
     reason: director.unavailableReason,
-    writer: director.available ? `Claude (${director.model})` : null,
+    writer: director.writer,
+    free: director.free,
   };
 }
 
@@ -172,7 +189,7 @@ function handle(client: Client, msg: ClientMsg): void {
     case "ai": {
       if (msg.mode) {
         if (msg.mode === "llm" && !director.available) {
-          send(client.ws, { type: "toast", text: `Claude isn't available: ${director.unavailableReason ?? "no API key"}`, level: "error" });
+          send(client.ws, { type: "toast", text: `The AI isn't available: ${director.unavailableReason ?? "none configured"}`, level: "error" });
         } else world.ai.mode = msg.mode;
       }
       if (msg.budgetUsd !== undefined && Number.isFinite(msg.budgetUsd) && msg.budgetUsd >= 0) world.ai.budgetUsd = msg.budgetUsd;
@@ -190,7 +207,7 @@ function handle(client: Client, msg: ClientMsg): void {
     case "unscripted":
     case "invent": {
       const why = msg.type === "unscripted" ? director.unscripted(world, Number(msg.convId)) : director.invent(world, typeof msg.idea === "string" ? msg.idea : "");
-      send(client.ws, why ? { type: "toast", text: why, level: "error" } : { type: "toast", text: msg.type === "unscripted" ? "✨ Claude is writing their conversation…" : "✨ Claude is dreaming something up…", level: "info" });
+      send(client.ws, why ? { type: "toast", text: why, level: "error" } : { type: "toast", text: msg.type === "unscripted" ? `✨ ${director.free ? "The free AI" : "Claude"} is writing their conversation…` : `✨ ${director.free ? "The free AI" : "Claude"} is dreaming something up…`, level: "info" });
       break;
     }
     case "save":
@@ -368,7 +385,15 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
-  console.log(director.available ? `  🧠 Claude enabled (${director.model}), budget $${AI_BUDGET_USD}, spent so far $${ledger.total().toFixed(3)}` : "  🧠 Claude disabled (no ANTHROPIC_API_KEY) — using the built-in utility AI");
+  console.log(
+    !director.available
+      ? AI_PROVIDER === "off"
+        ? "  🧠 AI off (AI_PROVIDER=off): using the built-in utility AI"
+        : "  🧠 Claude disabled (no ANTHROPIC_API_KEY): using the built-in utility AI"
+      : director.free
+        ? `  🧠 Conversations written by the ${director.writer}; the built-in AI fills in when it's busy`
+        : `  🧠 Claude enabled (${director.model}), budget $${AI_BUDGET_USD}, spent so far $${ledger.total().toFixed(3)}`,
+  );
   setInterval(broadcastFrames, 100);
   setInterval(broadcastState, 500);
   setInterval(broadcastDashboard, 1500);

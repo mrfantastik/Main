@@ -1,6 +1,6 @@
 import type { ConversationDTO } from "../../shared/protocol";
 import { store, useStore } from "../net/store";
-import { when } from "./format";
+import { aiName, when } from "./format";
 
 const TOPIC: Record<string, string> = {
   chat: "Chat",
@@ -17,6 +17,7 @@ const TOPIC: Record<string, string> = {
 
 export function Transcript({ c }: { c: ConversationDTO }) {
   const writer = useStore((s) => s.state?.ai.writer ?? null);
+  const ai = aiName(useStore((s) => s.state?.ai.free));
   return (
     <div className="item" style={{ borderColor: c.source === "llm" ? "var(--llm)" : undefined }}>
       <div className="meta" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -24,7 +25,7 @@ export function Transcript({ c }: { c: ConversationDTO }) {
         <span>
           {when(c.t)} · {c.place}
         </span>
-        {c.source === "llm" ? <span className="chip llm">✨ Claude</span> : <span className="chip">{c.topic === "chat" ? "improvised" : "built-in AI"}</span>}
+        {c.source === "llm" ? <span className="chip llm">✨ {ai}</span> : <span className="chip">{c.topic === "chat" ? "improvised" : "built-in AI"}</span>}
         {c.live && <span className="chip good">talking now</span>}
       </div>
       {c.topics.length > 0 && <div className="meta">Talked about: {c.topics.join(" · ")}</div>}
@@ -41,7 +42,7 @@ export function Transcript({ c }: { c: ConversationDTO }) {
       {c.summary && <div className="meta">➜ {c.summary}</div>}
       {writer && (
         <button className="btn unscripted" title={`${writer} writes what these two would really say, from scratch`} onClick={() => store.send({ type: "unscripted", convId: c.id })}>
-          ✨ {c.source === "llm" ? "Ask Claude again" : "Hear it unscripted"}
+          ✨ {c.source === "llm" ? "Write it again" : "Hear it unscripted"}
         </button>
       )}
     </div>

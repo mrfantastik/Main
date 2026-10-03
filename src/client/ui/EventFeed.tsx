@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { SimEvent } from "../../sim/types";
 import { store, useStore } from "../net/store";
-import { when } from "./format";
+import { aiName, when } from "./format";
 import { Transcript } from "./Transcript";
 
 const FILTERS: { id: string; label: string; cats: string[] }[] = [
@@ -48,14 +48,14 @@ function EventText({ ev }: { ev: SimEvent }) {
 }
 
 function ConversationToggle({ id }: { id: number }) {
-  useStore((s) => s.state);
+  const free = useStore((s) => s.state?.ai.free);
   const conv = store.conversations.get(id);
   const [open, setOpen] = useState(false);
   if (!conv) return null;
   return (
     <div>
       <button className="chip" style={{ border: 0, marginTop: 3 }} onClick={() => setOpen(!open)}>
-        {open ? "Hide" : "💬 Read"} conversation{conv.source === "llm" ? " · 🧠 Claude" : ""}
+        {open ? "Hide" : "💬 Read"} conversation{conv.source === "llm" ? ` · ${free ? "🌐" : "🧠"} ${aiName(free)}` : ""}
       </button>
       {open && <Transcript c={conv} />}
     </div>

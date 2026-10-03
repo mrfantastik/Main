@@ -59,7 +59,9 @@ const FORMAL: [RegExp, string][] = [
 
 const NEGATIVE_WORDS = /\b(no|not|sorry|can't|cannot|broke|skint|never|pass|won't|too steep|desperate|struggling)\b/i;
 
-const SAD = /\b(terrible|awful|sorry|poor|worried|worry|horrible|low|lonely|angry|struggling|grim|mess|evicted|owe|broke|skint|hurt|lost)\b/i;
+const SAD = /\b(terrible|awful|sorry|poor|worried|worry|horrible|low|lonely|angry|struggling|grim|mess|evicted|owe|broke|skint|hurt|lost|bad|shame|fire|stolen|robbed|disgusting)\b/i;
+/** Lines that tell the news or ask something: no sarcastic lead-in in front of these. */
+const NEWSY = /^(So|Still|What|Did|Have|Everyone|Big news|You'll|Can I|Is|Are|How|Any|Who|Where|Why)\b/;
 
 /**
  * How many flourishes a speaker gets in one conversation. Without a budget
@@ -85,7 +87,7 @@ function styled(style: SpeakingStyle, text: string, seed: string, listener: Citi
     case "formal": {
       let t = text;
       for (const [re, rep] of FORMAL) t = t.replace(re, rep);
-      return r < 0.25 && !negative && spend(budget, "flair") ? prefix("I must say, ", t) : t;
+      return r < 0.25 && !negative && !t.includes("?") && spend(budget, "flair") ? prefix("I must say, ", t) : t;
     }
     case "blunt": {
       let t = text.replace(SOFT_START, "");
@@ -96,12 +98,18 @@ function styled(style: SpeakingStyle, text: string, seed: string, listener: Citi
       return t;
     }
     case "chatty":
-      if (r < 0.45 && spend(budget, "flair")) return prefix(pickBy(seed, ["Oh! ", "Honestly, ", "You know what? ", "Right, so: "]), text);
+      if (r < 0.45 && !/^(Anyway|Right|Well|So)\b/.test(text) && spend(budget, "flair")) return prefix(pickBy(seed, ["Oh! ", "Honestly, ", "You know what? ", "Right, so: "]), text);
       if (r < 0.75 && !SAD.test(text) && spend(budget, "flair")) return suffix(text, pickBy(seed, [" Anyway!", " Honestly."]));
       return text;
-    case "sarcastic":
-      if (r < 0.4 && spend(budget, "flair")) return negative ? prefix(pickBy(seed, ["Oh, wonderful. ", "Great. ", "Fantastic. "]), text) : suffix(text, pickBy(seed, [" Shocking, I know.", " Who'd have thought.", " Lovely."]));
+    case "sarcastic": {
+      // Sarcasm needs something to bite on: a gripe about their own lot, or
+      // a bit of good news about themselves they pretend is a surprise.
+      if (r >= 0.4 || /\?$/.test(text)) return text;
+      const aboutOthers = text.split(/\W+/).some((w) => NAMES.has(w) && w !== listener?.name);
+      if ((negative || SAD.test(text)) && !aboutOthers && !NEWSY.test(text) && spend(budget, "flair")) return prefix(pickBy(seed, ["Oh, wonderful. ", "Great. ", "Fantastic. "]), text);
+      if (!negative && /^(I|I'm|I've|Really|Great|Brilliant|Not bad|Pretty good|Never better)\b/.test(text) && spend(budget, "flair")) return suffix(text, pickBy(seed, [" Shocking, I know.", " Who'd have thought."]));
       return text;
+    }
     case "warm":
       if (r < 0.3 && listener && !text.includes(listener.name) && spend(budget, "flair")) return prefix(`${listener.name}, `, text);
       if (r < 0.5 && /[.!]$/.test(text) && !/\?/.test(text) && spend(budget, "flair")) return `${text.slice(0, -1)}${pickBy(seed, [", love.", ", pet.", ", mate."])}`;
@@ -120,7 +128,7 @@ export function inVoice(c: Citizen, text: string, seed: string, listener?: Citiz
   const r = roll(`${seed}:emotion`);
   const sad = SAD.test(t);
   // Lead-ins like "Look, " only go in front of plain statements.
-  const leadOk = !/^(So|Still|What|Did|Have|Everyone|Big news|You'll|Can I|Is|Are|How|Any)\b/.test(t) && !/\?$/.test(t);
+  const leadOk = !NEWSY.test(t) && !/\?$/.test(t);
   switch (d.emotion) {
     case "anger":
       if (!/\?$/.test(t) && spend(budget, "mood")) t = r < 0.35 && leadOk ? prefix("Look, ", t.replace(/\.$/, "!")) : t.replace(/\.$/, "!");
@@ -129,7 +137,7 @@ export function inVoice(c: Citizen, text: string, seed: string, listener?: Citiz
       if (r < 0.4 && spend(budget, "mood")) t = t.replace(/[.!]$/, "...");
       break;
     case "joy":
-      if (r < 0.3 && !sad && !/^(Ha|Oh)\b/.test(t) && /!|good|great|brilliant|love|nice|pleased|lucky|best|glad/i.test(t) && spend(budget, "mood")) t = prefix("Ha! ", t);
+      if (r < 0.3 && !sad && !/^(Ha|Oh)\b/.test(t) && /!|\b(good|great|brilliant|love|nice|pleased|lucky|best|glad)\b/i.test(t) && spend(budget, "mood")) t = prefix("Ha! ", t);
       break;
     case "fear":
       if (r < 0.35 && leadOk && !/worr/i.test(t) && spend(budget, "mood")) t = prefix("I'm worried, ", t);
@@ -212,8 +220,10 @@ export function voiceConversation(convId: number, topic: string, a: Citizen, b: 
   const out = lines.map((l, i) => {
     const speaker = l.speaker === a.id ? a : b;
     const listener = speaker === a ? b : a;
-    // Hellos stay plain; the personality shows once they get talking.
-    const budget = budgets ? (i < 2 ? { flair: 0, mood: 0 } : budgets.get(speaker.id)) : undefined;
+    // Hellos, goodbyes, quick replies and hard facts (numbers) stay plain;
+    // the personality shows in the rest.
+    const plain = i < 2 || l.text.split(/\s+/).length <= 3 || /[£%\d]/.test(l.text);
+    const budget = budgets ? (plain ? { flair: 0, mood: 0 } : budgets.get(speaker.id)) : undefined;
     return { ...l, text: inVoice(speaker, l.text, `${convId}:${i}`, listener, budget) };
   });
   const firstB = out.findIndex((l) => l.speaker === b.id);

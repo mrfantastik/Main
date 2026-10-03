@@ -5,19 +5,26 @@ import { dayOf } from "../time";
 import type { AILogEntry, Citizen, Conversation, ConvValue, Reflection, WorldState } from "../types";
 import { newId, pushRing, round2 } from "../util";
 import { scoreOf } from "./decision";
-import { CONVERSATION_SYSTEM, conversationPrompt, costUsd, REFLECTION_SYSTEM, reflectionPrompt, STRATEGY_SYSTEM, strategyPrompt, type LLMClient } from "./llm";
+import { CONVERSATION_SYSTEM, conversationPrompt, costUsd, FREE_CONVERSATION_SYSTEM, freeConversationPrompt, REFLECTION_SYSTEM, reflectionPrompt, STRATEGY_SYSTEM, strategyPrompt, type LLMClient } from "./llm";
 import { applyStrategy, setStrategyHook, strategyOptions, type StrategyOption } from "./strategy";
+import { cleanLines } from "./lines";
 import { applyInvented, applyUnscripted, INVENT_SCHEMA, INVENT_SYSTEM, inventableKinds, inventPrompt, UNSCRIPTED_SCHEMA, UNSCRIPTED_SYSTEM, unscriptedPrompt } from "./unscripted";
 
-// The AI Director decides WHEN it's worth asking Claude, and keeps costs
-// under control. Routine life never touches the LLM. Only:
+// The AI Director decides WHEN it's worth asking a language model.
+// With the free AI (the default) there's no bill, only a rate limit, so it
+// writes the words of every conversation it can get to: chats, deals,
+// arguments. The town has already decided what happens; the model only says
+// it, so every conversation is its own but nothing breaks. Whatever it can't
+// get to in time is voiced by the built-in AI.
+// With Claude (a paid API key), calls are kept for big moments:
 //   - genuine strategic dilemmas with real stakes (career, business, money),
-//   - conversations about money, jobs, debts and deals,
+//   - conversations about money, jobs, debts and deals, and some news chats,
 //   - at most one night a day: rewording the lessons of the citizen with
-//     the most emotional day in their own voice.
+//     the most emotional day in their own voice,
+// and spend is tracked per call against a hard budget.
 // Requests are async; the simulation never waits. Replies are validated
 // against the engine's rules and fall back to the utility AI if invalid,
-// late, or failed. Spend is tracked per call against a hard budget.
+// late, or failed.
 
 export interface SpendLedger {
   total(): number;
@@ -63,6 +70,9 @@ export class AIDirector {
   /** News chats sent to Claude today (they get at most a third of the daily calls). */
   private chatDay = -1;
   private chatCalls = 0;
+  /** The free AI asked us to slow down, or couldn't be reached: no calls until then. */
+  private backoffUntil = 0;
+  private failures = 0;
   /** Messages for the player (the server shows them as toasts). */
   readonly notices: { text: string; level: "info" | "error" }[] = [];
 
@@ -78,6 +88,21 @@ export class AIDirector {
 
   get model(): string {
     return this.client?.model ?? "none";
+  }
+
+  /** A free AI: no budget, just a rate limit. */
+  get free(): boolean {
+    return !!this.client?.free;
+  }
+
+  /** Who writes the words, as the player sees it (null: nobody). */
+  get writer(): string | null {
+    return this.available ? (this.client!.label ?? `Claude (${this.model})`) : null;
+  }
+
+  /** Short name for messages ("the free AI", "Claude"). */
+  private get who(): string {
+    return this.free ? "The free AI" : "Claude";
   }
 
   get pending(): number {
@@ -98,7 +123,8 @@ export class AIDirector {
   private canCall(world: WorldState): boolean {
     const ai = world.ai;
     if (!this.available || ai.mode !== "llm") return false;
-    if (this.ledger.total() >= ai.budgetUsd) {
+    if (Date.now() < this.backoffUntil) return false;
+    if (!this.free && this.ledger.total() >= ai.budgetUsd) {
       if (!ai.log.some((l) => l.note === "budget")) {
         pushRing(ai.log, { id: newId(world), t: world.time, citizenId: null, kind: "strategy", prompt: "", response: "", costUsd: 0, ms: 0, status: "fallback", note: "budget" }, 60);
         logEvent(world, "ai", `🧠 Claude budget of $${ai.budgetUsd.toFixed(2)} reached — citizens carry on with the built-in utility AI.`, 3);
@@ -133,6 +159,13 @@ export class AIDirector {
   // --------------------------------------------------- conversations
 
   private conversationHook(world: WorldState, conv: Conversation, brief: string, outcomeSchema: Record<string, unknown>, stakes: number): boolean {
+    if (this.free) {
+      // Free: voice every conversation there's room for.
+      if ((conv.topic !== "chat" && !CONVERSATION_TOPICS.has(conv.topic)) || !this.canCall(world)) return false;
+      const { user, schema } = freeConversationPrompt(world, conv, brief);
+      this.send(world, { kind: "conversation", citizenId: conv.a, convId: conv.id }, FREE_CONVERSATION_SYSTEM, user, schema);
+      return true;
+    }
     if (conv.topic === "chat") {
       // Chats where someone has news to share are worth Claude's words, a few a day.
       if (conv.terms.news !== true || !this.canCall(world)) return false;
@@ -190,8 +223,9 @@ export class AIDirector {
 
   /** The player asked Claude to write a conversation from scratch. Returns a reason it can't, or null. */
   unscripted(world: WorldState, convId: number): string | null {
-    if (!this.available) return `Claude isn't available: ${this.unavailableReason ?? "no API key"}`;
-    if (!this.canCall(world)) return "Claude is busy or out of budget right now. Try again in a moment.";
+    if (!this.available) return `The AI isn't available: ${this.unavailableReason ?? "no AI configured"}`;
+    if (world.ai.mode !== "llm") return "The AI is switched off. Turn it on in the 🧠 AI panel.";
+    if (!this.canCall(world)) return `${this.who} is busy${this.free ? "" : " or out of budget"} right now. Try again in a moment.`;
     const p = unscriptedPrompt(world, convId);
     if (typeof p === "string") return p;
     this.send(world, { kind: "unscripted", citizenId: p.conv.a, convId }, UNSCRIPTED_SYSTEM, p.prompt, UNSCRIPTED_SCHEMA);
@@ -200,8 +234,9 @@ export class AIDirector {
 
   /** The player asked Claude to invent something that happens in town. */
   invent(world: WorldState, idea = ""): string | null {
-    if (!this.available) return `Claude isn't available: ${this.unavailableReason ?? "no API key"}`;
-    if (!this.canCall(world)) return "Claude is busy or out of budget right now. Try again in a moment.";
+    if (!this.available) return `The AI isn't available: ${this.unavailableReason ?? "no AI configured"}`;
+    if (world.ai.mode !== "llm") return "The AI is switched off. Turn it on in the 🧠 AI panel.";
+    if (!this.canCall(world)) return `${this.who} is busy${this.free ? "" : " or out of budget"} right now. Try again in a moment.`;
     if (inventableKinds(world).length === 0) return "Nothing can happen right now. Try at another time of day.";
     this.send(world, { kind: "invent", citizenId: world.citizenOrder[0] }, INVENT_SYSTEM, inventPrompt(world, idea), INVENT_SCHEMA);
     return null;
@@ -215,7 +250,7 @@ export class AIDirector {
       this.notices.push({ text: msg, level: "info" });
     } catch (err) {
       this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), (err as Error).message);
-      this.notices.push({ text: `Claude couldn't write it: ${(err as Error).message}`, level: "error" });
+      this.notices.push({ text: `${this.who} couldn't write it: ${(err as Error).message}`, level: "error" });
     }
   }
 
@@ -223,7 +258,7 @@ export class AIDirector {
     const h = d.json ? applyInvented(world, d.json) : (d.error ?? "no reply");
     if (typeof h === "string") {
       this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), h);
-      this.notices.push({ text: `Claude's idea didn't work out: ${h}`, level: "error" });
+      this.notices.push({ text: `${this.who}'s idea didn't work out: ${h}`, level: "error" });
       return;
     }
     this.log(world, d, "ok", JSON.stringify(d.json), `invented: ${h.title}`);
@@ -242,14 +277,29 @@ export class AIDirector {
     client
       .complete({ system, user, schema, maxTokens: 3000 })
       .then((res) => {
-        const cost = costUsd(res.model, res.inputTokens, res.outputTokens);
-        this.ledger.add(cost);
+        const cost = client.free ? 0 : costUsd(res.model, res.inputTokens, res.outputTokens);
+        if (cost) this.ledger.add(cost);
+        this.failures = 0;
         this.finish({ pending, json: res.json, costUsd: cost, ms: Date.now() - pending.startedAt });
       })
       .catch((err: Error & { status?: number }) => {
-        if (err.status === 401 || err.status === 403) this.disabledReason = `Claude API rejected the key (${err.status})`;
+        if (client.free) this.slowDown(err.status ?? 0);
+        else if (err.status === 401 || err.status === 403) this.disabledReason = `Claude API rejected the key (${err.status})`;
         this.finish({ pending, json: null, costUsd: 0, ms: Date.now() - pending.startedAt, error: err.message?.slice(0, 200) ?? "error" });
       });
+  }
+
+  /** The free AI is rate limited or unreachable: wait longer each time it happens, then try again. */
+  private slowDown(status: number): void {
+    this.failures++;
+    const wait = Math.min(120_000, 5_000 * 2 ** (this.failures - 1));
+    this.backoffUntil = Date.now() + wait;
+    if (this.failures === 3) {
+      this.notices.push({
+        text: status === 0 ? "Can't reach the free AI right now, so the built-in AI is doing the talking. Trying again shortly." : `The free AI is busy (${status}). The built-in AI fills in until it's back.`,
+        level: "error",
+      });
+    }
   }
 
   private finish(d: Done): void {
@@ -312,11 +362,10 @@ export class AIDirector {
     if (!conv) return;
     const reply = d.json as { lines?: unknown; outcome?: unknown } | null;
     let parsed: { lines: Conversation["lines"]; outcome: Record<string, ConvValue> } | null = null;
-    if (reply && Array.isArray(reply.lines) && reply.outcome && typeof reply.outcome === "object") {
-      const lines = (reply.lines as { speaker?: unknown; text?: unknown }[])
-        .filter((l) => (l.speaker === "A" || l.speaker === "B") && typeof l.text === "string" && l.text.trim())
-        .map((l) => ({ speaker: l.speaker === "A" ? conv.a : conv.b, text: String(l.text).trim().slice(0, 160) }));
-      parsed = { lines, outcome: reply.outcome as Record<string, ConvValue> };
+    // The free AI only writes the words: the outcome is the one the town decided.
+    const outcome = this.free ? (conv.fallback?.outcome ?? {}) : reply?.outcome;
+    if (reply && Array.isArray(reply.lines) && outcome && typeof outcome === "object") {
+      parsed = { lines: cleanLines(world, conv, reply.lines), outcome: outcome as Record<string, ConvValue> };
     }
     const res = resolveConversationAI(world, convId, parsed);
     this.log(world, d, res === "ok" ? "ok" : d.error ? "error" : "fallback", JSON.stringify(d.json ?? d.error), res === "ok" ? `outcome ${JSON.stringify(conv.outcome)}` : d.error ? `error: ${d.error}` : "invalid reply — template used");

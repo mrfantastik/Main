@@ -7,7 +7,7 @@ import { memoryCallback } from "../mind/voice";
 import { chance, hashSeed, pick, rand, weightedPick, type RngHolder } from "../rng";
 import { happeningById, knows, learnNews, stanceOn } from "../town/happenings";
 import type { Citizen, CitizenId, Conversation, ConversationLine, ConvNote, Emotion, Happening, Memory, WorldState } from "../types";
-import { clamp, money } from "../util";
+import { capitalise, clamp, money } from "../util";
 import { adjustRel, peekRel } from "./relationships";
 
 // Improvised small talk. Instead of a fixed script, each chat is planned from
@@ -178,7 +178,7 @@ function asAdvice(world: WorldState, text: string): string | null {
   if ((m = t.match(/^(.+) is good people$/))) return `${m[1]} is good people, you know.`;
   if ((m = t.match(/^(.+) has my back$/))) return `${m[1]} is someone you can count on.`;
   if ((m = t.match(/^(.+) works for me$/))) return `${m[1]} has worked out well for me.`;
-  if ((m = t.match(/^(.+) isn't paying like I hoped$/))) return `Honestly? ${m[1]} isn't paying like I hoped.`;
+  if ((m = t.match(/^(.+) isn't paying like I hoped$/))) return `Between you and me, ${lowerStart(world, m[1])} doesn't pay what it should.`;
   if (/keep more money aside/.test(t)) return "Keep some money aside for rent. I learned that the hard way.";
   return `Take it from me: ${lowerStart(world, t)}.`;
 }
@@ -208,6 +208,179 @@ function question(r: RngHolder, world: WorldState, h: Happening): [string, strin
   }
 }
 
+// --------------------------------------------- answers from real life
+
+function dayStart(t: number): number {
+  return Math.floor(t / 1440) * 1440;
+}
+
+/** The thing that happened to them today that they'd mention first, if any. */
+function todaysNews(c: Citizen, now: number): Memory | null {
+  let best: Memory | null = null;
+  for (const m of c.memories.short.concat(c.memories.long)) {
+    if (m.t < dayStart(now) || m.kind === "conversation" || m.kind === "social" || m.kind === "insight" || m.importance < 6 || Math.abs(m.valence) < 0.6) continue;
+    if (!/\b(I|me|my)\b/.test(m.text) || /^(Talked|Chatted)/.test(m.text)) continue;
+    if (!best || m.importance * Math.abs(m.valence) > best.importance * Math.abs(best.valence)) best = m;
+  }
+  return best;
+}
+
+/** "How are you?", answered from their actual day: the weather, a big moment, tiredness, hunger, or how they feel. */
+function howTheyAre(r: RngHolder, world: WorldState, c: Citizen, short = false): string {
+  const storm = world.happenings.some((h) => h.kind === "storm" && !h.ended && world.time >= h.t && world.time < h.until);
+  if (storm && !c.insideId) return pick(r, ["Soaked to the skin.", "Drenched. Have you seen it out there?", "Wet. Very wet."]);
+  const m = todaysNews(c, world.time);
+  if (m) return `${m.valence > 0 ? pick(r, ["Great, actually.", "Brilliant day.", "Not bad at all."]) : pick(r, ["Not great.", "Rough day.", "Honestly? Awful."])} ${sentence(m.text)}`;
+  const s = situation(world, c);
+  if (s.tired > 0.78 && chance(r, 0.5)) return pick(r, ["Knackered, honestly.", "Shattered. Could sleep standing up.", "Running on fumes."]);
+  if (s.hungry > 0.75 && chance(r, 0.4)) return pick(r, ["Starving, to be honest.", "Hungry. I could eat a horse."]);
+  const d = dominantEmotion(c);
+  const how: Partial<Record<Emotion, string[]>> = {
+    sadness: ["Not great, honestly.", "I've had better weeks."],
+    anger: ["Don't ask.", "Fuming, if I'm honest."],
+    fear: ["Bit on edge, to be honest.", "Worried, mostly."],
+    joy: ["Brilliant, actually!", "Really good, thanks!", "Never better."],
+    loneliness: ["Better now someone's talking to me.", "Bit quiet, to be honest."],
+    love: ["Can't complain at all.", "Happy, actually. Properly happy."],
+    envy: ["Fine. Some of us have to work for it."],
+    pride: ["Pretty good, actually.", "Rather pleased with myself, if I'm honest."],
+    gratitude: ["Good, thanks. People have been kind."],
+    shame: ["Oh, you know. Getting by."],
+  };
+  const pool = (d && how[d.emotion]) || ["Can't complain.", "Same old, same old.", "Getting by.", "Not bad, not bad.", "Mustn't grumble.", "Fine, thanks.", "Surviving.", "All good here."];
+  return short ? pool[0] : pick(r, pool);
+}
+
+/** Where they work, as they'd say it. */
+function workplace(world: WorldState, c: Citizen): string | null {
+  if (c.employerId === "corp") return "CityCorp";
+  return c.employerId ? (world.businesses[c.employerId]?.name ?? null) : null;
+}
+
+function workQuestion(r: RngHolder, world: WorldState, x: Citizen, biz: Citizen["businessIds"][number] | null): string {
+  const b = biz ? world.businesses[biz] : null;
+  if (b) return pick(r, [`How's ${b.name} doing?`, "How's business?", "Shop busy?", `Still run off your feet at ${b.name}?`]);
+  const place = workplace(world, x);
+  switch (x.occupation) {
+    case "unemployed":
+      return pick(r, ["Any luck finding work?", "Still looking for something?", "Anything come up, job-wise?"]);
+    case "researcher":
+      return pick(r, ["How's the research going?", "Invented anything yet?", "Any breakthroughs?"]);
+    case "trader":
+      return pick(r, ["How are the markets treating you?", "Making a killing yet?", "Buy low, sell high?"]);
+    case "reseller":
+      return pick(r, ["Find any bargains today?", "Flipped anything good lately?", "Still buying and selling?"]);
+    case "freelancer":
+      return pick(r, ["Clients keeping you busy?", "Enough work coming in?", "How's the freelancing going?"]);
+    default:
+      return place ? pick(r, [`How's it going at ${place}?`, `${place} treating you alright?`, "How's work?", "Keeping busy?"]) : pick(r, ["How's work?", "Keeping busy?", "Work treating you alright?"]);
+  }
+}
+
+/** How work's really going, with real numbers where they have them. */
+function workAnswer(r: RngHolder, world: WorldState, x: Citizen, avg: number): { answer: string; good: boolean } {
+  const biz = x.businessIds.map((id) => world.businesses[id]).find((q) => q && q.open);
+  const hour = Math.floor((world.time % 1440) / 60);
+  if (biz) {
+    const n = biz.today.customers;
+    if (biz.missedToday >= 3) return { answer: pick(r, [`Busy, but we keep running out of stock. That's ${biz.missedToday} sales missed today.`, `Can't keep the shelves full. Turned away ${biz.missedToday} customers today.`]), good: false };
+    if (biz.avgProfit > 30) return { answer: pick(r, [`${biz.name} is doing great: about ${money(biz.avgProfit)} a day!`, n >= 5 ? `Run off my feet. ${n} customers already today.` : `Really well. About ${money(biz.avgProfit)} a day profit.`]), good: true };
+    if (biz.avgProfit < 0) return { answer: pick(r, [`Honestly? ${biz.name} is struggling.`, "The rent's eating me alive.", `${n <= 1 ? "Hardly a customer all day." : `Only ${n} customers today.`} I'm worried.`]), good: false };
+    if (hour >= 11 && n >= 2) return { answer: pick(r, [`Steady. ${n} customers so far today.`, `Not bad. ${n} through the door today.`]), good: false };
+  }
+  const place = workplace(world, x);
+  const today = x.finance.occToday;
+  if (avg > 45) return { answer: pick(r, [`Really well, actually. I'm making about ${money(avg)} a day.`, `Can't complain at all: ${money(avg)} a day, give or take.`]), good: true };
+  switch (x.occupation) {
+    case "unemployed": {
+      const days = Math.floor((world.time - x.occupationSince) / 1440);
+      return { answer: days >= 2 ? pick(r, [`${days} days now and nothing.`, `Nothing yet. ${days} days of looking.`]) : pick(r, ["Still looking. It's grim out there.", "Nothing yet. Something'll turn up."]), good: false };
+    }
+    case "researcher":
+      return { answer: x.research.breakthroughs > 0 ? pick(r, ["Working on the next big thing.", "One breakthrough down. Chasing another."]) : x.research.points > 50 ? pick(r, ["I think I'm close to something.", "Getting somewhere, I think. Slowly."]) : pick(r, ["Slow. Science is slow.", "Lots of dead ends."]), good: false };
+    case "freelancer":
+      return { answer: today > 15 ? `${money(today)} from clients so far today. Not bad.` : pick(r, ["Feast or famine, freelancing.", "Waiting on clients. Always waiting."]), good: false };
+    case "reseller":
+    case "trader": {
+      const deal = x.memories.short.find((m) => m.t >= dayStart(world.time) && m.kind === "deal" && /£/.test(m.text) && /\b(I|my)\b/.test(m.text));
+      if (deal) return { answer: sentence(deal.text), good: deal.valence > 0 };
+      return { answer: pick(r, ["Quiet day on the markets.", "Waiting for the right deal.", "Prices are all over the place."]), good: false };
+    }
+  }
+  if (place && today > 0) return { answer: pick(r, [`Long shift at ${place}. ${money(today)} in the bag today, mind.`, `Same as ever at ${place}.`]), good: false };
+  return { answer: pick(r, ["Ticking along.", "Could be better, could be worse.", "Same as ever.", "Busy, which is good, I suppose.", "Quiet, to be honest.", "Don't get me started."]), good: false };
+}
+
+/** A product whose wholesale price moved a lot since yesterday (people notice). */
+function priceSwing(world: WorldState): { name: string; pct: number; pid: string } | null {
+  let best: { name: string; pct: number; pid: string } | null = null;
+  for (const [pid, m] of Object.entries(world.market)) {
+    const tape = m.tape;
+    if (tape.length < 25) continue;
+    const now = tape[tape.length - 1];
+    const then = tape[tape.length - 25];
+    if (!(then > 0)) continue;
+    const pct = Math.round((now / then - 1) * 100);
+    const p = world.products[pid];
+    if (p && Math.abs(pct) >= 15 && (!best || Math.abs(pct) > Math.abs(best.pct))) best = { name: p.name.toLowerCase(), pct, pid };
+  }
+  return best;
+}
+
+/** Things two people who like the same thing say about it: [opener, reply] pairs. */
+const SHARED_LIKE: Record<string, [string, string][]> = {
+  "the pub": [["Pint later?", "Go on then."], ["Fancy the pub after this?", "Twist my arm."]],
+  "the park": [["Walk round the park later?", "I'd like that."], ["The park's lovely this time of year.", "It really is."]],
+  coffee: [["Coffee sometime? My treat.", "You're on."], ["I'd kill for a proper coffee.", "Same. I live on the stuff."]],
+  "football on the radio": [["Did you catch the football last night?", "Don't. What a game!"], ["What about that match, eh?", "I was shouting at the radio."]],
+  books: [["Read anything good lately?", "Halfway through a thriller. Can't put it down."], ["I've just finished a cracking book.", "Lend it to me when you're done?"]],
+  cooking: [["Made a proper stew last night. You'd have loved it.", "Save me some next time!"], ["Got a new recipe to try this weekend.", "Oh, go on, what is it?"]],
+  gadgets: [["Have you seen the new phones at the market?", "Don't tempt me."], ["I've got my eye on a new gadget.", "Ooh, show me later."]],
+  "people-watching": [["Good spot for people-watching, this.", "The best."], ["You see all sorts round here.", "Never a dull moment."]],
+  "a long lie-in": [["Had a lie-in this morning. Bliss.", "Jealous."], ["What I'd give for a lie-in.", "Tell me about it."]],
+  "quiet evenings": [["Quiet night in tonight, I think.", "Sounds perfect."], ["I just want a quiet evening.", "Same. Feet up."]],
+  "a good bargain": [["Got a cracking bargain at the market.", "Where? Tell me!"], ["There's always a bargain if you look.", "You've got the eye for it."]],
+};
+
+/** A pet hate the moment has set off, if any. */
+function gripe(world: WorldState, x: Citizen): { dislike: string; line: string[] } | null {
+  const hour = Math.floor((world.time % 1440) / 60);
+  const where = x.insideId ? world.map.buildings.find((b) => b.id === x.insideId)?.type : null;
+  const festival = world.happenings.some((h) => h.kind === "festival" && !h.ended && world.time < h.until && knows(x, h.id));
+  for (const d of x.personality.dislikes) {
+    if (d === "early mornings" && hour >= 5 && hour < 9) return { dislike: d, line: ["Too early for this.", "I hate mornings. I really do."] };
+    if (d === "crowds" && festival) return { dislike: d, line: ["Too many people about for my liking.", "This festival crowd is doing my head in."] };
+    if (d === "the diner's coffee" && where === "diner") return { dislike: d, line: ["The coffee in here is awful.", "Who makes coffee this bad?"] };
+    if (d === "waiting around" && x.activity.kind === "shop") return { dislike: d, line: ["I've been queueing for ages.", "Why is everything so slow today?"] };
+    if (d === "debt" && world.loans.some((l) => l.borrower === x.id && l.status === "active")) return { dislike: d, line: ["I hate owing money.", "Being in debt keeps me up at night."] };
+  }
+  return null;
+}
+
+/** "Build up £300 of savings" -> "I'm trying to build up £300 of savings." */
+function planLine(world: WorldState, x: Citizen): string | null {
+  const g = x.goal;
+  if (!g?.label) return null;
+  if (g.kind === "survive") return "I need to get off the streets. Save up for a deposit.";
+  const label = lowerStart(world, g.label.replace(/[.!]+$/, ""));
+  return `I'm trying to ${label}.`;
+}
+
+/** A goodbye that fits the moment: bedtime, hunger, work waiting, the weather, or just the friendship. */
+function goodbye(r: RngHolder, world: WorldState, x: Citizen, y: Citizen, close: boolean, storm: boolean): string {
+  const hour = Math.floor((world.time % 1440) / 60);
+  const pool: string[] = close
+    ? ["Good talking to you.", "Let's catch up properly soon.", "Right, I'd better get on. Take care.", "Don't be a stranger.", "Always a pleasure."]
+    : ["Anyway, I'd better get going.", "Right, back to it.", "Nice chatting.", "Catch you later.", "Mind how you go.", "See you around.", "I'll let you get on."];
+  if (hour >= 21 || hour < 4) pool.push("Right, bed for me.", "It's getting late. Night!");
+  if (situation(world, x).hungry > 0.6) pool.push("I'm off to find something to eat.", "My stomach's rumbling. Catch you later.");
+  if (x.activity.kind === "work") pool.push("Better get back to it before anyone notices.", "Duty calls.");
+  if (storm) pool.push("Stay dry!", "Mind the puddles.");
+  const fam = y.family.map((id) => world.citizens[id]).find((f) => f && f.id !== x.id && (peekRel(x, f.id)?.familiarity ?? 0) >= 8);
+  if (fam && close) pool.push(`Say hi to ${fam.name} for me.`);
+  return pick(r, pool);
+}
+
 // ------------------------------------------------------------ the chat
 
 /** Plan and voice a whole chat between a and b. */
@@ -227,6 +400,7 @@ export function improvise(world: WorldState, conv: Conversation, a: Citizen, b: 
   const room = (n: number) => lines.length + n <= maxLines - 1;
   const fam = peekRel(a, b.id)?.familiarity ?? 0;
   const enemies = hostile(a, b.id) || hostile(b, a.id);
+  const storm = world.happenings.some((h) => h.kind === "storm" && !h.ended && world.time >= h.t && world.time < h.until);
 
   // --- hello
   if (fam < 5 && !a.family.includes(b.id)) {
@@ -241,22 +415,25 @@ export function improvise(world: WorldState, conv: Conversation, a: Citizen, b: 
     const close = closeness(a, b.id) > 0.4;
     const cb = memoryCallback(a, b, "greet", `${conv.id}:g`, Math.floor(world.time / 1440));
     const hello = hour < 12 ? "Morning" : hour < 18 ? "Afternoon" : "Evening";
-    say(a, cb ?? (close ? pick(r, [`${b.name}! There you are.`, `Alright ${b.name}? How's things?`, `${b.name}! Long day?`]) : pick(r, [`${hello}, ${b.name}.`, `Alright ${b.name}?`, `${hello}! How are you doing?`])));
-    const d = dominantEmotion(b);
-    const how: Partial<Record<Emotion, string[]>> = {
-      sadness: ["Not great, honestly.", "I've had better weeks."],
-      anger: ["Don't ask.", "Fuming, if I'm honest."],
-      fear: ["Bit on edge, to be honest.", "Worried, mostly."],
-      joy: ["Brilliant, actually!", "Really good, thanks!"],
-      loneliness: ["Better now someone's talking to me."],
-      love: ["Can't complain at all."],
-      envy: ["Fine. Some of us have to work for it."],
-      pride: ["Pretty good, actually."],
-      gratitude: ["Good, thanks. People have been kind."],
-      shame: ["Oh, you know. Getting by."],
+    const where = conv.buildingId ? world.map.buildings.find((x) => x.id === conv.buildingId)?.type : null;
+    const here: Record<string, string[]> = {
+      pub: [`${b.name}! What are you drinking?`, `Fancy seeing you in here, ${b.name}.`],
+      park: [`Lovely day for it, ${b.name}.`, `${b.name}! Getting some fresh air?`],
+      diner: [`${b.name}! What's good today?`, "Grabbing a bite too?"],
+      cafe: [`${b.name}! Caffeine break?`],
+      market: [`${b.name}! Bargain hunting?`],
     };
-    say(b, pick(r, (d && how[d.emotion]) || ["Can't complain. You?", "Same old, same old.", "Getting by."]));
-    brief.push(`A greets B${close ? " (they're close)" : ""}; B says how they are${d ? ` (mostly ${d.emotion})` : ""}.`);
+    const greetings = close ? [`${b.name}! There you are.`, `Alright ${b.name}? How's things?`, `${b.name}! Long day?`, `Hey, ${b.name}. How are you?`] : [`${hello}, ${b.name}.`, `Alright ${b.name}?`, `${hello}! How are you doing?`, `Oh, hi ${b.name}. How's it going?`];
+    say(a, cb ?? pick(r, [...greetings, ...((where && here[where]) || [])]));
+    const fine = howTheyAre(r, world, b);
+    const askBack = !close || chance(r, 0.5);
+    say(b, askBack ? `${fine} You?` : fine);
+    if (askBack) {
+      const mine = howTheyAre(r, world, a);
+      say(a, mine === fine ? pick(r, ["Same, actually.", "Ha. Same here.", "Snap."]) : mine);
+    }
+    const d = dominantEmotion(b);
+    brief.push(`A greets B${close ? " (they're close)" : ""}; B says how they are${d ? ` (mostly ${d.emotion})` : ""}${askBack ? " and asks back" : ""}.`);
   }
 
   // --- what each of them could bring up
@@ -472,22 +649,118 @@ export function improvise(world: WorldState, conv: Conversation, a: Citizen, b: 
         key: `work:${x.id}`,
         weight: 0.35,
         run: () => {
-          say(y, biz ? pick(r, [`How's ${biz.name} doing?`, "How's business?", "Shop busy?"]) : x.occupation === "unemployed" ? pick(r, ["Any luck finding work?", "Still looking for something?"]) : x.employerId === "corp" ? pick(r, ["Still at CityCorp?", "How's life at CityCorp?"]) : pick(r, ["How's work?", "Keeping busy?", "Work treating you alright?"]));
-          let answer: string;
-          let good = false;
-          if (biz && biz.avgProfit > 30) (answer = `${biz.name} is doing great: about ${money(biz.avgProfit)} a day!`), (good = true);
-          else if (biz && biz.avgProfit < 0) answer = `Honestly? ${biz.name} is struggling.`;
-          else if (avg > 45) (answer = `Really well, actually. I'm making about ${money(avg)} a day.`), (good = true);
-          else if (x.occupation === "unemployed") answer = "Still looking. It's grim out there.";
-          else answer = pick(r, ["Ticking along.", "Could be better, could be worse.", "Same as ever.", "Busy, which is good, I suppose.", "Quiet, to be honest."]);
+          say(y, workQuestion(r, world, x, biz?.id ?? null));
+          const { answer, good } = workAnswer(r, world, x, avg);
           say(x, answer);
           const yEarn = y.finance.occupationEarnings.slice(-3);
           const yAvg = yEarn.length ? yEarn.reduce((p, q) => p + q, 0) / yEarn.length : 0;
           const envious = good && yAvg < avg * 0.5 && (y.traits.competitiveness > 0.6 || y.emotions.envy > 30);
-          if (room(1)) say(y, good ? (envious ? pick(r, ["Must be nice.", "Alright, no need to rub it in.", "Some of us aren't so lucky."]) : pick(r, ["Good for you.", "Nice one!", "Glad to hear it.", "That's brilliant."])) : pick(r, ["Hang in there.", "It'll pick up.", "Fair enough.", "That's the way it goes."]));
+          if (room(1)) say(y, good ? (envious ? pick(r, ["Must be nice.", "Alright, no need to rub it in.", "Some of us aren't so lucky."]) : pick(r, ["Good for you.", "Nice one!", "Glad to hear it.", "That's brilliant."])) : pick(r, ["Hang in there.", "It'll pick up.", "Fair enough.", "That's the way it goes.", "Ah well. Onwards.", "Sounds about right.", "Rather you than me."]));
           if (envious) notes.push({ t: "feel", who: y.id, e: { envy: 6 } });
           topics.push(biz ? biz.name : "work");
           brief.push(`${Y} asks about work; ${X} says: "${answer}"${envious ? `; ${Y} is envious` : ""}.`);
+        },
+      });
+    }
+    // What they're working towards.
+    const plan = planLine(world, x);
+    if (plan && !used.has(`plan:${x.id}`) && closeness(x, y.id) > 0.1 && !(x.goal.kind === "beat_rival" && x.goal.label.includes(y.name))) {
+      out.push({
+        key: `plan:${x.id}`,
+        weight: 0.4,
+        run: () => {
+          if (chance(r, 0.5)) say(x, pick(r, ["I've made up my mind about something.", "Can I tell you what I'm up to?", "I've got a plan, you know."]));
+          say(x, plan);
+          const target = x.goal.target;
+          const have = Math.round(x.money + x.savings);
+          if (target && room(2) && have < target && /save|savings|net worth|deposit|rent/i.test(x.goal.label)) say(x, `I'm at ${money(have)} so far.`);
+          const saver = y.reflections.some((l) => l.key === "money:save");
+          const rival = y.traits.competitiveness > 0.65 && x.goal.kind === "get_rich";
+          const warm = saver || y.personality.big5.agreeableness > 0.6 || y.personality.big5.conscientiousness > 0.6;
+          say(
+            y,
+            saver
+              ? "Put a bit aside every day. That's what I do now."
+              : rival
+                ? pick(r, ["Not if I get there first.", "We'll see about that."])
+                : y.personality.big5.agreeableness > 0.6
+                  ? pick(r, ["Good for you. You'll do it.", "I believe in you, for what it's worth."])
+                  : warm
+                    ? pick(r, ["Little and often. That's the trick.", "Make a plan and stick to it."])
+                    : pick(r, ["Easier said than done.", "Best of luck with that."]),
+          );
+          notes.push({ t: "feel", who: x.id, e: warm ? { pride: 2, joy: 2 } : { sadness: 1 } });
+          if (warm || rival) notes.push({ t: "rel", who: x.id, about: y.id, affinity: warm ? 2 : -1, trust: warm ? 1 : 0 });
+          topics.push(`${x.name}'s plans`);
+          brief.push(`${X} talks about what they're working towards ("${x.goal.label}"); ${Y} ${warm ? "is encouraging" : rival ? "is competitive about it" : "is unimpressed"}.`);
+        },
+      });
+    }
+    // Prices: people notice when something jumps.
+    const swing = priceSwing(world);
+    if (swing && !used.has("prices")) {
+      out.push({
+        key: "prices",
+        weight: 0.3 + Math.min(0.5, Math.abs(swing.pct) / 100),
+        run: () => {
+          const up = swing.pct > 0;
+          const pct = Math.abs(swing.pct);
+          say(x, pick(r, [`Have you seen the price of ${swing.name}? ${up ? "Up" : "Down"} ${pct}% since yesterday.`, `${capitalise(swing.name)} ${up ? "went up" : "dropped"} ${pct}% overnight. Mad.`]));
+          const sells = y.businessIds.some((id) => (world.businesses[id]?.inventory[swing.pid]?.qty ?? 0) > 0) || (y.inventory[swing.pid]?.qty ?? 0) > 0;
+          say(
+            y,
+            sells
+              ? up
+                ? pick(r, ["Good. I've got a pile of them to sell.", "Don't tell everyone, but that suits me fine."])
+                : pick(r, ["Don't. I'm sitting on a load of them.", "Ouch. There goes my profit."])
+              : up
+                ? pick(r, ["Daylight robbery.", "Everything's going up.", "I'll be doing without, then."])
+                : pick(r, ["Might stock up, then.", "About time something got cheaper."]),
+          );
+          topics.push(`the price of ${swing.name}`);
+          brief.push(`${X} mentions ${swing.name} prices moving ${swing.pct}% since yesterday; ${Y} ${sells ? "has some to sell" : "would be buying"}.`);
+        },
+      });
+    }
+    // Something they both like.
+    const like = x.personality.likes.find((l) => y.personality.likes.includes(l) && SHARED_LIKE[l] && !(l === "the pub" && hour < 12) && !(l === "the park" && storm));
+    if (like && !used.has(`like:${like}`) && closeness(x, y.id) > -0.1) {
+      out.push({
+        key: `like:${like}`,
+        weight: 0.4 * (leisure ? 1.5 : 1),
+        run: () => {
+          const [ask, answer] = pick(r, SHARED_LIKE[like]);
+          say(x, ask);
+          say(y, answer);
+          notes.push({ t: "rel", who: x.id, about: y.id, affinity: 2, trust: 1 }, { t: "rel", who: y.id, about: x.id, affinity: 2, trust: 1 });
+          topics.push(like);
+          brief.push(`${X} and ${Y} find they both like ${like}.`);
+        },
+      });
+    }
+    // A pet hate the moment has set off.
+    const g = gripe(world, x);
+    if (g && !used.has(`gripe:${x.id}`)) {
+      out.push({
+        key: `gripe:${x.id}`,
+        weight: 0.5,
+        run: () => {
+          say(x, pick(r, g.line));
+          const same = y.personality.dislikes.includes(g.dislike);
+          const opposite = (g.dislike === "early mornings" && y.personality.big5.conscientiousness > 0.7) || (g.dislike === "crowds" && y.personality.likes.includes("people-watching"));
+          say(
+            y,
+            same
+              ? pick(r, ["Tell me about it.", "Don't. Same here.", "You and me both."])
+              : opposite
+                ? g.dislike === "early mornings"
+                  ? pick(r, ["Best part of the day, this!", "Early bird catches the worm."])
+                  : "I quite like it, actually. All the faces."
+                : pick(r, ["Ha. It's not that bad.", "Could be worse."]),
+          );
+          if (same) notes.push({ t: "rel", who: x.id, about: y.id, affinity: 2, trust: 0 });
+          topics.push(g.dislike);
+          brief.push(`${X} grumbles about ${g.dislike}; ${Y} ${same ? "agrees" : opposite ? "rather likes it" : "shrugs it off"}.`);
         },
       });
     }
@@ -522,7 +795,10 @@ export function improvise(world: WorldState, conv: Conversation, a: Citizen, b: 
       say(a, `See you at ${world.citizens[party.subject!]?.name ?? "the"}'s party tonight?`);
       if (lines.length < maxLines) say(b, pick(r, ["Wouldn't miss it.", "If I can drag myself out."]));
     } else {
-      say(enemies ? a : lines.length % 2 === 0 ? a : b, enemies ? pick(r, ["Right. I'm off.", "Anyway."]) : closeness(a, b.id) > 0.4 ? pick(r, ["Good talking to you.", "Let's catch up properly soon.", "Right, I'd better get on. Take care."]) : pick(r, ["Anyway, I'd better get going.", "Right, back to it.", "Nice chatting."]));
+      const x = enemies ? a : lines.length % 2 === 0 ? a : b;
+      const y = x === a ? b : a;
+      say(x, enemies ? pick(r, ["Right. I'm off.", "Anyway.", "Well. This has been fun."]) : goodbye(r, world, x, y, closeness(a, b.id) > 0.4, storm));
+      if (!enemies && lines.length < maxLines && chance(r, 0.5)) say(y, pick(r, ["See you.", "Take care.", "Bye now.", "Cheers.", "Later."]));
     }
   }
 

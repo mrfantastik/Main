@@ -3,17 +3,18 @@ import { formatTime } from "../time";
 import { activeHappenings, canHappen, createHappening, HAPPENING_KINDS, HAPPENING_LABEL, happeningById } from "../town/happenings";
 import type { Citizen, Conversation, Happening, HappeningKind, WorldState } from "../types";
 import { personalitySummary } from "../mind/personality";
+import { cleanLines } from "./lines";
 import { profile } from "./llm";
 
-// Claude, unscripted. Two things a person can ask for:
-//  - "Hear it unscripted": Claude writes a conversation between two citizens
+// Unscripted, on request. Two things a person can ask for:
+//  - "Hear it unscripted": the AI writes a conversation between two citizens
 //    from scratch, from who they are, how they feel, what they've heard and
 //    what they remember about each other. No beats, no templates.
-//  - "Invent an event": Claude makes up something that happens in town,
+//  - "Invent an event": the AI makes up something that happens in town,
 //    about real residents and businesses. The engine then plays it out
 //    (a fire really shuts the shop) and the news spreads like any other.
-// The prompts and checks live here; the call itself is made by whoever has
-// Claude: the server (API key) or the browser page (the viewer's account).
+// The prompts and checks live here; the call itself goes through the AI
+// director, to the free AI or (with an API key) Claude.
 
 export const UNSCRIPTED_SCHEMA = {
   type: "object",
@@ -90,24 +91,20 @@ export function unscriptedPrompt(world: WorldState, convId: number): { prompt: s
   return { prompt, conv };
 }
 
-/** Put Claude's version in place. Returns a message for the player. */
+/** Put the AI's version in place. Returns a message for the player. */
 export function applyUnscripted(world: WorldState, convId: number, reply: unknown): string {
   const conv = world.conversations.find((c) => c.id === convId) ?? world.conversationLog.find((c) => c.id === convId);
   if (!conv) return "That conversation has gone from memory.";
   const raw = (reply as { lines?: unknown } | null)?.lines;
-  if (!Array.isArray(raw)) throw new Error("Claude's reply wasn't a conversation.");
-  const lines = raw
-    .map((l) => l as { speaker?: unknown; text?: unknown })
-    .filter((l) => (l.speaker === "A" || l.speaker === "B") && typeof l.text === "string" && l.text.trim().length > 0)
-    .slice(0, 14)
-    .map((l) => ({ speaker: l.speaker === "A" ? conv.a : conv.b, text: String(l.text).trim().slice(0, 240) }));
-  if (lines.length < 2) throw new Error("Claude's reply was too short to use.");
+  if (!Array.isArray(raw)) throw new Error("the reply wasn't a conversation.");
+  const lines = cleanLines(world, conv, raw).slice(0, 14);
+  if (lines.length < 2) throw new Error("the reply was too short to use.");
   conv.lines = lines;
   conv.source = "llm";
   if (conv.status !== "done") conv.revealed = Math.min(conv.revealed, lines.length);
   const a = world.citizens[conv.a]?.name ?? "A";
   const b = world.citizens[conv.b]?.name ?? "B";
-  return `✨ Claude wrote ${a} and ${b}'s conversation (${lines.length} lines).`;
+  return `✨ ${a} and ${b}'s conversation, rewritten from scratch (${lines.length} lines).`;
 }
 
 export const INVENT_SYSTEM =
@@ -155,11 +152,11 @@ export const INVENT_SCHEMA = {
   required: ["kind", "title", "about", "text"],
 };
 
-/** Make Claude's idea happen. Returns the happening, or why it couldn't be. */
+/** Make the AI's idea happen. Returns the happening, or why it couldn't be. */
 export function applyInvented(world: WorldState, reply: unknown): Happening | string {
   const r = (reply ?? {}) as { kind?: unknown; who?: unknown; business?: unknown; title?: unknown; about?: unknown; text?: unknown };
   const kind = String(r.kind ?? "") as HappeningKind;
-  if (!HAPPENING_KINDS.includes(kind)) return "Claude suggested something the town can't do yet.";
+  if (!HAPPENING_KINDS.includes(kind)) return "the AI suggested something the town can't do yet.";
   const who = typeof r.who === "string" ? world.citizenOrder.map((id) => world.citizens[id]).find((c) => c.name.toLowerCase() === String(r.who).trim().toLowerCase()) : undefined;
   const biz = typeof r.business === "string" ? world.businessOrder.map((id) => world.businesses[id]).find((b) => b && b.open && b.name.toLowerCase() === String(r.business).trim().toLowerCase()) : undefined;
   const clean = (v: unknown, max: number) => (typeof v === "string" && v.trim().length > 3 && v.trim().length <= max ? v.trim() : undefined);
