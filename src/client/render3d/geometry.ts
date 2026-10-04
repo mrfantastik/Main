@@ -1,4 +1,4 @@
-import { BoxGeometry, BufferAttribute, BufferGeometry, CircleGeometry, Color, ConeGeometry, CylinderGeometry, IcosahedronGeometry, Matrix4, PlaneGeometry, Quaternion, SphereGeometry, Vector3 } from "three";
+import { BoxGeometry, BufferAttribute, BufferGeometry, CircleGeometry, Color, ConeGeometry, CylinderGeometry, IcosahedronGeometry, Matrix4, PlaneGeometry, Quaternion, SphereGeometry, TorusGeometry, Vector3 } from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 /** Deterministic 0..1 noise from integers (same as the 2D city layer). */
@@ -13,8 +13,103 @@ const q = new Quaternion();
 const pos = new Vector3();
 const scl = new Vector3();
 const up = new Vector3(0, 1, 0);
-const fwdZ = new Vector3(0, 0, 1);
 const col = new Color();
+
+function mergeParts(parts: BufferGeometry[]): BufferGeometry {
+  const flat = parts.map((g) => {
+    const n = g.index ? g.toNonIndexed() : g;
+    n.deleteAttribute("uv");
+    return n;
+  });
+  const merged = mergeGeometries(flat, false)!;
+  for (const g of new Set([...parts, ...flat])) g.dispose();
+  return merged;
+}
+
+function ring(radius: number, tube: number, y: number, radial = 6, tubular = 20): BufferGeometry {
+  const g = new TorusGeometry(radius, tube, radial, tubular);
+  g.rotateX(Math.PI / 2);
+  g.translate(0, y, 0);
+  return g;
+}
+
+/**
+ * Classical column parts, for a column of radius 1 (scale them by the
+ * radius; the shaft also by its height). The Attic base: square plinth, two
+ * rounded mouldings with a hollow between, from y = 0 to COLUMN_BASE_H.
+ */
+export const COLUMN_BASE_H = 0.78;
+export function columnBaseGeometry(): BufferGeometry {
+  const plinth = new BoxGeometry(2.9, 0.34, 2.9);
+  plinth.translate(0, 0.17, 0);
+  const lower = ring(1.18, 0.17, 0.5);
+  const scotia = new CylinderGeometry(1.04, 1.12, 0.16, 20, 1);
+  scotia.translate(0, 0.62, 0);
+  const upper = ring(1.06, 0.12, 0.7);
+  const g = mergeParts([plinth, lower, scotia, upper]);
+  g.computeVertexNormals();
+  return g;
+}
+
+/**
+ * The shaft, from y = 0 to 1 (scale it by the height): fluted (concave
+ * channels separated by narrow fillets), tapering towards the top with a
+ * slight swell a third of the way up, as the Greeks built them.
+ */
+export function columnShaftGeometry(flutes = 20): BufferGeometry {
+  const per = 3;
+  const g = new CylinderGeometry(0.86, 1, 1, flutes * per, 6, true);
+  g.translate(0, 0.5, 0);
+  const p = g.getAttribute("position");
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i);
+    const y = p.getY(i);
+    const z = p.getZ(i);
+    const a = Math.atan2(z, x);
+    // Which vertex of the flute this is (0 = fillet, 1 and 2 = the channel).
+    const k = Math.round(((a + Math.PI * 2) % (Math.PI * 2)) / ((Math.PI * 2) / (flutes * per))) % per;
+    const swell = 1 + 0.035 * Math.sin(Math.min(1, y * 1.4) * Math.PI);
+    const r = (k === 0 ? 1 : 0.92) * swell;
+    p.setXYZ(i, x * r, y, z * r);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+/**
+ * The Ionic capital, from the top of the shaft (y = 0) up to
+ * COLUMN_CAPITAL_H: a beaded ring, the swelling echinus, the cushion with a
+ * scroll (volute) at each end, and a thin square abacus on top.
+ */
+export const COLUMN_CAPITAL_H = 0.86;
+export function columnCapitalGeometry(): BufferGeometry {
+  const bead = ring(0.88, 0.08, 0.04, 6, 20);
+  const echinus = new CylinderGeometry(1.12, 0.9, 0.26, 20, 1);
+  echinus.translate(0, 0.2, 0);
+  const cushion = new BoxGeometry(2.5, 0.3, 1.5);
+  cushion.translate(0, 0.46, 0);
+  const parts: BufferGeometry[] = [bead, echinus, cushion];
+  for (const side of [-1, 1]) {
+    // Each volute: a scroll seen end-on from the front and back, a smaller "eye" standing out of it.
+    const scroll = new CylinderGeometry(0.46, 0.46, 1.62, 16, 1);
+    scroll.rotateX(Math.PI / 2);
+    scroll.translate(side * 1.32, 0.36, 0);
+    const eye = new CylinderGeometry(0.17, 0.17, 1.8, 10, 1);
+    eye.rotateX(Math.PI / 2);
+    eye.translate(side * 1.32, 0.36, 0);
+    parts.push(scroll, eye);
+  }
+  const abacus = new BoxGeometry(2.8, 0.2, 2.8);
+  abacus.translate(0, 0.72, 0);
+  const top = new BoxGeometry(2.6, 0.06, 2.6);
+  top.translate(0, 0.83, 0);
+  parts.push(abacus, top);
+  const g = mergeParts(parts);
+  g.computeVertexNormals();
+  return g;
+}
+
+let columnParts: { base: BufferGeometry; shaft: BufferGeometry; capital: BufferGeometry } | null = null;
 
 /**
  * Collects low-poly shapes (each with one flat vertex colour) and merges
@@ -102,28 +197,19 @@ export class GeoBuilder {
   }
 
   /**
-   * A classical Ionic column on y: square plinth, round base, a slightly
-   * tapered fluted-looking shaft and a capital with scroll ends. `broken`
-   * columns stop part-way with no capital (ruins).
+   * A classical Ionic column on y: Attic base, fluted shaft and a capital
+   * with scrolls. `broken` columns stop part-way with no capital (ruins).
    */
   column(x: number, y: number, z: number, h: number, r: number, color: number, broken = false): this {
-    const base = r * 0.55;
-    this.box(x, y, z, r * 3, base * 0.6, r * 3, color);
-    this.shaft(x, y + base * 0.6, z, r * 1.32, r * 1.22, base * 0.45, color, 20);
-    const shaftH = broken ? h * 0.55 : h - base * 1.05 - r * 1.1;
-    this.shaft(x, y + base * 1.05, z, r, r * 0.88, shaftH, color, 20);
+    columnParts ??= { base: columnBaseGeometry(), shaft: columnShaftGeometry(16), capital: columnCapitalGeometry() };
+    const shaftH = broken ? h * 0.55 : h - (COLUMN_BASE_H + COLUMN_CAPITAL_H) * r;
+    m.compose(pos.set(x, y, z), q.identity(), scl.set(r, r, r));
+    this.push(columnParts.base.clone(), color, m);
+    m.compose(pos.set(x, y + COLUMN_BASE_H * r, z), q.identity(), scl.set(r, shaftH, r));
+    this.push(columnParts.shaft.clone(), color, m);
     if (broken) return this;
-    const top = y + base * 1.05 + shaftH;
-    this.shaft(x, top, z, r * 0.95, r * 1.15, r * 0.3, color, 20);
-    this.box(x, top + r * 0.3, z, r * 2.7, r * 0.32, r * 2.1, color);
-    // Scrolls: short horizontal cylinders at each end of the capital.
-    for (const side of [-1, 1]) {
-      q.setFromAxisAngle(fwdZ, Math.PI / 2);
-      m.compose(pos.set(x + side * r * 1.2, top + r * 0.18, z), q, scl.set(r * 0.42, r * 2.0, r * 0.42));
-      this.push(new CylinderGeometry(1, 1, 1, 14, 1), color, m);
-    }
-    this.box(x, top + r * 0.62, z, r * 2.9, r * 0.2, r * 2.9, color);
-    return this;
+    m.compose(pos.set(x, y + COLUMN_BASE_H * r + shaftH, z), q.identity(), scl.set(r, r, r));
+    return this.push(columnParts.capital.clone(), color, m);
   }
 
   /** A slim cypress tree: short trunk, tall tapering crown. */

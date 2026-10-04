@@ -67,13 +67,30 @@ export function moneyText(amount: number): string {
   return `+£${amount >= 100 ? Math.round(amount) : amount.toFixed(amount % 1 ? 2 : 0)}`;
 }
 
+const inkCache = new Map<string, string>();
+
+/** A citizen's colour, darkened if needed so their name reads on a white bubble. */
+export function bubbleInk(hex: string): string {
+  let ink = inkCache.get(hex);
+  if (ink) return ink;
+  const n = parseInt(hex.replace("#", "").padEnd(6, "0").slice(0, 6), 16);
+  let [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  const k = lum > 0.45 ? 0.45 / lum : 1;
+  [r, g, b] = [r, g, b].map((v) => Math.round(v * k));
+  ink = `rgb(${r},${g},${b})`;
+  inkCache.set(hex, ink);
+  return ink;
+}
+
 /**
- * A speech bubble pointing at (sx, sy). `placed` collects bubbles already
- * drawn this frame so they stack instead of overlapping.
+ * A speech bubble pointing at (sx, sy), with the speaker's name in their
+ * colour when it's known. `placed` collects bubbles already drawn this
+ * frame so they stack instead of overlapping.
  */
-export function drawBubble(ctx: CanvasRenderingContext2D, bub: BubbleDTO, sx: number, sy: number, viewW: number, placed: { x: number; y: number }[]): void {
+export function drawBubble(ctx: CanvasRenderingContext2D, bub: BubbleDTO, sx: number, sy: number, viewW: number, placed: { x: number; y: number }[], who?: { name: string; color: string }): void {
   ctx.font = "12px Inter, system-ui, sans-serif";
-  const maxW = 190;
+  const maxW = 200;
   const words = bub.text.split(" ");
   const lines: string[] = [];
   let cur = "";
@@ -87,8 +104,12 @@ export function drawBubble(ctx: CanvasRenderingContext2D, bub: BubbleDTO, sx: nu
   if (cur) lines.push(cur);
   const shown = lines.slice(0, 4);
   if (lines.length > 4) shown[3] = `${shown[3].slice(0, 24)}…`;
-  const w = Math.min(maxW, Math.max(...shown.map((l) => ctx.measureText(l).width))) + 16;
-  const h = shown.length * 15 + 10;
+  const head = who ? 14 : 0;
+  ctx.font = "800 10px Inter, system-ui, sans-serif";
+  const nameW = who ? ctx.measureText(who.name).width : 0;
+  ctx.font = "12px Inter, system-ui, sans-serif";
+  const w = Math.min(maxW, Math.max(nameW, ...shown.map((l) => ctx.measureText(l).width))) + 18;
+  const h = shown.length * 15 + 11 + head;
   let x = sx - w / 2;
   let y = sy - h - 16;
   for (const q of placed) {
@@ -96,22 +117,34 @@ export function drawBubble(ctx: CanvasRenderingContext2D, bub: BubbleDTO, sx: nu
   }
   placed.push({ x, y });
   x = Math.max(4, Math.min(viewW - w - 4, x));
-  ctx.fillStyle = bub.source === "llm" ? "rgba(255,248,225,0.97)" : "rgba(255,255,255,0.95)";
-  ctx.strokeStyle = bub.source === "llm" ? "#d4a017" : "rgba(30,30,40,0.5)";
+  const llm = bub.source === "llm";
+  ctx.save();
+  ctx.shadowColor = "rgba(20, 10, 40, 0.28)";
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetY = 3;
+  ctx.fillStyle = llm ? "rgba(255,249,232,0.97)" : "rgba(255,255,255,0.96)";
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, 10);
+  ctx.moveTo(sx - 6, y + h - 0.5);
+  ctx.lineTo(sx, y + h + 8);
+  ctx.lineTo(sx + 6, y + h - 0.5);
+  ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = llm ? "#d4a017" : who ? who.color : "rgba(30,30,40,0.45)";
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.roundRect(x, y, w, h, 8);
-  ctx.fill();
+  ctx.roundRect(x, y, w, h, 10);
   ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(sx - 5, y + h);
-  ctx.lineTo(sx, y + h + 8);
-  ctx.lineTo(sx + 5, y + h);
-  ctx.fill();
-  ctx.fillStyle = "#1a1f2b";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  shown.forEach((l, i) => ctx.fillText(l, x + 8, y + 6 + i * 15));
+  if (who) {
+    ctx.font = "800 10px Inter, system-ui, sans-serif";
+    ctx.fillStyle = who.color;
+    ctx.fillText(who.name, x + 9, y + 6);
+    ctx.font = "12px Inter, system-ui, sans-serif";
+  }
+  ctx.fillStyle = "#1a1f2b";
+  shown.forEach((l, i) => ctx.fillText(l, x + 9, y + 6 + head + i * 15));
 }
 
 /** 0 by day, up to 0.62 at night (same curve in both views). */

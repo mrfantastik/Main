@@ -1,4 +1,4 @@
-import { BackSide, BufferAttribute, BufferGeometry, CanvasTexture, Color, LinearFilter, Mesh, MeshBasicMaterial, Points, PointsMaterial, SphereGeometry, SRGBColorSpace } from "three";
+import { BackSide, BufferAttribute, EquirectangularReflectionMapping, BufferGeometry, CanvasTexture, Color, LinearFilter, Mesh, MeshBasicMaterial, Points, PointsMaterial, SphereGeometry, SRGBColorSpace } from "three";
 
 // The dreamscape sky: a big dome painted with soft purple clouds on a pale
 // pink-lilac sky (generated once from noise, no image files), tinted by the
@@ -40,17 +40,23 @@ function fbm(x: number, y: number, period: number): number {
   return sum;
 }
 
-const HORIZON = new Color(0xf2d9ee);
-const ZENITH = new Color(0xc7b2ef);
-const CLOUD_DARK = new Color(0x7d4fc4);
-const CLOUD_MID = new Color(0xa77fe0);
+const HORIZON = new Color(0xf0d6ec);
+const ZENITH = new Color(0xb9a2ec);
+const CLOUD_DARK = new Color(0x6a3fb8);
+const CLOUD_MID = new Color(0x9a6fdc);
+const CLOUD_LIGHT = new Color(0xf6e8fb);
 const DUSK = new Color(0xffb38a);
 const NIGHT = new Color(0x2a2150);
+/** The floor as reflections see it (the lower half of the environment). */
+const FLOOR_NEAR = new Color(0x3c3436);
+const FLOOR_FAR = new Color(0x8a7690);
 
-/** Equirectangular sky texture: pale sky with streaky purple clouds above the horizon. */
-function skyTexture(): CanvasTexture {
-  const W = 768;
-  const H = 384;
+/**
+ * Equirectangular sky texture: pale sky with heavy purple clouds piled above
+ * the horizon, lit pale pink on top like the reference. `env` paints the lower
+ * half as the dark tiled floor, for reflections on glossy things.
+ */
+function skyCanvas(W: number, H: number, env: boolean): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = W;
   canvas.height = H;
@@ -65,28 +71,48 @@ function skyTexture(): CanvasTexture {
     for (let px = 0; px < W; px++) {
       const nx = (px / W) * period;
       const ny = lat * 9;
-      const n = fbm(nx, ny * 1.6, period);
-      const streak = fbm(nx * 0.5 + 3.1, ny * 3.2, period / 2);
-      c.copy(HORIZON).lerp(ZENITH, Math.pow(up, 0.8));
-      if (lat < 0.5) {
-        // Clouds thicken a little above the horizon and thin out overhead.
-        const band = Math.min(1, (0.5 - lat) * 6) * (0.75 + up * 0.25);
-        const cloud = Math.max(0, Math.min(1, (n * 0.75 + streak * 0.45 - 0.48) * 3.2)) * band;
-        c.lerp(n > 0.55 ? CLOUD_DARK : CLOUD_MID, cloud * 0.85);
+      if (env && lat > 0.5) {
+        // Below the horizon: the floor, darker the more straight down you look.
+        c.copy(FLOOR_FAR).lerp(FLOOR_NEAR, Math.min(1, (lat - 0.5) * 6));
+      } else {
+        const n = fbm(nx, ny * 1.6, period);
+        const streak = fbm(nx * 0.5 + 3.1, ny * 3.2, period / 2);
+        c.copy(HORIZON).lerp(ZENITH, Math.pow(up, 0.8));
+        if (lat < 0.5) {
+          // Clouds pile up above the horizon and thin out overhead; their
+          // tops (where the noise is just past the edge) catch the light.
+          const band = Math.min(1, (0.5 - lat) * 5) * (0.7 + up * 0.3);
+          const v = n * 0.75 + streak * 0.45 - 0.46;
+          const cloud = Math.max(0, Math.min(1, v * 3.4)) * band;
+          const depth = Math.max(0, Math.min(1, (n - 0.45) * 4));
+          c.lerp(CLOUD_MID, cloud * 0.9).lerp(CLOUD_DARK, cloud * depth * 0.75);
+          const rim = Math.max(0, 1 - Math.abs(v - 0.05) * 9) * band * (0.4 + (1 - up) * 0.6);
+          c.lerp(CLOUD_LIGHT, rim * 0.55);
+        }
       }
       const i = (py * W + px) * 4;
-      img.data[i] = Math.round(c.r * 255);
-      img.data[i + 1] = Math.round(c.g * 255);
-      img.data[i + 2] = Math.round(c.b * 255);
+      img.data[i] = Math.round(Math.min(1, c.r) * 255);
+      img.data[i + 1] = Math.round(Math.min(1, c.g) * 255);
+      img.data[i + 2] = Math.round(Math.min(1, c.b) * 255);
       img.data[i + 3] = 255;
     }
   }
   ctx.putImageData(img, 0, 0);
-  const tex = new CanvasTexture(canvas);
+  return canvas;
+}
+
+function skyTexture(W: number, H: number, env = false): CanvasTexture {
+  const tex = new CanvasTexture(skyCanvas(W, H, env));
   tex.colorSpace = SRGBColorSpace;
   tex.minFilter = LinearFilter;
   tex.generateMipmaps = false;
+  if (env) tex.mapping = EquirectangularReflectionMapping;
   return tex;
+}
+
+/** The environment glossy surfaces reflect: this sky above, the dark floor below (feed it to a PMREM generator). */
+export function dreamEnvironment(): CanvasTexture {
+  return skyTexture(512, 256, true);
 }
 
 export class DreamSky {
@@ -98,9 +124,9 @@ export class DreamSky {
   private readonly tint = new Color();
 
   constructor(radius = 460) {
-    this.tex = skyTexture();
+    this.tex = skyTexture(1024, 512);
     const geo = new SphereGeometry(radius, 48, 24);
-    this.dome = new Mesh(geo, new MeshBasicMaterial({ map: this.tex, side: BackSide, fog: false, depthWrite: false }));
+    this.dome = new Mesh(geo, new MeshBasicMaterial({ map: this.tex, side: BackSide, fog: false, depthWrite: false, toneMapped: false }));
     this.dome.renderOrder = -10;
     this.dome.frustumCulled = false;
 
@@ -116,7 +142,7 @@ export class DreamSky {
     }
     const sg = new BufferGeometry();
     sg.setAttribute("position", new BufferAttribute(pos, 3));
-    this.stars = new Points(sg, new PointsMaterial({ color: 0xfff4ff, size: 1.6, sizeAttenuation: false, transparent: true, opacity: 0, fog: false, depthWrite: false }));
+    this.stars = new Points(sg, new PointsMaterial({ color: 0xfff4ff, size: 1.6, sizeAttenuation: false, transparent: true, opacity: 0, fog: false, depthWrite: false, toneMapped: false }));
     this.stars.frustumCulled = false;
     this.stars.renderOrder = -9;
   }

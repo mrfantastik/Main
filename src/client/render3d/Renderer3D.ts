@@ -1,4 +1,5 @@
 import {
+  NeutralToneMapping,
   AdditiveBlending,
   BasicShadowMap,
   Box3,
@@ -8,6 +9,7 @@ import {
   DirectionalLight,
   EdgesGeometry,
   Fog,
+  HalfFloatType,
   HemisphereLight,
   LineBasicMaterial,
   LineSegments,
@@ -15,33 +17,41 @@ import {
   MeshBasicMaterial,
   MeshLambertMaterial,
   Object3D,
-  MeshPhongMaterial,
+  MeshStandardMaterial,
   OrthographicCamera,
   PCFShadowMap,
   PerspectiveCamera,
   Plane,
+  PMREMGenerator,
   Raycaster,
   RingGeometry,
   Scene,
   Vector2,
   Vector3,
   WebGLRenderer,
+  WebGLRenderTarget,
   type Material,
 } from "three";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import type { BusinessSummary, CitizenSummary } from "../../shared/protocol";
 import type { CityMap } from "../../sim/types";
 import { TILE_ROAD } from "../../sim/types";
 import { store } from "../net/store";
 import { FrameInterpolator } from "../render/interpolation";
-import { ACTIVITY_ICON, darkness, drawBubble, drawEmotion, drawLabel, drawMoneyPopup, moneyText, showFeelingOnMap } from "../render/overlay";
+import { ACTIVITY_ICON, bubbleInk, darkness, drawBubble, drawEmotion, drawLabel, drawMoneyPopup, moneyText, showFeelingOnMap } from "../render/overlay";
 import type { CityRenderer, Pos } from "../render/types";
 import { OCC_COLORS } from "../ui/format";
 import { buildDecor, decorKey, type BusinessDecor } from "./businesses";
 import { buildCity, SLAB, type BuildingInfo } from "./city";
-import { CitizenMeshes, FIGURE_H, MAX_CITIZENS, type Figures } from "./citizens";
+import { CitizenMeshes, FIGURE_H, MAX_CITIZENS, type Figures, type Pose } from "./citizens";
 import { MirrorFloor } from "./dream/floor";
 import { MannequinMeshes, MANNEQUIN_H } from "./dream/mannequins";
-import { DreamSky } from "./dream/sky";
+import { DreamRuins } from "./dream/ruins";
+import { dreamEnvironment, DreamSky } from "./dream/sky";
 import { TownEffects } from "./effects";
 import { P, type Look } from "./palette";
 
@@ -58,6 +68,8 @@ import { P, type Look } from "./palette";
 const ELEVATION = 0.64; // radians above the ground (~37°)
 const DISTANCE = 160;
 const TARGET_PIXELS_TALL = 400;
+/** Mannequins are drawn a little larger than life, so they read from above. */
+const PEOPLE_SCALE = 1.12;
 const MAJOR = new Set(["office", "market", "park", "bank", "townhall", "pub", "diner", "cowork", "lab", "depot", "apartments"]);
 
 interface Vis {
@@ -77,6 +89,9 @@ interface Vis {
   hat: Color;
   colorKey: string;
   seed: number;
+  /** How much they're walking and talking (eased, 0..1). */
+  walk: number;
+  talk: number;
 }
 
 interface Popup {
@@ -126,6 +141,21 @@ const DREAM_COL = {
   sunHigh: new Color(0xfff4ec),
 };
 
+/** A soft vignette with a violet tint at the edges, like an old dream. */
+const VIGNETTE = {
+  uniforms: { tDiffuse: { value: null }, strength: { value: 0.32 }, tint: { value: new Color(0.82, 0.74, 1.0) } },
+  vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float strength; uniform vec3 tint; varying vec2 vUv;
+void main() {
+  vec4 c = texture2D(tDiffuse, vUv);
+  vec2 d = (vUv - 0.5) * vec2(1.0, 0.92);
+  float v = smoothstep(0.82, 0.28, length(d));
+  c.rgb *= mix(1.0 - strength, 1.0, v);
+  c.rgb = mix(c.rgb * tint, c.rgb, v * 0.6 + 0.4);
+  gl_FragColor = c;
+}`,
+};
+
 export class Renderer3D implements CityRenderer {
   private gl: WebGLRenderer;
   private scene = new Scene();
@@ -149,6 +179,21 @@ export class Renderer3D implements CityRenderer {
   private readonly figureH: number;
   private dreamSky: DreamSky | null = null;
   private floor: MirrorFloor | null = null;
+  private ruins: DreamRuins | null = null;
+  private envRT: WebGLRenderTarget | null = null;
+  private composer: EffectComposer | null = null;
+  private renderPass: RenderPass | null = null;
+  private bloom: UnrealBloomPass | null = null;
+  private vignette: ShaderPass | null = null;
+  private pose: Pose = { phase: 0, walk: 0, talk: 0, speaking: false, head: 0, t: 0, seed: 0 };
+  private partner = new Map<string, string>();
+  /** 2: everything; 1: no anti-aliasing or glow; 0: no mirror floor either. Stepped down if frames are slow. */
+  private quality = 2;
+  private frameGap = 16;
+  private lastFrameAt = 0;
+  private qualityCheckAt = 0;
+  private readonly autoQuality = typeof location === "undefined" || !new URLSearchParams(location.search).has("hq");
+  private speaking = new Set<string>();
   private fx = new TownEffects();
   private persp = new PerspectiveCamera(50, 1, 0.1, 900);
   /** Ground-level view (perspective) instead of the overhead one. */
@@ -233,6 +278,23 @@ export class Renderer3D implements CityRenderer {
       this.dreamSky = new DreamSky();
       this.floor = new MirrorFloor();
       this.scene.add(this.dreamSky.dome, this.dreamSky.stars, this.floor.mesh);
+      // Gentle tone mapping (keeps the pastels as painted, rolls off only the brightest lights), glossy things reflecting the sky, a glow on bright lights, a vignette.
+      this.gl.toneMapping = NeutralToneMapping;
+      this.gl.toneMappingExposure = 0.95;
+      const pm = new PMREMGenerator(this.gl);
+      const env = dreamEnvironment();
+      this.envRT = pm.fromEquirectangular(env);
+      this.scene.environment = this.envRT.texture;
+      env.dispose();
+      pm.dispose();
+      this.composer = new EffectComposer(this.gl, new WebGLRenderTarget(4, 4, { type: HalfFloatType, samples: 4 }));
+      this.renderPass = new RenderPass(this.scene, this.camera);
+      this.bloom = new UnrealBloomPass(new Vector2(256, 256), 0.3, 0.55, 0.95);
+      this.vignette = new ShaderPass(VIGNETTE);
+      this.composer.addPass(this.renderPass);
+      this.composer.addPass(this.bloom);
+      this.composer.addPass(this.vignette);
+      this.composer.addPass(new OutputPass());
     }
     this.scene.add(this.fx.group);
 
@@ -290,6 +352,12 @@ export class Renderer3D implements CityRenderer {
     this.lampHeads = new Mesh(geo.lampHeads, new MeshBasicMaterial({ color: P.lampOff }));
     this.lampPools = new Mesh(geo.lampPools, new MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0, blending: AdditiveBlending, depthWrite: false }));
     this.scene.add(this.cityMesh, this.windowMesh, this.lampHeads, this.lampPools);
+    if (this.look === "dream") {
+      this.ruins = new DreamRuins(map.width, map.height);
+      this.scene.add(this.ruins.group);
+      // Windows and lamps glow brighter than white, so the bloom catches them.
+      (this.windowMesh.material as MeshBasicMaterial).color.setScalar(1.9);
+    }
     this.decorKey = "";
     const cx = map.width / 2;
     const cz = map.height / 2;
@@ -329,6 +397,8 @@ export class Renderer3D implements CityRenderer {
     this.fx.dispose();
     this.dreamSky?.dispose();
     this.floor?.dispose();
+    this.composer?.dispose();
+    this.envRT?.dispose();
     for (const m of [this.selRing, this.hoverRing]) (m.material as Material).dispose();
     this.selRing.geometry.dispose();
     this.bizOutline.geometry.dispose();
@@ -348,6 +418,7 @@ export class Renderer3D implements CityRenderer {
   }
 
   focusOn(x: number, y: number): void {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
     this.target.set(x, 0, y);
     const close = this.cssH / 100;
     if (this.halfH > close) this.halfH = close;
@@ -413,7 +484,7 @@ export class Renderer3D implements CityRenderer {
 
   private surfaceMaterial(): Material {
     return this.look === "dream"
-      ? new MeshPhongMaterial({ vertexColors: true, shininess: 40, specular: new Color(0x2c2636) })
+      ? new MeshStandardMaterial({ vertexColors: true, roughness: 0.46, metalness: 0, envMapIntensity: 0.6 })
       : new MeshLambertMaterial({ vertexColors: true, flatShading: true });
   }
 
@@ -512,7 +583,9 @@ export class Renderer3D implements CityRenderer {
     }
     const aspect = this.cssW / this.cssH;
     this.halfH = Math.max((maxU - minU) / 2, (maxR - minR) / 2 / aspect) * 1.02;
-    this.maxHalfH = this.halfH * 1.6;
+    this.maxHalfH = this.halfH * (this.look === "dream" ? 2.2 : 1.6);
+    // The corners of the town are only road: crop them a little so the town fills the view.
+    if (this.look === "dream") this.halfH *= 0.88;
     // centre the box on screen
     const midR = (minR + maxR) / 2;
     const midU = (minU + maxU) / 2;
@@ -544,6 +617,7 @@ export class Renderer3D implements CityRenderer {
 
   private clampTarget(): void {
     if (!this.map) return;
+    if (!Number.isFinite(this.target.x) || !Number.isFinite(this.target.z)) this.target.set(this.map.width / 2, 0, this.map.height / 2);
     this.target.x = Math.min(this.map.width, Math.max(0, this.target.x));
     this.target.z = Math.min(this.map.height, Math.max(0, this.target.z));
   }
@@ -782,8 +856,12 @@ export class Renderer3D implements CityRenderer {
     if (this.look === "dream") {
       // Smooth and full resolution (capped, to keep the mirror pass cheap).
       const r = Math.min(dpr, 1.5);
-      this.gl.setSize(Math.max(1, Math.round(this.cssW * r)), Math.max(1, Math.round(this.cssH * r)), false);
+      const w = Math.max(1, Math.round(this.cssW * r));
+      const h = Math.max(1, Math.round(this.cssH * r));
+      this.gl.setSize(w, h, false);
       this.floor?.setSize(this.cssW * r, this.cssH * r);
+      this.composer?.setSize(w, h);
+      this.bloom?.setSize(Math.round(w / 2), Math.round(h / 2));
     } else {
       const scale = Math.max(1, Math.round(devH / TARGET_PIXELS_TALL));
       this.gl.setSize(Math.max(1, Math.ceil((this.cssW * dpr) / scale)), Math.max(1, Math.ceil(devH / scale)), false);
@@ -805,15 +883,53 @@ export class Renderer3D implements CityRenderer {
       if (b.open && !this.shopIn.has(b.buildingId)) this.shopIn.set(b.buildingId, b);
     }
     if (this.map) this.fx.sync(st.happenings ?? [], this.info);
+    // Who's talking to whom (so they face each other), and whose turn it is.
+    this.partner.clear();
+    this.speaking.clear();
+    for (const c of st.conversations ?? []) {
+      if (!c.live) continue;
+      this.partner.set(c.a, c.b);
+      this.partner.set(c.b, c.a);
+    }
+    for (const b of st.bubbles) {
+      this.partner.set(b.a, b.b);
+      this.partner.set(b.b, b.a);
+      this.speaking.add(b.speaker);
+    }
   }
 
   /** CPU time of the last frame in ms, smoothed (for profiling: window.hustle.renderer.cpuMs). */
   cpuMs = 0;
 
   private frame(now: number): void {
+    if (this.composer && this.autoQuality) this.watchFrameRate(now);
     const t0 = performance.now();
     this.renderFrame(now);
     this.cpuMs += (performance.now() - t0 - this.cpuMs) * 0.1;
+  }
+
+  /** If frames keep coming slower than about 22 a second, drop the most expensive effects (one step at a time, never back). */
+  private watchFrameRate(now: number): void {
+    if (this.lastFrameAt) this.frameGap += (Math.min(250, now - this.lastFrameAt) - this.frameGap) * 0.05;
+    this.lastFrameAt = now;
+    if (!this.qualityCheckAt) this.qualityCheckAt = now + 5000;
+    if (now < this.qualityCheckAt || document.hidden) return;
+    this.qualityCheckAt = now + 2500;
+    if (this.frameGap < 45 || this.quality === 0) return;
+    this.quality--;
+    if (this.quality === 1 && this.composer && this.bloom) {
+      this.bloom.enabled = false;
+      for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) {
+        rt.samples = 0;
+        rt.dispose();
+      }
+    } else if (this.quality === 0 && this.floor) {
+      this.floor.enabled = false;
+      this.sun.shadow.mapSize.set(1024, 1024);
+      this.sun.shadow.map?.dispose();
+      this.sun.shadow.map = null;
+    }
+    this.frameGap = 16;
   }
 
   private renderFrame(now: number): void {
@@ -855,8 +971,11 @@ export class Renderer3D implements CityRenderer {
     this.fx.animate(now, dt, this.groundOn ? this.gEye : this.target);
     const cam = this.cam();
     if (this.dreamSky) this.dreamSky.centre(cam.position.x, cam.position.z);
-    if (this.floor) this.floor.render(this.gl, this.scene, cam, [this.sun, this.moon]);
-    this.gl.render(this.scene, cam);
+    if (this.floor?.enabled) this.floor.render(this.gl, this.scene, cam, [this.sun, this.moon]);
+    if (this.composer && this.renderPass) {
+      this.renderPass.camera = cam;
+      this.composer.render(dt);
+    } else this.gl.render(this.scene, cam);
     this.drawOverlay(now);
   }
 
@@ -894,8 +1013,21 @@ export class Renderer3D implements CityRenderer {
       this.sun.color.copy(DREAM_COL.sunLow).lerp(DREAM_COL.sunHigh, Math.min(1, e * 1.6));
       this.hemi.color.copy(DREAM_COL.hemiDay).lerp(DREAM_COL.hemiNight, n).lerp(DREAM_COL.dusk, golden * 0.35);
       this.hemi.groundColor.copy(DREAM_COL.groundDay).lerp(DREAM_COL.groundNight, n);
-      this.hemi.intensity = (1.3 + n * 0.4) * (1 - storm * 0.35);
+      // Light from the sky now comes mostly from the environment (reflections and soft fill).
+      this.hemi.intensity = (0.4 + n * 0.2) * (1 - storm * 0.35);
+      this.sun.intensity = Math.min(1, e * 3) * 3.4 * (1 - n * 0.9) * (1 - storm * 0.7);
+      this.scene.environmentIntensity = (0.6 - n * 0.38) * (1 - storm * 0.4);
       this.dreamSky.setTime(Math.min(1, n + storm * 0.55), golden);
+      this.ruins?.setNight(n);
+      // Bright lights bloom, more so at night; lamps glow hotter than white.
+      if (this.bloom) {
+        this.bloom.strength = 0.16 + n * 0.85;
+        this.bloom.threshold = 0.98 - n * 0.36;
+        this.bloom.radius = 0.5 + n * 0.25;
+      }
+      (this.lampHeads!.material as MeshBasicMaterial).color.multiplyScalar(1 + lit * 3);
+      this.gl.toneMappingExposure = 1.0 + n * 0.2;
+      (this.lampPools!.material as MeshBasicMaterial).opacity = lit * 0.45;
       this.sky.copy(this.dreamSky.horizon);
       this.fog.color.copy(this.dreamSky.horizon);
       this.floor!.setNight(n);
@@ -958,7 +1090,7 @@ export class Renderer3D implements CityRenderer {
       let v = this.vis.get(id);
       if (!v) {
         const seed = strHash(id);
-        v = { x: p.x, z: p.y, yaw: 0, phase: seed % 7, hx: 0, hy: 0, hz: 0, fy: 0, visible: false, inside: false, body: new Color(), hat: new Color(), colorKey: "", seed };
+        v = { x: p.x, z: p.y, yaw: 0, phase: seed % 7, hx: 0, hy: 0, hz: 0, fy: 0, visible: false, inside: false, body: new Color(), hat: new Color(), colorKey: "", seed, walk: 0, talk: 0 };
         this.vis.set(id, v);
       }
       v.visible = false;
@@ -969,13 +1101,25 @@ export class Renderer3D implements CityRenderer {
       let x = p.x;
       let z = p.y;
       let y = 0;
-      let scale = 1;
+      let scale = this.look === "dream" ? PEOPLE_SCALE : 1;
       if (bi) {
         const d = bi.deck;
-        x = Math.min(d.x1, Math.max(d.x0, x));
-        z = Math.min(d.z1, Math.max(d.z0, z));
+        if (bi.mode === "terrace") {
+          // Along the front by where they are inside, a stable distance out from the door.
+          const depth = ((v.seed >>> 4) % 97) / 97;
+          if (bi.face % 2 === 0) {
+            x = Math.min(d.x1, Math.max(d.x0, x));
+            z = d.z0 + depth * (d.z1 - d.z0);
+          } else {
+            x = d.x0 + depth * (d.x1 - d.x0);
+            z = Math.min(d.z1, Math.max(d.z0, z));
+          }
+        } else {
+          x = Math.min(d.x1, Math.max(d.x0, x));
+          z = Math.min(d.z1, Math.max(d.z0, z));
+        }
         y = d.y;
-        if (bi.mode !== "open") scale = 0.8;
+        if (bi.mode === "roof" || bi.mode === "home") scale *= 0.8;
       } else {
         const tx = Math.floor(x);
         const tz = Math.floor(z);
@@ -993,8 +1137,23 @@ export class Renderer3D implements CityRenderer {
       v.x = x;
       v.z = z;
       const walking = moved > 0.0005 && moved < 2 && !p.inside;
-      const bob = walking ? Math.abs(Math.sin(v.phase)) * (this.look === "dream" ? 0.025 : 0.07) : 0;
-      this.people.place(i, x, y + bob, z, v.yaw, scale, walking ? Math.sin(v.phase) : 0);
+      v.walk += ((walking ? 1 : 0) - v.walk) * Math.min(1, dt * 8);
+      // In a conversation: turn to face them (when they're close), and talk with your hands.
+      const other = this.partner.get(id);
+      const ov = other ? this.vis.get(other) : undefined;
+      const chatting = !walking && (p.kind === "talk" || (!!ov?.visible && Math.hypot(ov.x - x, ov.z - z) < 3));
+      v.talk += ((chatting && other ? 1 : 0) - v.talk) * Math.min(1, dt * 3);
+      if (chatting && ov && Math.hypot(ov.x - x, ov.z - z) > 0.05 && Math.hypot(ov.x - x, ov.z - z) < 3) v.yaw += angleDelta(v.yaw, Math.atan2(ov.x - x, ov.z - z)) * Math.min(1, dt * 4);
+      const bob = walking ? Math.abs(Math.sin(v.phase)) * (this.look === "dream" ? 0.018 : 0.07) : 0;
+      const pose = this.pose;
+      pose.phase = v.phase;
+      pose.walk = v.walk;
+      pose.talk = v.talk;
+      pose.speaking = this.speaking.has(id);
+      pose.head = 0;
+      pose.t = this.lastNow / 1000;
+      pose.seed = v.seed;
+      this.people.place(i, x, y + bob, z, v.yaw, scale, walking ? Math.sin(v.phase) : 0, pose);
       const meta = this.citizenMeta.get(id);
       const key = meta ? meta.occupation + meta.color : "";
       if (meta && key !== v.colorKey) {
@@ -1129,7 +1288,8 @@ export class Renderer3D implements CityRenderer {
       else if (p) this.project(p.x, SLAB + 1, p.y);
       else continue;
       if (this.sp.x < -100 || this.sp.y < -100 || this.sp.x > this.cssW + 100 || this.sp.y > this.cssH + 100) continue;
-      drawBubble(ctx, bub, this.sp.x, this.sp.y, this.cssW, placed);
+      const m = this.citizenMeta.get(bub.speaker);
+      drawBubble(ctx, bub, this.sp.x, this.sp.y, this.cssW, placed, m ? { name: m.name, color: bubbleInk(m.color) } : undefined);
     }
   }
 
@@ -1219,5 +1379,10 @@ export class Renderer3D implements CityRenderer {
     }
     this.cityMesh = this.windowMesh = this.lampHeads = this.lampPools = this.decorMesh = null;
     this.decor = null;
+    if (this.ruins) {
+      this.scene.remove(this.ruins.group);
+      this.ruins.dispose();
+      this.ruins = null;
+    }
   }
 }

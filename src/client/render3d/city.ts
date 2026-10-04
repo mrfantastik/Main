@@ -13,8 +13,14 @@ export const SLAB = 0.12;
 /** Which look is being built (set by buildCity). */
 let LOOK: Look = "retro";
 
-/** How citizens inside a building are shown. */
-export type InsideMode = "home" | "open" | "roof";
+/**
+ * How citizens inside a building are shown: not at all (at home: lit
+ * windows), out in the open (park, market), on the roof (offices, the lab),
+ * or out front on a terrace by the door (shops, the café, the pub...).
+ */
+export type InsideMode = "home" | "open" | "roof" | "terrace";
+
+const TERRACE = new Set(["shop_unit", "pub", "diner", "bank", "townhall", "cowork"]);
 
 export interface BuildingInfo {
   b: Building;
@@ -418,7 +424,22 @@ function addBuilding(c: Ctx, b: Building, info: Map<string, BuildingInfo>) {
       break;
     }
   }
-  if (mode === "roof" || mode === "home") deck.y = top + 0.02;
+  if (TERRACE.has(b.type)) {
+    // Out front: on the pavement between the building and the road if there's room, else at the roadside.
+    mode = "terrace";
+    const gap = face === 0 ? b.door.y - (b.y + b.h) : face === 2 ? b.y - (b.door.y + 1) : face === 1 ? b.door.x - (b.x + b.w) : b.x - (b.door.x + 1);
+    const onSlab = gap >= 0.8;
+    const near = onSlab ? 0.15 : 0.1;
+    const far = onSlab ? gap - 0.15 : 0.65;
+    const ax0 = (face % 2 === 0 ? b.x : b.y) + 0.35;
+    const ax1 = (face % 2 === 0 ? b.x + b.w : b.y + b.h) - 0.35;
+    // The edge of the door tile that faces the building, and which way is outwards.
+    const edge = face === 0 ? (onSlab ? b.y + b.h : b.door.y) : face === 2 ? (onSlab ? b.y : b.door.y + 1) : face === 1 ? (onSlab ? b.x + b.w : b.door.x) : onSlab ? b.x : b.door.x + 1;
+    const dir = face === 0 || face === 1 ? 1 : -1;
+    const d0 = Math.min(edge + dir * near, edge + dir * far);
+    const d1 = Math.max(edge + dir * near, edge + dir * far);
+    deck = face % 2 === 0 ? { x0: ax0, z0: d0, x1: ax1, z1: d1, y: onSlab ? SLAB : 0.005 } : { x0: d0, z0: ax0, x1: d1, z1: ax1, y: onSlab ? SLAB : 0.005 };
+  } else if (mode === "roof" || mode === "home") deck.y = top + 0.02;
   else deck = { x0: b.x + 0.2, z0: b.y + 0.2, x1: b.x + b.w - 0.2, z1: b.y + b.h - 0.2, y: SLAB };
   const end = c.win.vertexCount;
   if (end > startWin) c.winRanges.set(b.id, { start: startWin, count: end - startWin });
@@ -495,15 +516,7 @@ export function buildCity(map: CityMap, look: Look = "retro"): CityGeometry {
     }
   }
 
-  // Dreamscape: columns standing about on the endless floor, some fallen short.
-  for (let i = 0; dream && i < 70; i++) {
-    const a = hash(i, 23, 4) * Math.PI * 2;
-    const rr = hash(i, 5, 19);
-    const x = W / 2 + Math.cos(a) * (W / 2 + 4 + rr * 40);
-    const z = H / 2 + Math.sin(a) * (H / 2 + 4 + rr * 34);
-    const tall = 2.5 + hash(i, 9, 1) * 5.5;
-    g.column(x, 0, z, tall, 0.16 + tall * 0.025, P.white, hash(i, 2, 8) < 0.22);
-  }
+  // (The dreamscape's colonnades and ruins round the town are built separately: dream/ruins.ts.)
 
   // Countryside: scattered trees and hedges around the edge of town.
   for (let i = 0; !dream && i < 140; i++) {

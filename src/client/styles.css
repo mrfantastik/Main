@@ -1072,3 +1072,60 @@ button:disabled {
 .sliders label span:last-child {
   text-align: right;
 }
+
+/* Conversation transcripts, like a messaging app: each person's avatar and colour. */
+.tlines {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0 6px;
+}
+.tline {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.tline.first {
+  margin-top: 4px;
+}
+.tline.right {
+  flex-direction: row-reverse;
+}
+.tav {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  flex: none;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.tbody {
+  display: flex;
+  flex-direction: column;
+  max-width: 82%;
+  min-width: 0;
+}
+.tline.right .tbody {
+  align-items: flex-end;
+}
+.tname {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  margin: 0 4px 2px;
+}
+.tbubble {
+  background: color-mix(in srgb, var(--c) 16%, #1d2433);
+  border: 1px solid color-mix(in srgb, var(--c) 34%, transparent);
+  border-radius: 12px;
+  padding: 5px 10px;
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+.tline.left .tbubble {
+  border-top-left-radius: 4px;
+}
+.tline.right .tbubble {
+  border-top-right-radius: 4px;
+}
