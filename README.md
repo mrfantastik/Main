@@ -49,8 +49,15 @@ Every citizen is an AI agent, and the brain is its mind:
 - **what they do next**: while someone is busy, the brain is asked what they'll do after, choosing from the things that make sense for them once they're done (eat, work, go to the pub, go and see a friend who's out and about...), from who they are, how they feel and what's on their mind. They act on it, and their reason becomes what they're thinking. If things change before they're done (they got hungrier, the shop shut), a pick that no longer makes sense is dropped;
 - **a diary**: last thing at night it writes a line or two in their diary about the day, and reads it back when planning the next day and in their conversations and thoughts;
 - **their tough calls**: jobs, money, starting or closing a business;
-- **what they say**: when two people talk, the brain speaks for **each of them in turn**, one line at a time, like two chatbots meeting in the street. Each line is written as that person: their personality and way of talking, how they feel, what's on their mind (money, news, last night's diary), what they remember about the other person, where they are, and everything said so far. They answer what was just said, and either of them can wind it up with a goodbye. For deals, favours and arguments, the town has already decided what happens (who lends what, who gets the job), and both of them are told, so the words can't break the economy. Lines appear as they're written, with "✍️ … is speaking" in between. News only passes on in a chat if it actually came up;
+- **what they say**: every citizen is **its own chatbot**, with a character card (see below). When two people talk, the brain speaks for **each of them in turn**, one line at a time, like two chatbots meeting in the street: the other person's lines come in as messages, and each answers from its own card. Each line is written as that person: their card, their way of talking, how they feel, what's on their mind (money, news, last night's diary), what they remember about the other person (including how their last conversation went), where they are, and everything said so far. They answer what was just said, and either of them can wind it up with a goodbye. For deals, favours and arguments, the town has already decided what happens (who lends what, who gets the job), and both of them are told, so the words can't break the economy. Lines appear as they're written, with "✍️ … is speaking" in between. News only passes on in a chat if it actually came up;
 - **what they're thinking**, in between.
+
+**Every citizen is a fully customisable chatbot.** Open someone and pick the **🤖 Chatbot** tab:
+
+- **Talk to them.** Type anything (or tap a starter); they answer in character, from their card, how they feel today and what's been happening to them, and remember the conversation.
+- **Rewrite their character card**: who they are (their story), how they talk, lines they'd say (these teach the model their voice best), what they care about (values, loves, hates, fears, dreams, habits), a secret they keep unless they trust someone, and your own instructions ("flirts with everyone", "always brings it back to football", "is secretly a spy"). Two sliders set how adventurous (steady to wild) and how talkative (few words to chatterbox) they are. Save, and they talk like that from then on, with everyone; "Back to how they were" restores the card made from their personality.
+
+Each card starts out generated from the person's personality and story, so all twenty are different before you touch anything.
 
 **When you meddle, they react.** Take money from someone and they feel it in proportion: £5 from someone with thousands is a shrug; most of their savings is fury and fear. Their first thought is about it, and they stop what they're doing to take it in, then decide what to do (look for work, ask a friend for help...). It shows in the feed, and comes up when they talk. A suspicious sort may blame someone they already dislike, which can sour that friendship. Windfalls, a job they never applied for, a business shut down or handed to them, a crash or a boom, a shortage in what they sell: each lands the way it should. With the brain awake, it reacts first: it writes what goes through their mind, and a new plan for the rest of their day.
 
@@ -99,11 +106,11 @@ In practice the city makes **~2–3 Claude calls per game day** (≈ $0.03/day w
 
 | | |
 |---|---|
-| **3D / Retro / 2D** | Switch views top-right of the map. **3D** is the dreamscape (glossy mannequins on a mirror-like hex floor among marble columns, under a purple sky); **Retro** is the warm low-poly town; **2D** the flat map. Your choice is remembered |
+| **3D / Retro / 2D** | Switch views top-right of the map. **3D** is the dreamscape: glossy jointed mannequins who walk, turn to face each other and talk with their hands, on a mirror-like hex floor among Ionic colonnades and ruins, under a purple cloud sky, with glowing windows and lamps at night. **Retro** is the warm low-poly town; **2D** the flat map. Your choice is remembered. On a slower computer the 3D effects step down by themselves to keep it smooth |
 | **👁 Ground** | (3D) drop to street level: behind whoever you've selected, or slowly looking round town |
 | **Pan / zoom / rotate** | Drag the map / mouse wheel or pinch (or WASD + `+`/`-`); in 3D, `Q`/`E` or ⟲ ⟳ turn the view 90° |
 | **🎬 Director** | (3D) the camera glides to deals, conversations, new businesses and big money moments on its own |
-| **Inspect a citizen** | Click them on the map or in the list. Tabs: Overview (who they are, backstory, how they feel), 🧠 Mind (why they did things, lessons learned), Social (relationships, memories and the feelings attached, conversations), Money. Strong feelings show as an emoji next to people on the map and in the list |
+| **Inspect a citizen** | Click them on the map or in the list. Tabs: Overview (who they are, backstory, how they feel), 🤖 Chatbot (talk to them; edit their character card), 🧠 Mind (why they did things, lessons learned), Social (relationships, memories and the feelings attached, conversations), Money. Strong feelings show as an emoji next to people on the map and in the list |
 | **Inspect a business** | Click a shop |
 | **Speed** | ⏸ 1× 5× 20× 50× (1× = one game hour every 15 s) |
 | **Skip ahead** | ⏩ +1h, +1d, +1w: jumps instantly (same result as watching it; the AI is paused during a skip) |
@@ -179,7 +186,8 @@ src/
                        jobs, services, trading, reselling, research, housing, shopping
     memory/            Memory system
     town/              Happenings (fires, festivals, storms…) and how news spreads
-    mind/              Personality, emotions, nightly reflection, behaviour tilts, speaking voice
+    mind/              Personality, emotions, nightly reflection, behaviour tilts, speaking voice,
+                       chatbot character cards and chat memory (bot.ts)
     social/            Relationships, encounters, conversations, negotiation, dialogue,
                        improvised chats (improv.ts)
     god.ts             God Mode commands + macro economy
@@ -194,7 +202,8 @@ src/
                        (onnxruntime-web + tokenizer + generation loop), its page-side client,
                        the model file format (pack.ts) and the models to choose from (models.ts)
     render3d/          3D views (merged static city, instanced citizens): the dreamscape
-                       (dream/: sky, mirror floor, mannequins) and the retro town; effects.ts
+                       (dream/: sky, mirror floor, jointed mannequins, colonnades and ruins;
+                       bloom and tone mapping in Renderer3D) and the retro town; effects.ts
                        draws happenings (flames, rain, festival lights…)
     net/local.ts       Standalone build: runs the sim in the browser (same messages as the server)
   shared/protocol.ts   Messages between server and browser
