@@ -242,10 +242,12 @@ export function BrainBox({ ai }: { ai: AIStatusDTO }) {
       <h3>The town's brain</h3>
       <p style={{ marginTop: 0 }}>
         A free, open-source AI that runs <b>here, on your computer</b>: on your graphics card if your browser has WebGPU, otherwise on your
-        processor. Nothing is sent anywhere and nothing costs anything. Once it's awake, every citizen is an AI agent run by it, all the time: each
-        morning it writes their <b>plan for the day</b>, it <b>chooses what they do next</b> (including going to see a friend), decides their{" "}
-        <b>tough calls</b> (jobs, money, businesses), writes what they <b>say</b> and <b>think</b>, and each night their <b>diary</b>, which it reads
-        back the next day. All from who they are, how they feel, what they've heard and what they remember. Whoever you're looking at comes first.
+        processor. Nothing is sent anywhere and nothing costs anything. Once it's awake, every citizen is an AI agent run by it, all the time.{" "}
+        <b>When two people talk, it speaks for each of them in turn</b>, one line at a time, each from their own personality, mood, worries and
+        memories of the other, answering what was just said, like two chatbots meeting in the street. It also writes each person's{" "}
+        <b>plan for the day</b>, <b>chooses what they do next</b> (including going to see a friend), decides their <b>tough calls</b> (jobs, money,
+        businesses), says what they're <b>thinking</b>, and each night writes their <b>diary</b>, which it reads back the next day. Whoever you're
+        looking at comes first.
       </p>
       <p>
         The town keeps the rules: it only offers choices a person can actually make, and it settles who lends what and what news gets passed on, so

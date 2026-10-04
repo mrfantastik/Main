@@ -17,6 +17,10 @@ export const SMALL_TALK_SYSTEM =
   "You write dialogue for a story set in Hustle City, a small British town. Every person has their own voice, worries and opinions, and they talk like real people: short lines, specific details, jokes, questions, the odd grumble. " +
   "Write only the spoken lines, each starting with the speaker's first name and a colon.";
 
+export const SMALL_CHAT_SYSTEM =
+  "You are a person in Hustle City, a small British town, talking with someone. Stay in character: talk the way you talk, about your own life, worries and opinions, like a real person would, and answer what was just said to you. " +
+  "Reply with only what you say next: one or two short sentences. No name, no quotation marks, no actions.";
+
 export const SMALL_THOUGHT_SYSTEM =
   "You write the private thoughts of people in a story set in Hustle City, a small British town. Write in the first person, as the person, in one or two short sentences: specific, honest, sometimes funny, sometimes worried. No quotation marks. " +
   "For example, for a baker short of money: Flour's gone up again and rent's due Friday. If Priya pays me back I might just make it.";
@@ -129,7 +133,7 @@ export interface SmallPrompt {
   user: string;
   /** The start of the reply, written for the model (it carries on from here). */
   prefill: string;
-  kind: "lines" | "thought" | "choice" | "plan" | "diary";
+  kind: "lines" | "turn" | "thought" | "choice" | "plan" | "diary";
   /** For "lines": who may speak. For "choice" and "plan": option ids in order (and for "plan", their labels). */
   names?: string[];
   options?: string[];
@@ -160,6 +164,44 @@ export function smallConversationPrompt(world: WorldState, conv: Conversation, b
     .filter(Boolean)
     .join("\n");
   return { system: SMALL_TALK_SYSTEM, user, prefill: `${a.name}:`, kind: "lines", names: [a.name, b.name] };
+}
+
+/** Where a live chat is: starting it, in the middle, winding it up, or saying goodbye back. */
+export type TurnPhase = "open" | "talk" | "wrap" | "byeback";
+
+/**
+ * One person's turn in a live chat: who they are, how they feel, what's on
+ * their mind, what they remember about the other person, where they are, and
+ * the conversation so far. They say the next thing, as themselves.
+ * `decided`: what happens, when the town has already settled it (a loan, a job).
+ */
+export function smallTurnPrompt(world: WorldState, conv: Conversation, me: Citizen, them: Citizen, phase: TurnPhase, decided: string | null): SmallPrompt {
+  const remember = [...me.memories.short, ...me.memories.long]
+    .filter((m) => m.people.includes(them.id) && m.importance >= 3)
+    .sort((x, y) => y.t - x.t)
+    .slice(0, 2)
+    .map((m) => `- ${m.text}`);
+  const said = conv.lines.slice(-8).map((l) => `${world.citizens[l.speaker]?.name ?? "?"}: ${l.text}`);
+  const ask =
+    phase === "open"
+      ? `You've just run into ${them.name}. Start the conversation your way.`
+      : phase === "wrap"
+        ? `You need to go now. Answer what ${them.name} said, then say goodbye your way.`
+        : phase === "byeback"
+          ? `${them.name} is leaving. Say goodbye back.`
+          : `Answer what ${them.name} just said, as yourself, and add something of your own: a question, an opinion, or your news.`;
+  const user = [
+    `You are ${sketch(world, me)}`,
+    ...onTheirMind(world, me).map((x) => `- ${x}`),
+    `You're at ${placeName(world, conv.buildingId)}, ${partOfDay(world.time)}, with ${them.name} (${them.age}, ${job(world, them)}). ${relation(world, me, them)}.`,
+    remember.length ? `You remember:\n${remember.join("\n")}` : "",
+    decided ? `What happens (already decided, stick to it): ${decided}` : "",
+    said.length ? `The conversation so far:\n${said.join("\n")}` : "",
+    ask,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return { system: SMALL_CHAT_SYSTEM, user, prefill: `${me.name}:`, kind: "turn", names: [me.name, them.name] };
 }
 
 /** What someone is thinking right now. */
@@ -259,6 +301,8 @@ export function smallDiaryPrompt(world: WorldState, c: Citizen): SmallPrompt {
 export function looksLikeSpeech(t: string): boolean {
   if (t.length < 2 || t.length > 220) return false;
   if (/<\||\|>|https?:|assistant|\buser\b|as an ai|language model|^\W*$/i.test(t)) return false;
+  // A chatbot talking to its user, not a person talking to a neighbour.
+  if (/how (can|may) i (help|assist)|i'm here to help|happy to help you|i'm just an? (ai|program|bot)|i don't have (feelings|personal)/i.test(t)) return false;
   const letters = (t.match(/[A-Za-z]/g) ?? []).length;
   return letters / t.length > 0.55;
 }
@@ -281,6 +325,27 @@ export function readLines(text: string, names: string[]): { speaker: string; tex
     if (out.length >= 12) break;
   }
   return out;
+}
+
+/** One person's next line in a live chat, cleaned up ("" if it isn't something a person would say). */
+export function readTurn(text: string, me: string, them: string): string {
+  let t = text.replace(new RegExp(`^\\s*\\**\\s*${me}\\s*\\**\\s*:\\s*`, "i"), "").split(/\n/)[0];
+  // The other person starting to talk (or a new speaker label): stop there.
+  const cut = t.search(new RegExp(`\\b(${them}|${me})\\s*:`, "i"));
+  if (cut >= 0) t = t.slice(0, cut);
+  t = t
+    .replace(/\*[^*]*\*/g, "")
+    .replace(/\([^)]*\)/g, "")
+    .replace(/^["“'\s]+|["”'\s]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const sentences = t.match(/[^.!?]+[.!?]+["”']?/g) ?? (t ? [t] : []);
+  t = sentences
+    .slice(0, 2)
+    .map((x) => x.trim())
+    .join(" ");
+  if (t && !/[.!?…]$/.test(t)) t += ".";
+  return t.length >= 2 && t.length <= 200 && looksLikeSpeech(t) ? t : "";
 }
 
 /** The first sentence or two, cleaned up. */

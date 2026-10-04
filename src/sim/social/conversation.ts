@@ -592,6 +592,14 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
     validate: () => ({}),
     apply(world, conv, a, b) {
       applyNotes(world, conv);
+      if (conv.live) {
+        // Spoken live, they talked about what they chose: keep only the topics that came up.
+        const said = conv.lines.map((l) => l.text.toLowerCase()).join(" ");
+        const names = new Set(world.citizenOrder.map((id) => world.citizens[id].name.toLowerCase()));
+        conv.topics = (conv.topics ?? []).filter((t) => t.toLowerCase().split(/[^a-z]+/).some((w) => w.length >= 5 && !names.has(w) && !/^(about|their|plans|later|news|feels|good|having|people|place)$/.test(w) && said.includes(w)));
+        conv.terms.summary = conv.topics.length ? `${a.name} and ${b.name} talked about ${conv.topics.slice(0, 3).join(", ")}.` : `${a.name} and ${b.name} had a chat.`;
+        conv.terms.headline = "";
+      }
       // Gossip: they learn how each other are doing (fuel for imitation).
       for (const [teller, listener] of [
         [a, b],
@@ -634,7 +642,8 @@ function placeLabel(world: WorldState, conv: Conversation): string {
 
 // ------------------------------------------------------- lifecycle
 
-export type ConversationAIHook = (world: WorldState, conv: Conversation, brief: string, schema: Record<string, unknown>, stakes: number) => boolean;
+/** true: the AI writes the whole thing (awaiting_ai); "live": it speaks for each of them in turn, line by line. */
+export type ConversationAIHook = (world: WorldState, conv: Conversation, brief: string, schema: Record<string, unknown>, stakes: number) => boolean | "live";
 let aiHook: ConversationAIHook | null = null;
 export function setConversationAIHook(h: ConversationAIHook | null): void {
   aiHook = h;
@@ -695,7 +704,17 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
   lockIntoTalk(world, b, a, conv.id);
   a.cooldowns.lastTalk = world.time;
   b.cooldowns.lastTalk = world.time;
-  if (aiHook && aiHook(world, conv, prepared.brief, handlers[topic].schema, prepared.stakes)) {
+  const ai = aiHook ? aiHook(world, conv, prepared.brief, handlers[topic].schema, prepared.stakes) : false;
+  if (ai === "live") {
+    // Each of them speaks for themselves, a line at a time, as the AI writes it. What happens is the town's.
+    conv.status = "live";
+    conv.lines = [];
+    conv.outcome = conv.fallback.outcome;
+    conv.source = "llm";
+    conv.live = { done: false, lastLineT: world.time };
+    return conv;
+  }
+  if (ai) {
     conv.status = "awaiting_ai";
     a.awaitingAI = true;
     return conv;
@@ -722,6 +741,41 @@ export function resolveConversationAI(world: WorldState, convId: number, ai: { l
   conv.outcome = handlers[conv.topic].validate(conv, ai.outcome);
   conv.source = "llm";
   return "ok";
+}
+
+/** A live chat: the next thing someone says. False if the chat is over. */
+export function addLiveLine(world: WorldState, convId: number, line: { speaker: string; text: string }): boolean {
+  const conv = world.conversations.find((c) => c.id === convId);
+  if (!conv || conv.status !== "live" || !conv.live || conv.live.done) return false;
+  if (line.speaker !== conv.a && line.speaker !== conv.b) return false;
+  conv.lines.push({ speaker: line.speaker, text: line.text });
+  conv.live.lastLineT = world.time;
+  return true;
+}
+
+/**
+ * A live chat is over: they've said goodbye (`wrap` false), or the AI stopped
+ * and they part with the built-in goodbye. If it barely got going, the
+ * built-in conversation is used instead.
+ */
+export function endLive(world: WorldState, convId: number, wrap: boolean): void {
+  const conv = world.conversations.find((c) => c.id === convId);
+  if (!conv || conv.status !== "live" || !conv.live || conv.live.done) return;
+  conv.live.done = true;
+  const fb = conv.fallback?.lines ?? [];
+  if (conv.lines.length < 2) {
+    conv.lines = fb.slice();
+    conv.source = "template";
+    conv.revealed = Math.min(conv.revealed, conv.lines.length);
+    return;
+  }
+  if (wrap && fb.length >= 2) {
+    // The built-in goodbye, said by whoever didn't speak last.
+    const last = conv.lines[conv.lines.length - 1].speaker;
+    const [x, y] = last === conv.a ? [conv.b, conv.a] : [conv.a, conv.b];
+    const byes = fb.slice(-2);
+    conv.lines.push({ speaker: x, text: byes[0].text }, { speaker: y, text: byes[1].text });
+  }
 }
 
 function finish(world: WorldState, conv: Conversation): void {
@@ -765,9 +819,24 @@ function finish(world: WorldState, conv: Conversation): void {
   pushRing(world.conversationLog, conv, CONVERSATION_LOG_LIMIT);
 }
 
+/** A live chat whose next line hasn't come for this long (game minutes) wraps up. */
+const LIVE_STALL = 90;
+
 /** Every minute: reveal lines, end finished conversations. */
 export function conversationsTick(world: WorldState): void {
   for (const conv of [...world.conversations]) {
+    if (conv.status === "live" && conv.live) {
+      // Lines show as they're written; they stand talking while the next one comes.
+      if (conv.revealed < conv.lines.length) {
+        if (world.time >= conv.nextRevealT) {
+          conv.revealed++;
+          conv.nextRevealT = world.time + LINE_MINUTES;
+        }
+      } else if (conv.live.done) {
+        if (world.time >= conv.nextRevealT) finish(world, conv);
+      } else if (world.time - conv.live.lastLineT > LIVE_STALL) endLive(world, conv.id, true);
+      continue;
+    }
     if (conv.status === "awaiting_ai") {
       // Safety net: never leave people frozen if the AI never answers.
       if (world.time - conv.startedT > 180) resolveConversationAI(world, conv.id, null);

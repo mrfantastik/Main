@@ -1,5 +1,5 @@
 import type { LLMClient, LLMRequest, LLMResponse } from "../../sim/ai/llm";
-import { readChoice, readDiary, readLines, readPlan, readThought, type SmallPrompt } from "../../sim/ai/small";
+import { readChoice, readDiary, readLines, readPlan, readThought, readTurn, type SmallPrompt } from "../../sim/ai/small";
 import { downloadModel, MODEL_CHOICES, saveToDisk } from "./models";
 import { forgetPack, packInfo, storedPack, storePack } from "./pack";
 import type { BrainEvent, BrainRequest, BrainSource, GenerateOptions } from "./protocol";
@@ -318,6 +318,8 @@ export class BrainClient implements LLMClient {
     // How long, how adventurous, and where to stop, for each kind of reply.
     const shape: Record<SmallPrompt["kind"], Omit<GenerateOptions, "prompt" | "cachePrefix" | "topK" | "seed">> = {
       lines: { maxNewTokens: 220, temperature: 0.85, topP: 0.92, repetitionPenalty: 1.15, stop: ["<|im_", "\n\n\n"] },
+      // One person's next line: short, and stop before anyone else speaks.
+      turn: { maxNewTokens: 48, temperature: 0.85, topP: 0.92, repetitionPenalty: 1.15, stop: ["\n", "<|im_"] },
       thought: { maxNewTokens: 60, temperature: 0.9, topP: 0.92, repetitionPenalty: 1.1, stop: ["\n"] },
       // A pick and a reason: stop before it starts listing the options again.
       choice: { maxNewTokens: 44, temperature: 0.6, topP: 0.9, repetitionPenalty: 1.05, stop: ["\n\n", "<|im_", ...Array.from({ length: 9 }, (_, i) => `\n${i + 1}`)] },
@@ -332,6 +334,9 @@ export class BrainClient implements LLMClient {
     if (p.kind === "lines") {
       const lines = readLines(text, p.names ?? []);
       json = lines.length >= 2 ? { lines } : null;
+    } else if (p.kind === "turn") {
+      const line = readTurn(text, p.names?.[0] ?? "", p.names?.[1] ?? "");
+      json = line ? { line } : null;
     } else if (p.kind === "thought") {
       const t = readThought(text, "");
       json = t ? { thought: t } : null;
@@ -347,7 +352,10 @@ export class BrainClient implements LLMClient {
 }
 
 /** What a forced (test) reply says: recognisable, and in the right shape. */
+let forcedTurns = 0;
+
 function forcedReply(kind: SmallPrompt["kind"], names: string[], prefill: string): string {
+  if (kind === "turn") return ` Well, ${names[1] ?? "you"}, that's turn ${++forcedTurns} from me. #brain`;
   if (kind === "lines") return ` Well, look who it is! #brain\n${names[1]}: Hello yourself. #brain\n${names[0]}: Busy day? #brain\n${names[1]}: Always. #brain`;
   if (kind === "thought") return "I wonder what today will bring, #brain.";
   if (kind === "plan") {

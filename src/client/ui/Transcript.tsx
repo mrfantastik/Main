@@ -24,7 +24,7 @@ export function Transcript({ c }: { c: ConversationDTO }) {
         <span>
           {when(c.t)} · {c.place}
         </span>
-        {c.source === "llm" ? <span className="chip llm">✨ {ai}</span> : <span className="chip">{c.topic === "chat" ? "improvised" : "built-in AI"}</span>}
+        {c.source === "llm" ? <span className="chip llm">{c.spoken ? "🧠 each speaking for themselves" : `✨ ${ai}`}</span> : <span className="chip">{c.topic === "chat" ? "improvised" : "built-in AI"}</span>}
         {c.live && <span className="chip good">talking now</span>}
       </div>
       {c.topics.length > 0 && <div className="meta">Talked about: {c.topics.join(" · ")}</div>}
@@ -38,6 +38,11 @@ export function Transcript({ c }: { c: ConversationDTO }) {
           </div>
         ))}
       </div>
+      {c.writing && (
+        <div className="meta" style={{ textAlign: c.lines.length % 2 === 0 ? "left" : "right" }}>
+          ✍️ {c.lines.length % 2 === 0 ? c.aName : c.bName} is speaking…
+        </div>
+      )}
       {c.summary && <div className="meta">➜ {c.summary}</div>}
     </div>
   );

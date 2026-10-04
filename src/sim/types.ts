@@ -774,7 +774,10 @@ export interface Conversation {
   lines: ConversationLine[];
   revealed: number;
   nextRevealT: number;
-  status: "talking" | "awaiting_ai" | "done";
+  /** "live": the AI is writing it line by line, each person speaking for themselves. */
+  status: "talking" | "awaiting_ai" | "live" | "done";
+  /** A live chat: whether they've said goodbye, and when the last line came (game time). */
+  live?: { done: boolean; lastLineT: number };
   /** What the initiator wanted (amount, purpose, business, loan...). */
   agenda: Record<string, ConvValue>;
   /** Engine-computed negotiation terms and limits (AI output is validated against them). */

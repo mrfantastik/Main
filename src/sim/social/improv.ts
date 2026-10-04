@@ -1596,7 +1596,24 @@ function improviseChat(world: WorldState, conv: Conversation, a: Citizen, b: Cit
 }
 
 /** When the chat ends: pass on the news, shift opinions and friendships, hand over any money promised. */
+/** Words that show a happening came up in what was said. */
+const MENTIONS: Record<Happening["kind"], RegExp> = {
+  fire: /fire|burn|smoke|blaze/i,
+  burglary: /burgl|broke in|break-in|broken into|robbed|stole|thie/i,
+  lottery: /lottery|won|numbers came up|jackpot/i,
+  celebrity: /celebrit|famous|telly|star\b/i,
+  food_poisoning: /poison|sick|ill\b|dodgy|stomach/i,
+  festival: /festival/i,
+  storm: /storm|rain|wind|weather/i,
+  power_cut: /power|electric|lights|blackout/i,
+  rent_rise: /rent/i,
+  sculpture: /column|sculpture|statue|monument/i,
+  party: /party|birthday/i,
+};
+
 export function applyNotes(world: WorldState, conv: Conversation): void {
+  // In a chat the AI spoke live, they talked about what they chose: news only passes on if it came up.
+  const said = conv.live ? conv.lines.map((l) => l.text).join(" ") : null;
   for (const n of conv.notes ?? []) {
     switch (n.t) {
       case "news": {
@@ -1604,6 +1621,7 @@ export function applyNotes(world: WorldState, conv: Conversation): void {
         const from = world.citizens[n.from];
         const h = happeningById(world, n.id);
         if (!to || !from || !h) break;
+        if (said !== null && !MENTIONS[h.kind]?.test(said)) break;
         learnNews(world, to, h, from.id);
         const k = knows(from, n.id);
         if (k && !k.told.includes(to.id)) k.told.push(to.id);

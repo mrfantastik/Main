@@ -3,14 +3,14 @@ import { logEvent } from "../events";
 import { updateNeeds } from "../systems/needs";
 import { setReflectionHook } from "../mind/reflection";
 import { placeName } from "../places";
-import { isPublic, resolveConversationAI, setConversationAIHook } from "../social/conversation";
+import { addLiveLine, endLive, isPublic, resolveConversationAI, setConversationAIHook } from "../social/conversation";
 import { dayOf } from "../time";
 import type { AgentPlanItem, AILogEntry, Citizen, Conversation, ConvValue, Reflection, WorldState } from "../types";
-import { newId, pushRing, round2 } from "../util";
+import { inDays, money, newId, pct, pushRing, round2 } from "../util";
 import { activityOptions, type ActivityOption } from "./activity";
 import { setActivityHook } from "./brain";
 import { scoreOf, setThought } from "./decision";
-import { hourLabel, smallChoicePrompt, smallConversationPrompt, smallDayPlanPrompt, smallDiaryPrompt, smallNextPrompt, smallReactionPrompt, smallThoughtPrompt, type SmallPrompt } from "./small";
+import { hourLabel, smallChoicePrompt, smallConversationPrompt, smallDayPlanPrompt, smallDiaryPrompt, smallNextPrompt, smallReactionPrompt, smallThoughtPrompt, smallTurnPrompt, type SmallPrompt, type TurnPhase } from "./small";
 import { situation } from "./situation";
 import { makeAction } from "./actions";
 import type { FreeAIClient, FreeAIStatus } from "./freeai";
@@ -58,6 +58,8 @@ interface Pending {
   world: WorldState;
   citizenId: string;
   convId?: number;
+  /** A live chat: whose turn it was, and where the chat was. */
+  turn?: { speaker: string; phase: TurnPhase };
   fallbackId?: string;
   /** Plans and diaries: which day; plans: the labels of the things they could choose from. */
   day?: number;
@@ -98,6 +100,31 @@ interface Queued {
   at: number;
 }
 
+/**
+ * A live chat: the AI speaks for each of them in turn, a line at a time, each
+ * from their own personality, feelings, memories and what's been said.
+ */
+interface Live {
+  world: WorldState;
+  convId: number;
+  /** Whose turn it is. */
+  next: string;
+  phase: TurnPhase;
+  /** Lines the AI has written so far, and how many it may write. */
+  turns: number;
+  max: number;
+  /** A request is out for the next line. */
+  waiting: boolean;
+  failures: number;
+  watched: boolean;
+  /** What happens, when the town has already decided it (a loan, a job). */
+  decided: string | null;
+  at: number;
+}
+
+/** Said when someone's leaving. */
+const GOODBYE = /\b(bye|see you|see ya|catch you|take care|got to go|gotta go|better go|better get (going|back|on)|must dash|i'm off|off now|ta-ra|cheerio|good ?night)\b/i;
+
 /** Activities the next move can be planned during (not walking, talking or between things). */
 const PLANNABLE = new Set(["sleep", "work", "eat", "shop", "socialize", "rest", "bank", "browse", "trade", "research", "restock", "job_hunt", "manage"]);
 /** Options within this much of the best are offered to the model... */
@@ -134,6 +161,8 @@ export class AIDirector {
   private plans = new Map<string, Plan>();
   /** Conversations waiting for the town's brain. */
   private queue: Queued[] = [];
+  /** Live chats the town's brain is speaking for, line by line (by conversation id). */
+  private live = new Map<number, Live>();
   /** What was asked for last (conversations and choices take turns). */
   private lastKind: Pending["kind"] | null = null;
   /** Messages for the player (the server shows them as toasts). */
@@ -209,6 +238,12 @@ export class AIDirector {
     const conv = p.convId !== undefined ? world.conversations.find((x) => x.id === p.convId) : undefined;
     const other = conv ? world.citizens[conv.b]?.name : undefined;
     const waiting = this.queue.length ? ` (${this.queue.length} conversation${this.queue.length > 1 ? "s" : ""} waiting)` : "";
+    if (p.turn) {
+      const conv2 = p.convId !== undefined ? world.conversations.find((x) => x.id === p.convId) : undefined;
+      const to = conv2 ? world.citizens[p.turn.speaker === conv2.a ? conv2.b : conv2.a]?.name : undefined;
+      const lives = [...this.live.values()].filter((l) => l.world === world).length;
+      return `Speaking as ${world.citizens[p.turn.speaker]?.name ?? "someone"}${to ? `, talking to ${to}` : ""}${lives > 1 ? ` (${lives} conversations going)` : ""}`;
+    }
     const what: Record<Pending["kind"], string> = {
       plan: `Deciding what ${name} does next`,
       dayplan: `Planning ${name}'s day`,
@@ -277,7 +312,7 @@ export class AIDirector {
 
   // --------------------------------------------------- conversations
 
-  private conversationHook(world: WorldState, conv: Conversation, brief: string, outcomeSchema: Record<string, unknown>, stakes: number): boolean {
+  private conversationHook(world: WorldState, conv: Conversation, brief: string, outcomeSchema: Record<string, unknown>, stakes: number): boolean | "live" {
     if (this.free) {
       // Free: voice every conversation there's room for.
       if (conv.topic !== "chat" && !CONVERSATION_TOPICS.has(conv.topic)) return false;
@@ -290,8 +325,18 @@ export class AIDirector {
         this.send(world, { kind: "conversation", citizenId: conv.a, convId: conv.id }, FREE_CONVERSATION_SYSTEM, user, schema);
         return true;
       }
-      // The town's brain does one thing at a time: the conversation waits its turn (briefly; see schedule).
-      if (!this.canCall(world, true) || (this.queue.length >= 2 && !watched)) return false;
+      // The town's brain speaks for each of them, line by line, as many conversations as it can keep up with.
+      if (!this.canCall(world, true)) return false;
+      const lives = [...this.live.values()].filter((l) => l.world === world).length;
+      const limit = (this.client?.parallel?.() ?? 1) >= 4 ? 3 : 1;
+      if (watched || lives < limit) {
+        const a = world.citizens[conv.a];
+        const leisure = a && ["socialize", "eat", "rest", "talk", "idle", "shop", "browse"].includes(a.activity.kind);
+        const max = conv.topic === "chat" ? (leisure ? 10 : 6) : conv.topic === "argue" ? 4 : 6;
+        this.live.set(conv.id, { world, convId: conv.id, next: conv.a, phase: "open", turns: 0, max, waiting: false, failures: 0, watched, decided: this.decided(world, conv), at: Date.now() });
+        return "live";
+      }
+      if (this.queue.length >= 2) return false;
       const q: Queued = { world, convId: conv.id, citizenId: conv.a, watched, small: smallConversationPrompt(world, conv, brief), user, schema, at: Date.now() };
       if (watched) this.queue.unshift(q);
       else this.queue.push(q);
@@ -318,6 +363,101 @@ export class AIDirector {
     const { user, schema } = conversationPrompt(world, conv, brief, outcomeSchema);
     this.send(world, { kind: "conversation", citizenId: conv.a, convId: conv.id }, CONVERSATION_SYSTEM, user, schema);
     return true;
+  }
+
+  /** What happens in a conversation the town has already settled, in words (null for a chat). */
+  private decided(world: WorldState, conv: Conversation): string | null {
+    const A = world.citizens[conv.a]?.name ?? "A";
+    const B = world.citizens[conv.b]?.name ?? "B";
+    const o = conv.fallback?.outcome ?? {};
+    const g = conv.agenda;
+    const n = (v: ConvValue | undefined) => (typeof v === "number" ? v : 0);
+    switch (conv.topic) {
+      case "chat":
+        return null;
+      case "ask_loan":
+        return `${A} asks ${B} to lend them ${money(n(g.amount))}${g.purpose ? ` to ${g.purpose}` : ""}. ${o.agreed ? `${B} agrees to lend ${money(n(o.amount))} at ${pct(n(o.rate))} interest, paid back ${inDays(n(o.days))}.` : `${B} says no.`}`;
+      case "pitch_investment":
+        return `${A} asks ${B} to invest in their business. ${o.agreed ? `${B} puts in ${money(n(o.amount))} for ${pct(n(o.share))} of the profits.` : `${B} says no.`}`;
+      case "ask_job":
+        return `${A} asks ${B} for a job. ${o.agreed ? `${B} takes them on at ${money(n(o.wage))} a day.` : `${B} has nothing for them.`}`;
+      case "offer_job":
+        return `${A} offers ${B} a job. ${o.agreed ? `${B} takes it, at ${money(n(o.wage))} a day.` : `${B} turns it down.`}`;
+      case "demand_repayment": {
+        const r = String(o.result ?? "");
+        return `${A} wants back the money ${B} owes them. ${r === "paid" ? `${B} pays it all back.` : r === "partial" ? `${B} pays some of it now.` : r === "promise" ? `${B} can't pay yet and promises to soon.` : `${B} refuses to pay.`}`;
+      }
+      case "ask_help":
+        return `${A} is broke and asks ${B} for help. ${o.agreed ? `${B} gives them ${money(n(o.gift))}.` : `${B} can't give them money.`}`;
+      case "share_tip":
+        return `${A} has a tip about where prices are going. ${o.agreed ? `${B} takes it${n(o.price) ? ` for ${money(n(o.price))}` : ""}.` : `${B} isn't interested.`}`;
+      case "sell_stock":
+        return `${A} offers to sell ${B} some stock. ${o.agreed ? `${B} buys ${n(o.qty)} at ${money(n(o.price))} each.` : "They don't agree on a price."}`;
+      case "argue":
+        return `${A} has it out with ${B}: "${String(conv.terms.reason ?? "")}". It's an argument; nobody backs down.`;
+      default:
+        return null;
+    }
+  }
+
+  /** The next line of the live chat that most needs one (the one being watched first; `watchedOnly`: only that one). */
+  private maybeLiveTurn(world: WorldState, watchedOnly = false): boolean {
+    for (const [id, l] of this.live) {
+      const conv = world.conversations.find((x) => x.id === id);
+      if (l.world !== world) continue;
+      if (!conv || conv.status !== "live" || conv.live?.done) this.live.delete(id);
+    }
+    const ready = [...this.live.values()].filter((l) => l.world === world && !l.waiting && (!watchedOnly || l.watched));
+    const l = ready.find((x) => x.watched) ?? ready.sort((x, y) => x.at - y.at)[0];
+    if (!l) return false;
+    const conv = world.conversations.find((x) => x.id === l.convId)!;
+    const me = world.citizens[l.next];
+    const them = world.citizens[l.next === conv.a ? conv.b : conv.a];
+    if (!me || !them) return false;
+    l.waiting = true;
+    const small = smallTurnPrompt(world, conv, me, them, l.phase, l.decided);
+    this.send(world, { kind: "conversation", citizenId: me.id, convId: conv.id, turn: { speaker: me.id, phase: l.phase } }, FREE_CONVERSATION_SYSTEM, small.user, {}, small);
+    return true;
+  }
+
+  /** A line for a live chat came back: say it, and decide who speaks next and whether they're winding up. */
+  private applyTurnResult(world: WorldState, d: Done): void {
+    const l = this.live.get(d.pending.convId!);
+    const conv = world.conversations.find((x) => x.id === d.pending.convId);
+    if (!l || l.world !== world || !conv || conv.status !== "live") {
+      this.live.delete(d.pending.convId!);
+      return;
+    }
+    l.waiting = false;
+    const speaker = d.pending.turn!.speaker;
+    const reply = d.json as { line?: unknown } | null;
+    let line = reply && typeof reply.line === "string" ? reply.line.trim() : "";
+    // Not the same thing twice, and not the other person's words.
+    if (line && conv.lines.some((x) => x.text.toLowerCase() === line.toLowerCase())) line = "";
+    if (!line) {
+      l.failures++;
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : "no usable line");
+      if (l.failures >= 2) {
+        // It isn't working: they part with the built-in goodbye (or the built-in conversation, if it never got going).
+        endLive(world, conv.id, true);
+        this.live.delete(conv.id);
+      }
+      return;
+    }
+    l.failures = 0;
+    addLiveLine(world, conv.id, { speaker, text: line });
+    l.turns++;
+    const name = world.citizens[speaker]?.name ?? "someone";
+    this.log(world, d, "ok", line, `${name} said it (line ${l.turns}${l.phase === "byeback" ? ", goodbye" : ""})`);
+    if (l.phase === "byeback") {
+      endLive(world, conv.id, false);
+      this.live.delete(conv.id);
+      this.tally.conversation++;
+      return;
+    }
+    // Winding up: a goodbye gets one back; near the end, someone says it.
+    l.phase = l.phase === "wrap" || (l.turns >= 4 && GOODBYE.test(line)) ? "byeback" : l.turns >= l.max - 2 ? "wrap" : "talk";
+    l.next = speaker === conv.a ? conv.b : conv.a;
   }
 
   // ------------------------------------------------ what's next (free AI)
@@ -349,9 +489,10 @@ export class AIDirector {
       if (q) this.send(world, { kind: "conversation", citizenId: q.citizenId, convId: q.convId }, FREE_CONVERSATION_SYSTEM, q.user, q.schema, q.small);
       return !!q;
     };
-    if (this.maybeReact(world) || (this.queue[0]?.watched && talk()) || this.maybeNext(world, true) || this.maybeDayPlan(world, true) || this.maybeThink(world, true)) return true;
+    if (this.maybeReact(world) || this.maybeLiveTurn(world, true) || (this.queue[0]?.watched && talk()) || this.maybeNext(world, true) || this.maybeDayPlan(world, true) || this.maybeThink(world, true)) return true;
     const turns: [Pending["kind"], () => boolean][] = [
-      ["conversation", talk],
+      // Live chats (people are standing there waiting for the next line) take turns with everything else.
+      ["conversation", () => this.maybeLiveTurn(world) || talk()],
       ["plan", () => this.maybeNext(world, false)],
       ["dayplan", () => this.maybeDayPlan(world, false)],
     ];
@@ -847,6 +988,7 @@ export class AIDirector {
       else if (d.pending.kind === "plan") this.applyPlanResult(world, d);
       else if (d.pending.kind === "dayplan") this.applyDayPlanResult(world, d);
       else if (d.pending.kind === "diary") this.applyDiaryResult(world, d);
+      else if (d.pending.turn) this.applyTurnResult(world, d);
       else this.applyConversationResult(world, d);
     }
     // Replies first, so the next request goes out as soon as the last one is in.

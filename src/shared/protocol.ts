@@ -280,6 +280,10 @@ export interface ConversationDTO {
   topics: string[];
   /** Still being spoken (lines reveal over time). */
   live: boolean;
+  /** Spoken live by the AI: each of them writing their own lines, in turn. */
+  spoken?: boolean;
+  /** The next line is being written. */
+  writing?: boolean;
 }
 
 export interface CitizenDetail {

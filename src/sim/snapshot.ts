@@ -248,6 +248,8 @@ export function conversationDTO(world: WorldState, c: Conversation): Conversatio
     source: c.source,
     topics: c.topics ?? [],
     live: c.status !== "done",
+    spoken: !!c.live,
+    writing: c.status === "live" && !c.live?.done,
   };
 }
 

@@ -63,12 +63,25 @@ function migrate(raw: unknown): WorldState | null {
     b.staffedHoursYesterday ??= 0;
     b.agencyEarned ??= 0;
   }
-  // Conversations waiting on an AI reply fall back to their template version.
+  // Conversations waiting on an AI reply fall back to their template version;
+  // a live chat that was cut off by saving ends there, with a goodbye.
   for (const conv of w.conversations) {
     if (conv.status === "awaiting_ai" && conv.fallback) {
       conv.status = "talking";
       conv.lines = conv.fallback.lines;
       conv.outcome = conv.fallback.outcome;
+    }
+    if (conv.status === "live" && conv.live && !conv.live.done && conv.fallback) {
+      conv.live.done = true;
+      if (conv.lines.length < 2) {
+        conv.lines = conv.fallback.lines;
+        conv.source = "template";
+      } else {
+        const last = conv.lines[conv.lines.length - 1].speaker;
+        const byes = conv.fallback.lines.slice(-2);
+        if (byes.length === 2) conv.lines.push({ speaker: last === conv.a ? conv.b : conv.a, text: byes[0].text }, { speaker: last, text: byes[1].text });
+      }
+      conv.revealed = Math.min(conv.revealed, conv.lines.length);
     }
   }
   return w;

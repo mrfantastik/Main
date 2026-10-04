@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { advance, newWorld } from "../src/sim";
 import { AIDirector } from "../src/sim/ai/director";
 import type { LLMClient, LLMRequest } from "../src/sim/ai/llm";
-import { hourLabel, looksLikeSpeech, readChoice, readDiary, readLines, readPlan, readThought, smallChoicePrompt, smallConversationPrompt, smallThoughtPrompt, withNames } from "../src/sim/ai/small";
+import { hourLabel, looksLikeSpeech, readChoice, readDiary, readLines, readPlan, readThought, readTurn, smallChoicePrompt, smallConversationPrompt, smallThoughtPrompt, smallTurnPrompt, withNames } from "../src/sim/ai/small";
 import type { Conversation, WorldState } from "../src/sim/types";
 
 test("reading a small model's dialogue: only the two of them, until it wanders off", () => {
@@ -80,6 +80,12 @@ function fakeBrain(seen: LLMRequest[], opts: { ready?: () => boolean; slow?: () 
         return { json: { items: readPlan(text, p.options!, p.labels!) }, inputTokens: 0, outputTokens: 0, model: "brain" };
       }
       if (p.kind === "diary") return { json: { text: readDiary(`${p.prefill} was long, but I got through it. Tomorrow I'll ring Mum.`) }, inputTokens: 0, outputTokens: 0, model: "brain" };
+      if (p.kind === "turn") {
+        // A line of its own each time, as the person whose turn it is (the other's name shows it was meant for them).
+        const n = seen.filter((r) => r.small?.kind === "turn").length;
+        const line = /goodbye/.test(p.user) ? `Right, I'd better go. Bye, ${p.names![1]}!` : `${p.names![1]}, that's the ${n}th thing I've said today, honestly.`;
+        return { json: { line: readTurn(`${p.prefill} ${line}`, p.names![0], p.names![1]) }, inputTokens: 0, outputTokens: 0, model: "brain" };
+      }
       const friend = p.options?.findIndex((id) => id.startsWith("see:")) ?? -1;
       const json =
         p.kind === "lines"
@@ -128,11 +134,52 @@ test("with the brain awake, people think and talk through it; asleep, nothing is
     }
   }
   assert.ok(seen.every((r) => r.small), "every request carries a short prompt");
-  const voiced = [...seenConvs.values()].filter((c) => c.source === "llm");
-  assert.ok(voiced.length >= 3, `only ${voiced.length} conversations voiced`);
-  for (const c of voiced) assert.equal(c.lines[1].text, "I live round the corner, you know.");
+  // Live chats: each of them speaks for themselves, a line at a time, taking turns, and they say goodbye.
+  const voiced = [...seenConvs.values()].filter((c) => c.source === "llm" && c.live);
+  assert.ok(voiced.length >= 3, `only ${voiced.length} conversations spoken live`);
+  for (const c of voiced) {
+    const name = (id: string) => w.citizens[id].name;
+    assert.equal(c.lines[0].speaker, c.a, "whoever started it speaks first");
+    assert.ok(c.lines.length >= 4, `a real exchange (${c.lines.length} lines)`);
+    c.lines.forEach((l, i) => {
+      if (i) assert.notEqual(l.speaker, c.lines[i - 1].speaker, "they take turns");
+      assert.ok(l.text.includes(name(l.speaker === c.a ? c.b : c.a)), `each line is said to the other one: "${l.text}"`);
+    });
+    assert.match(c.lines[c.lines.length - 1].text, /\bBye\b/, "and they say goodbye");
+  }
+  assert.ok(seen.some((r) => r.small!.kind === "turn" && /The conversation so far:/.test(r.small!.user)), "each turn sees what's been said");
   assert.ok(!w.ai.log.some((l) => l.kind === "reflection"), "lessons aren't reworded by a small model");
   assert.match(d.invent(w) ?? "", /bigger AI/);
+});
+
+test("a live chat turn: who they are, what's on their mind, who they're with, what's been said, and what to do now", () => {
+  const w = newWorld(90);
+  advance(w, 600);
+  const conv = chat(w, 0, 1);
+  const [a, b] = [w.citizens[conv.a], w.citizens[conv.b]];
+  const open = smallTurnPrompt(w, conv, a, b, "open", null);
+  assert.equal(open.kind, "turn");
+  assert.equal(open.prefill, `${a.name}:`);
+  assert.match(open.user, new RegExp(`^You are ${a.name} \\(`), "they speak as themselves");
+  assert.match(open.user, new RegExp(`with ${b.name} \\(`));
+  assert.match(open.user, /Start the conversation/);
+  assert.ok(!/The conversation so far/.test(open.user), "nothing said yet");
+  conv.lines = [{ speaker: a.id, text: "Morning! You look shattered." }];
+  const reply = smallTurnPrompt(w, conv, b, a, "talk", null);
+  assert.match(reply.user, new RegExp(`The conversation so far:\\n${a.name}: Morning! You look shattered\\.`));
+  assert.match(reply.user, new RegExp(`Answer what ${a.name} just said`));
+  assert.match(smallTurnPrompt(w, conv, b, a, "wrap", null).user, /say goodbye/);
+  assert.match(smallTurnPrompt(w, conv, a, b, "byeback", `${b.name} says no.`).user, new RegExp(`already decided, stick to it\\): ${b.name} says no\\.[\\s\\S]*Say goodbye back`));
+  assert.ok(reply.user.length < 1400, `short enough for a small model (${reply.user.length} chars)`);
+});
+
+test("reading one line of a live chat: just what they say, as them", () => {
+  assert.equal(readTurn("Mike: Alright, Sarah? You look done in.\nSarah: Cheers.", "Mike", "Sarah"), "Alright, Sarah? You look done in.");
+  assert.equal(readTurn('Mike: "Not bad, thanks." *smiles* Sarah: You?', "Mike", "Sarah"), "Not bad, thanks.");
+  assert.equal(readTurn("Mike: (laughs) Go on then. One more. And then I'm off. Honest.", "Mike", "Sarah"), "Go on then. One more.");
+  assert.equal(readTurn("Mike: <|im_end|>", "Mike", "Sarah"), "");
+  assert.equal(readTurn("Mike: As an AI language model, I can't.", "Mike", "Sarah"), "");
+  assert.equal(readTurn("Mike: Hello! How can I help you today?", "Mike", "Sarah"), "", "not a chatbot talking to its user");
 });
 
 test("a slow brain (no graphics card) only voices the conversations you're watching", async () => {
