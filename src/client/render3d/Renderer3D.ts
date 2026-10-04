@@ -314,6 +314,9 @@ export class Renderer3D implements CityRenderer {
     this.sun.shadow.bias = -0.0015;
     this.sun.shadow.normalBias = 0.02;
     for (const m of this.people.meshes) this.scene.add(m);
+    // Layer 1 holds things only the player's cameras see (the people's see-through silhouettes).
+    this.camera.layers.enable(1);
+    this.persp.layers.enable(1);
 
     const ringGeo = new RingGeometry(0.34, 0.46, 12);
     ringGeo.rotateX(-Math.PI / 2);

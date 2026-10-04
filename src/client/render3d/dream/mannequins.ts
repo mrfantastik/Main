@@ -6,6 +6,7 @@ import {
   ConeGeometry,
   CylinderGeometry,
   DynamicDrawUsage,
+  GreaterDepth,
   InstancedMesh,
   LatheGeometry,
   Matrix4,
@@ -161,6 +162,8 @@ export class MannequinMeshes {
   private readonly shadow: InstancedMesh;
   private readonly blob: CanvasTexture;
   private readonly painted: InstancedMesh[];
+  private readonly ghosts: InstancedMesh[];
+  private readonly ghostMaterial: MeshBasicMaterial;
   private readonly all: InstancedMesh[];
   private readonly base = new Matrix4();
   private readonly torso = new Matrix4();
@@ -206,7 +209,22 @@ export class MannequinMeshes {
     this.shadow.renderOrder = 4;
     this.shadow.count = 0;
     this.painted = [this.body, this.head, ...this.arms.flatMap((l) => [l.mesh, l.child]), ...this.legs.flatMap((l) => [l.mesh, l.child])];
-    this.all = [...this.painted, this.shadow];
+    // Silhouettes: the same figures again, drawn faintly only where something
+    // stands in front of them, so nobody is lost behind a building. They share
+    // the figures' positions and colours, and live on layer 1, which the mirror
+    // and the shadows don't see.
+    this.ghostMaterial = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4, depthFunc: GreaterDepth, depthWrite: false, fog: false });
+    this.ghosts = this.painted.map((m) => {
+      const g = new InstancedMesh(m.geometry, this.ghostMaterial, max);
+      g.instanceMatrix = m.instanceMatrix;
+      g.instanceColor = m.instanceColor;
+      g.frustumCulled = false;
+      g.renderOrder = 6;
+      g.count = 0;
+      g.layers.set(1);
+      return g;
+    });
+    this.all = [...this.painted, this.shadow, ...this.ghosts];
   }
 
   get meshes(): InstancedMesh[] {
@@ -321,11 +339,12 @@ export class MannequinMeshes {
   }
 
   dispose(): void {
-    for (const m of this.all) {
+    for (const m of [...this.painted, this.shadow]) {
       m.geometry.dispose();
       (m.material as Material).dispose();
       m.dispose();
     }
+    this.ghostMaterial.dispose();
     this.blob.dispose();
   }
 }
