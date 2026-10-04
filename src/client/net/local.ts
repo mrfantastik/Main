@@ -5,6 +5,7 @@ import { BrainClient } from "../brain/client";
 import { packFromFiles, saveToDisk } from "../brain/models";
 import { createFreeAIClient } from "../../sim/ai/freeai";
 import { applyGodCommand, GodError } from "../../sim/god";
+import { saveCard } from "../../sim/mind/bot";
 import { prepareLoadedWorld } from "../../sim/migrate";
 import { SimRunner } from "../../sim/runner";
 import * as snap from "../../sim/snapshot";
@@ -340,6 +341,21 @@ export class LocalHost {
         this.dashboardOpen = msg.open;
         if (msg.open) this.deliver(snap.dashboard(w));
         break;
+      case "bot": {
+        const c = w.citizens[msg.id];
+        if (!c) break;
+        saveCard(c, msg.card);
+        this.toast(msg.card ? `🤖 Saved ${c.name}'s chatbot. They'll talk like this from now on.` : `🤖 ${c.name}'s chatbot is back to how they were.`);
+        this.pushDetail();
+        break;
+      }
+      case "chat": {
+        const c = w.citizens[msg.id];
+        if (!c) break;
+        if (!this.director.playerChat(w, c.id, msg.text)) this.toast(`🤖 To talk to ${c.name}, wake the town's brain first (🧠 AI).`, "error");
+        this.pushDetail();
+        break;
+      }
       case "god":
         try {
           this.toast(`⚡ ${applyGodCommand(w, msg.command)}`);

@@ -428,6 +428,46 @@ export interface AgentMind {
   diary: { day: number; text: string }[];
 }
 
+/**
+ * A citizen's chatbot: a character card the AI speaks from (its system
+ * prompt). Generated from their personality and story; the player can rewrite
+ * any of it.
+ */
+export interface BotCard {
+  /** Written or edited by the player. */
+  custom: boolean;
+  /** Who they are and where they come from. */
+  bio: string;
+  /** How they talk. */
+  voice: string;
+  /** Things they'd say, to show the AI their voice. */
+  examples: string[];
+  /** What matters to them, what they love and hate, what they fear and dream of. */
+  cares: string;
+  /** Something they keep to themselves. */
+  secret: string;
+  /** Anything else the player wants them to be or do. */
+  instructions: string;
+  /** 0 (steady, predictable) to 1 (wild): how adventurous their replies are. */
+  creativity: number;
+  /** 0 (a few words) to 1 (talks your ear off). */
+  chattiness: number;
+}
+
+/** The end of the last conversation two people had, as one of them remembers it. */
+export interface PairChat {
+  t: number;
+  lines: { me: boolean; text: string }[];
+}
+
+/** A line between the player and a citizen. */
+export interface PlayerChatLine {
+  t: number;
+  /** Said by the citizen (otherwise by the player). */
+  me: boolean;
+  text: string;
+}
+
 export interface Citizen {
   id: CitizenId;
   name: string;
@@ -486,6 +526,14 @@ export interface Citizen {
   shock?: { t: number; text: string };
   /** Wordings they've used lately in conversation (so they don't keep saying the same thing). */
   said?: string[];
+  /** Their chatbot, as the player wrote or edited it (otherwise it's generated from their personality: see mind/bot.ts). */
+  bot?: BotCard;
+  /** The last few things they said with each person, for the next time they meet. */
+  chats?: Record<CitizenId, PairChat>;
+  /** What they and the player have said to each other (newest last). */
+  playerChat?: PlayerChatLine[];
+  /** The player is waiting for their answer. */
+  chatWaiting?: boolean;
   thoughtT: number;
   /** 1 mundane, 2 urgent need, 3 strategic/social, 4 major life event. */
   thoughtPriority: number;
@@ -934,7 +982,7 @@ export interface AILogEntry {
   id: number;
   t: number;
   citizenId: CitizenId | null;
-  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary";
+  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary" | "chat";
   prompt: string;
   response: string;
   costUsd: number;

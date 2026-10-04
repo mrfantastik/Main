@@ -19,6 +19,7 @@ import type { Citizen, Conversation, ConversationTopic, ConvValue, EventCategory
 import { clamp, inDays, money, newId, pct, pushRing, round2 } from "../util";
 import { hotNews, knows } from "../town/happenings";
 import { applyNotes, improvise } from "./improv";
+import { rememberChat } from "../mind/bot";
 import { talkIn } from "./talk";
 import { argueDialogue, helpDialogue, investDialogue, jobDialogue, loanDialogue, repaymentDialogue, tipDialogue } from "./dialogue";
 import { compatibility } from "./encounters";
@@ -783,6 +784,7 @@ function finish(world: WorldState, conv: Conversation): void {
   const b = world.citizens[conv.b];
   conv.status = "done";
   conv.endT = world.time;
+  rememberChat(world, conv);
   if (a && b && conv.outcome) {
     const item = handlers[conv.topic].apply(world, conv, a, b);
     if (item) logEvent(world, item.cat, item.text, item.importance, [a.id, b.id]).conversationId = conv.id;

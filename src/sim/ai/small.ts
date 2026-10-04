@@ -4,6 +4,7 @@ import { dayOf, formatTime } from "../time";
 import type { Citizen, Conversation, SpeakingStyle, WorldState } from "../types";
 import { money } from "../util";
 import { situation } from "./situation";
+import { botCard } from "../mind/bot";
 
 // Prompts and readers for a small language model running in the page (the
 // town's brain). A model with a few hundred million parameters does best with
@@ -131,6 +132,11 @@ export function withNames(text: string, a: Citizen, b: Citizen): string {
 export interface SmallPrompt {
   system: string;
   user: string;
+  /** A chat: the turns so far (the other person as "user", this one as "assistant"), instead of one user message. */
+  messages?: { role: "user" | "assistant"; content: string }[];
+  /** This chatbot's own settings: how adventurous, how long. */
+  temperature?: number;
+  maxTokens?: number;
   /** The start of the reply, written for the model (it carries on from here). */
   prefill: string;
   kind: "lines" | "turn" | "thought" | "choice" | "plan" | "diary";
@@ -166,42 +172,145 @@ export function smallConversationPrompt(world: WorldState, conv: Conversation, b
   return { system: SMALL_TALK_SYSTEM, user, prefill: `${a.name}:`, kind: "lines", names: [a.name, b.name] };
 }
 
-/** Where a live chat is: starting it, in the middle, winding it up, or saying goodbye back. */
-export type TurnPhase = "open" | "talk" | "wrap" | "byeback";
+/** How they stand with someone, said to them ("You get on well with Sarah"). */
+function relationTo(world: WorldState, me: Citizen, them: Citizen): string {
+  if (me.family.includes(them.id)) return `${them.name} is family.`;
+  const r = me.relationships[them.id];
+  if (!r || r.familiarity < 5) return `You don't really know ${them.name}.`;
+  if (r.affinity > 50) return `${them.name} is one of your closest friends.`;
+  if (r.affinity > 20) return `You get on well with ${them.name}.`;
+  if (r.affinity < -40) return `You can't stand ${them.name}.`;
+  if (r.affinity < -10) return `You're wary of ${them.name}.`;
+  return `You know ${them.name} a little.`;
+}
+
+/** "the other day", "yesterday": when something was, as people say it. */
+function ago(world: WorldState, t: number): string {
+  const d = dayOf(world.time) - dayOf(t);
+  return d <= 0 ? "earlier today" : d === 1 ? "yesterday" : d < 7 ? "the other day" : "a while back";
+}
 
 /**
- * One person's turn in a live chat: who they are, how they feel, what's on
- * their mind, what they remember about the other person, where they are, and
- * the conversation so far. They say the next thing, as themselves.
- * `decided`: what happens, when the town has already settled it (a loan, a job).
+ * A citizen's chatbot system prompt: their character card (who they are, how
+ * they talk, with examples, what they care about, their secret, the player's
+ * own instructions), then how they are right now, where they are, and who
+ * they're talking to: how they get on, what they remember about them, and how
+ * their last conversation went. `them` null: they're talking to the player.
  */
-export function smallTurnPrompt(world: WorldState, conv: Conversation, me: Citizen, them: Citizen, phase: TurnPhase, decided: string | null): SmallPrompt {
-  const remember = [...me.memories.short, ...me.memories.long]
-    .filter((m) => m.people.includes(them.id) && m.importance >= 3)
-    .sort((x, y) => y.t - x.t)
-    .slice(0, 2)
-    .map((m) => `- ${m.text}`);
-  const said = conv.lines.slice(-8).map((l) => `${world.citizens[l.speaker]?.name ?? "?"}: ${l.text}`);
-  const ask =
-    phase === "open"
-      ? `You've just run into ${them.name}. Start the conversation your way.`
-      : phase === "wrap"
-        ? `You need to go now. Answer what ${them.name} said, then say goodbye your way.`
-        : phase === "byeback"
-          ? `${them.name} is leaving. Say goodbye back.`
-          : `Answer what ${them.name} just said, as yourself, and add something of your own: a question, an opinion, or your news.`;
-  const user = [
-    `You are ${sketch(world, me)}`,
-    ...onTheirMind(world, me).map((x) => `- ${x}`),
-    `You're at ${placeName(world, conv.buildingId)}, ${partOfDay(world.time)}, with ${them.name} (${them.age}, ${job(world, them)}). ${relation(world, me, them)}.`,
-    remember.length ? `You remember:\n${remember.join("\n")}` : "",
-    decided ? `What happens (already decided, stick to it): ${decided}` : "",
-    said.length ? `The conversation so far:\n${said.join("\n")}` : "",
-    ask,
+export function botSystem(world: WorldState, me: Citizen, them: Citizen | null, opts: { decided?: string | null; place?: string | null } = {}): string {
+  const card = botCard(me);
+  const d = dominantEmotion(me);
+  const s = situation(world, me);
+  const today = dayOf(world.time);
+  const lately = [...me.memories.short, ...me.memories.long].filter((m) => dayOf(m.t) >= today - 1 && m.importance >= 6 && m.kind !== "conversation").sort((a, b) => b.importance - a.importance)[0];
+  const diary = me.agent?.diary[me.agent.diary.length - 1];
+  const heard = me.news
+    .slice(-2)
+    .map((k) => world.happenings.find((h) => h.id === k.id)?.title)
+    .filter(Boolean);
+  const now = [
+    `You feel ${d && d.level >= 30 ? FEEL[d.emotion] : "fine"}.`,
+    s.worry ? `On your mind: "${s.worry}"` : "",
+    lately ? `Lately: "${lately.text}"` : "",
+    diary && diary.day >= today - 1 ? `Your diary last night: "${diary.text}"` : "",
+    heard.length ? `You've heard about: ${heard.join("; ")}.` : "",
+  ].filter(Boolean);
+  const about: string[] = [];
+  if (them) {
+    const mems = [...me.memories.short, ...me.memories.long]
+      .filter((m) => m.people.includes(them.id) && m.importance >= 3 && m.kind !== "conversation")
+      .sort((a, b) => b.t - a.t)
+      .slice(0, 2)
+      .map((m) => `- "${m.text}"`);
+    about.push(`You're talking to ${them.name} (${them.age}, ${job(world, them)}). ${relationTo(world, me, them)}`);
+    if (mems.length) about.push(`What you remember about ${them.name}:\n${mems.join("\n")}`);
+    const last = me.chats?.[them.id];
+    if (last && last.lines.length) about.push(`Last time you two talked (${ago(world, last.t)}):\n${last.lines.map((l) => `${l.me ? "You" : them.name}: ${l.text}`).join("\n")}`);
+  } else {
+    about.push("You're talking to a visitor to Hustle City you've seen around but don't know well. Be yourself with them.");
+  }
+  const say = card.chattiness < 0.35 ? "one short sentence" : card.chattiness < 0.7 ? "one or two short sentences" : "two or three sentences";
+  return [
+    `You are ${me.name} ${me.surname}, ${me.age}, ${job(world, me)} in Hustle City, a small British town.`,
+    card.bio,
+    `${card.voice} The way you talk:\n${card.examples.map((x) => `"${x}"`).join("\n")}`,
+    card.cares,
+    card.secret ? `Your secret (keep it to yourself unless you really trust someone): ${card.secret}` : "",
+    card.instructions ? `Also: ${card.instructions}` : "",
+    `Right now: ${now.join(" ")}`,
+    opts.place !== undefined ? `You're at ${placeName(world, opts.place ?? null)}, ${partOfDay(world.time)}.` : "",
+    ...about,
+    opts.decided ? `What happens now (already decided, stick to it): ${opts.decided}` : "",
+    `Stay in character as ${me.name}: talk like a real person, never like an assistant. Reply with only what you say out loud, ${say}.`,
   ]
     .filter(Boolean)
     .join("\n");
-  return { system: SMALL_CHAT_SYSTEM, user, prefill: `${me.name}:`, kind: "turn", names: [me.name, them.name] };
+}
+
+/** Where a live chat is: starting it, in the middle, winding it up, or saying goodbye back. */
+export type TurnPhase = "open" | "talk" | "wrap" | "byeback";
+
+/** Turns in chat form: the other person speaks as "user" (with their name), this one as "assistant". Consecutive lines from the same side are joined. */
+function chatTurns(lines: { mine: boolean; text: string }[], them: string, cue: string): { role: "user" | "assistant"; content: string }[] {
+  const out: { role: "user" | "assistant"; content: string }[] = [{ role: "user", content: cue }];
+  for (const l of lines) {
+    const role = l.mine ? "assistant" : "user";
+    const content = l.mine ? l.text : `${them}: ${l.text}`;
+    const last = out[out.length - 1];
+    if (last.role === role) last.content += `\n${content}`;
+    else out.push({ role, content });
+  }
+  return out;
+}
+
+/**
+ * One person's turn in a live chat, as their own chatbot: their character
+ * card and how they are as the system prompt, then the conversation so far as
+ * chat turns. `decided`: what happens, when the town has already settled it.
+ */
+export function smallTurnPrompt(world: WorldState, conv: Conversation, me: Citizen, them: Citizen, phase: TurnPhase, decided: string | null): SmallPrompt {
+  const card = botCard(me);
+  const system = botSystem(world, me, them, { decided, place: conv.buildingId });
+  const scene = `(You've run into ${them.name} at ${placeName(world, conv.buildingId)}.${conv.lines.length ? "" : " Start the conversation."})`;
+  const messages = chatTurns(
+    conv.lines.slice(-10).map((l) => ({ mine: l.speaker === me.id, text: l.text })),
+    them.name,
+    scene,
+  );
+  const cue = phase === "wrap" ? "(You need to go now: answer, then say goodbye your way.)" : phase === "byeback" ? `(${them.name} is leaving. Say goodbye back.)` : "";
+  if (cue) {
+    const last = messages[messages.length - 1];
+    if (last.role === "user") last.content += `\n${cue}`;
+    else messages.push({ role: "user", content: cue });
+  }
+  return {
+    system,
+    user: messages.map((m) => m.content).join("\n"),
+    messages,
+    prefill: "",
+    kind: "turn",
+    names: [me.name, them.name],
+    temperature: Math.round((0.55 + card.creativity * 0.5) * 100) / 100,
+    maxTokens: Math.round(28 + card.chattiness * 60),
+  };
+}
+
+/** The player talking to a citizen: their chatbot, and everything the two of them have said so far. */
+export function smallPlayerChatPrompt(world: WorldState, me: Citizen): SmallPrompt {
+  const card = botCard(me);
+  const system = botSystem(world, me, null, { place: me.insideId });
+  const lines = (me.playerChat ?? []).slice(-12).map((l) => ({ mine: l.me, text: l.text }));
+  const messages = chatTurns(lines, "Visitor", "(A visitor comes up to talk to you.)");
+  return {
+    system,
+    user: messages.map((m) => m.content).join("\n"),
+    messages,
+    prefill: "",
+    kind: "turn",
+    names: [me.name, "Visitor"],
+    temperature: Math.round((0.55 + card.creativity * 0.5) * 100) / 100,
+    maxTokens: Math.round(36 + card.chattiness * 70),
+  };
 }
 
 /** What someone is thinking right now. */
@@ -339,13 +448,16 @@ export function readTurn(text: string, me: string, them: string): string {
     .replace(/^["“'\s]+|["”'\s]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  const sentences = t.match(/[^.!?]+[.!?]+["”']?/g) ?? (t ? [t] : []);
-  t = sentences
-    .slice(0, 2)
-    .map((x) => x.trim())
-    .join(" ");
+  // Up to three sentences (a chatty one says more), as long as they fit.
+  const sentences = (t.match(/[^.!?]+[.!?]+["”']?/g) ?? (t ? [t] : [])).map((x) => x.trim());
+  let kept = "";
+  for (const x of sentences.slice(0, 3)) {
+    if (kept && (kept + " " + x).length > 210) break;
+    kept = kept ? `${kept} ${x}` : x;
+  }
+  t = kept;
   if (t && !/[.!?…]$/.test(t)) t += ".";
-  return t.length >= 2 && t.length <= 200 && looksLikeSpeech(t) ? t : "";
+  return t.length >= 2 && t.length <= 220 && looksLikeSpeech(t) ? t : "";
 }
 
 /** The first sentence or two, cleaned up. */

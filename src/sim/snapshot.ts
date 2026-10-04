@@ -22,6 +22,7 @@ import { debtsOf, netWorth } from "./economy/valuation";
 import { breakthroughThreshold } from "./economy/research";
 import { recentMemories } from "./memory/memory";
 import { dominantEmotion, EMOTION_EMOJI } from "./mind/emotions";
+import { botCard } from "./mind/bot";
 import { personalitySummary } from "./mind/personality";
 import { relLabel } from "./social/relationships";
 import { dayOf, formatTime } from "./time";
@@ -343,6 +344,9 @@ export function citizenDetail(world: WorldState, id: string): CitizenDetail | nu
       .map((t) => txDTO(world, t)),
     decisions: [...c.strategyLog.slice(-8), ...c.decisions.slice(-10)].sort((a, b) => b.t - a.t),
     agent: c.agent ? { plan: c.agent.plan && c.agent.plan.day === dayOf(world.time) ? c.agent.plan.items : null, diary: [...c.agent.diary].reverse() } : null,
+    bot: botCard(c),
+    playerChat: (c.playerChat ?? []).slice(-30),
+    chatWaiting: !!c.chatWaiting,
     financeHistory: c.finance.history.slice(-30),
     loans: world.loans.filter((l) => (l.borrower === c.id || l.lender === c.id) && (l.status === "active" || world.time - l.dueT < 3 * 1440)).map((l) => loanDTO(world, l)),
     research: { points: Math.round(c.research.points), threshold: breakthroughThreshold(c), breakthroughs: c.research.breakthroughs, patents: c.research.patents },

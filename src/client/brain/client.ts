@@ -101,6 +101,12 @@ function chatml(system: string, user: string, prefill: string): string {
   return `${chatmlStart(system)}${user}<|im_end|>\n<|im_start|>assistant\n${prefill}`;
 }
 
+/** A whole chat so far (starting with the user), ready for the next assistant turn. */
+function chatmlTurns(system: string, messages: { role: "user" | "assistant"; content: string }[], prefill: string): string {
+  const body = messages.map((m, i) => (i === 0 ? `${m.content}<|im_end|>\n` : `<|im_start|>${m.role}\n${m.content}<|im_end|>\n`)).join("");
+  return `${chatmlStart(system)}${body}<|im_start|>assistant\n${prefill}`;
+}
+
 type Reply = { text: string; promptTokens: number; newTokens: number; ms: number; prefillMs: number };
 
 export class BrainClient implements LLMClient {
@@ -314,12 +320,13 @@ export class BrainClient implements LLMClient {
   async complete(req: LLMRequest): Promise<LLMResponse> {
     const p = req.small;
     if (!p) throw new Error("the in-page brain only takes short prompts");
-    const base = { prompt: chatml(p.system, p.user, p.prefill), cachePrefix: chatmlStart(p.system), topK: 50, seed: Math.floor(Math.random() * 2 ** 31) };
+    const prompt = p.messages?.length && p.messages[0].role === "user" ? chatmlTurns(p.system, p.messages, p.prefill) : chatml(p.system, p.user, p.prefill);
+    const base = { prompt, cachePrefix: chatmlStart(p.system), topK: 50, seed: Math.floor(Math.random() * 2 ** 31) };
     // How long, how adventurous, and where to stop, for each kind of reply.
     const shape: Record<SmallPrompt["kind"], Omit<GenerateOptions, "prompt" | "cachePrefix" | "topK" | "seed">> = {
       lines: { maxNewTokens: 220, temperature: 0.85, topP: 0.92, repetitionPenalty: 1.15, stop: ["<|im_", "\n\n\n"] },
       // One person's next line: short, and stop before anyone else speaks.
-      turn: { maxNewTokens: 48, temperature: 0.85, topP: 0.92, repetitionPenalty: 1.15, stop: ["\n", "<|im_"] },
+      turn: { maxNewTokens: 60, temperature: 0.85, topP: 0.92, repetitionPenalty: 1.15, stop: ["\n", "<|im_"] },
       thought: { maxNewTokens: 60, temperature: 0.9, topP: 0.92, repetitionPenalty: 1.1, stop: ["\n"] },
       // A pick and a reason: stop before it starts listing the options again.
       choice: { maxNewTokens: 44, temperature: 0.6, topP: 0.9, repetitionPenalty: 1.05, stop: ["\n\n", "<|im_", ...Array.from({ length: 9 }, (_, i) => `\n${i + 1}`)] },
@@ -327,6 +334,9 @@ export class BrainClient implements LLMClient {
       diary: { maxNewTokens: 70, temperature: 0.9, topP: 0.92, repetitionPenalty: 1.1, stop: ["\n\n", "<|im_"] },
     };
     const opts: GenerateOptions = { ...base, ...shape[p.kind] };
+    // A chatbot's own settings: how adventurous and how long its replies are.
+    if (p.temperature !== undefined) opts.temperature = p.temperature;
+    if (p.maxTokens !== undefined) opts.maxNewTokens = p.maxTokens;
     if (this.forced) opts.forced = forcedReply(p.kind, p.names ?? [], p.prefill);
     const r = await this.generate(opts);
     const text = p.prefill + r.text;

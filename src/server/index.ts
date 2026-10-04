@@ -6,6 +6,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { describeSkip, type AIStatusDTO, type ClientMsg, type HelloMsg, type ServerMsg } from "../shared/protocol";
 import { newWorld as createWorld } from "../sim";
 import { applyGodCommand, GodError } from "../sim/god";
+import { saveCard } from "../sim/mind/bot";
 import * as snap from "../sim/snapshot";
 import type { WorldState } from "../sim/types";
 import { AIDirector } from "../sim/ai/director";
@@ -185,6 +186,21 @@ function handle(client: Client, msg: ClientMsg): void {
       client.dashboard = msg.open;
       if (msg.open) send(client.ws, snap.dashboard(world));
       break;
+    case "bot": {
+      const c = world.citizens[msg.id];
+      if (!c) break;
+      saveCard(c, msg.card);
+      send(client.ws, { type: "toast", text: msg.card ? `🤖 Saved ${c.name}'s chatbot.` : `🤖 ${c.name}'s chatbot is back to how they were.`, level: "info" });
+      pushDetail(client);
+      break;
+    }
+    case "chat": {
+      const c = world.citizens[msg.id];
+      if (!c) break;
+      if (!director.playerChat(world, c.id, msg.text)) send(client.ws, { type: "toast", text: `🤖 No AI is available to answer for ${c.name} right now.`, level: "error" });
+      pushDetail(client);
+      break;
+    }
     case "god": {
       try {
         const text = applyGodCommand(world, msg.command);

@@ -4,6 +4,8 @@
 import type {
   AgentPlanItem,
   ActivityKind,
+  BotCard,
+  PlayerChatLine,
   AILogEntry,
   CityMap,
   ConversationLine,
@@ -326,6 +328,11 @@ export interface CitizenDetail {
   decisions: DecisionRecord[];
   /** Run by the town's brain: their own plan for today, and their diary (newest first). */
   agent: { plan: AgentPlanItem[] | null; diary: { day: number; text: string }[] } | null;
+  /** Their chatbot's character card (the player's version if they've edited it). */
+  bot: BotCard;
+  /** What they and the player have said to each other, and whether they're answering now. */
+  playerChat: PlayerChatLine[];
+  chatWaiting: boolean;
   financeHistory: { day: number; income: number; expenses: number; netWorth: number }[];
   loans: LoanDTO[];
   research: { points: number; threshold: number; breakthroughs: number; patents: string[] };
@@ -429,6 +436,10 @@ export type ClientMsg =
       brain?: "load" | "unload" | "get" | "forget";
       model?: string;
     }
+  /** Rewrite a citizen's chatbot (null: back to the one made from their personality). */
+  | { type: "bot"; id: string; card: Partial<BotCard> | null }
+  /** Say something to a citizen. */
+  | { type: "chat"; id: string; text: string }
   | { type: "save" }
   | { type: "skip"; minutes: number }
   /** Replace the city with a saved one (the JSON from "Download world" / "Copy save"). */

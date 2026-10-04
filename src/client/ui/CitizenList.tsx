@@ -1,9 +1,9 @@
 import { store, useStore } from "../net/store";
 import { gbp, OCC_COLORS, OCC_LABEL } from "./format";
 
-export function Avatar({ name, color, ring }: { name: string; color: string; ring: string }) {
+export function Avatar({ name, color, ring, small }: { name: string; color: string; ring?: string; small?: boolean }) {
   return (
-    <div className="avatar" style={{ background: color, borderColor: ring }}>
+    <div className={`avatar${small ? " small" : ""}`} style={{ background: color, borderColor: ring ?? color }}>
       {name.slice(0, 2)}
     </div>
   );

@@ -1,5 +1,6 @@
 import { MEAL_FILLS } from "../economy/living";
 import { logEvent } from "../events";
+import { remember } from "../memory/memory";
 import { updateNeeds } from "../systems/needs";
 import { setReflectionHook } from "../mind/reflection";
 import { placeName } from "../places";
@@ -10,7 +11,8 @@ import { inDays, money, newId, pct, pushRing, round2 } from "../util";
 import { activityOptions, type ActivityOption } from "./activity";
 import { setActivityHook } from "./brain";
 import { scoreOf, setThought } from "./decision";
-import { hourLabel, smallChoicePrompt, smallConversationPrompt, smallDayPlanPrompt, smallDiaryPrompt, smallNextPrompt, smallReactionPrompt, smallThoughtPrompt, smallTurnPrompt, type SmallPrompt, type TurnPhase } from "./small";
+import { addPlayerLine } from "../mind/bot";
+import { botSystem, hourLabel, smallChoicePrompt, smallPlayerChatPrompt, smallConversationPrompt, smallDayPlanPrompt, smallDiaryPrompt, smallNextPrompt, smallReactionPrompt, smallThoughtPrompt, smallTurnPrompt, type SmallPrompt, type TurnPhase } from "./small";
 import { situation } from "./situation";
 import { makeAction } from "./actions";
 import type { FreeAIClient, FreeAIStatus } from "./freeai";
@@ -54,7 +56,7 @@ export interface DirectorOptions {
 
 interface Pending {
   id: number;
-  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary";
+  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary" | "chat";
   world: WorldState;
   citizenId: string;
   convId?: number;
@@ -253,6 +255,7 @@ export class AIDirector {
       strategy: `Weighing up a big decision for ${name}`,
       reflection: `Putting ${name}'s lessons into words`,
       invent: "Making up something that happens",
+      chat: `${name} is answering you`,
     };
     return what[p.kind] + waiting;
   }
@@ -363,6 +366,45 @@ export class AIDirector {
     const { user, schema } = conversationPrompt(world, conv, brief, outcomeSchema);
     this.send(world, { kind: "conversation", citizenId: conv.a, convId: conv.id }, CONVERSATION_SYSTEM, user, schema);
     return true;
+  }
+
+  /**
+   * The player says something to a citizen: their chatbot answers (as soon as
+   * there's room: the player comes first). False if no AI can answer.
+   */
+  playerChat(world: WorldState, citizenId: string, text: string): boolean {
+    const c = world.citizens[citizenId];
+    const said = text.trim().slice(0, 300);
+    if (!c || !said || !this.available || world.ai.mode !== "llm") return false;
+    addPlayerLine(world, c, false, said);
+    c.chatWaiting = true;
+    const small = this.small ? smallPlayerChatPrompt(world, c) : undefined;
+    // A bigger AI gets the same character card and chat, and answers in JSON.
+    const transcript = (c.playerChat ?? []).slice(-12).map((l) => `${l.me ? c.name : "Visitor"}: ${l.text}`).join("\n");
+    const system = botSystem(world, c, null, { place: c.insideId });
+    const user = `${transcript}\n\nWrite ${c.name}'s reply to the visitor, in character. JSON: {"reply": "..."}`;
+    this.send(world, { kind: "chat", citizenId: c.id }, system, user, { type: "object", properties: { reply: { type: "string" } }, required: ["reply"] }, small);
+    return true;
+  }
+
+  private applyChatResult(world: WorldState, d: Done): void {
+    const c = world.citizens[d.pending.citizenId];
+    if (!c) return;
+    c.chatWaiting = false;
+    const reply = d.json as { line?: unknown; reply?: unknown } | null;
+    const text = reply ? (typeof reply.line === "string" ? reply.line : typeof reply.reply === "string" ? reply.reply : "") : "";
+    const line = text.trim().replace(/^["“]|["”]$/g, "").slice(0, 300);
+    if (!line) {
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : `${c.name} couldn't find the words`);
+      addPlayerLine(world, c, true, "...");
+      return;
+    }
+    addPlayerLine(world, c, true, line);
+    this.log(world, d, "ok", line, `${c.name} answered you`);
+    // Being talked to cheers a person up a little, and they remember it.
+    c.needs.social = Math.min(100, c.needs.social + 4);
+    const recent = [...c.memories.short].reverse().find((m) => m.key === "visitor");
+    if (!recent || world.time - recent.t > 120) remember(world, c, { text: "A visitor stopped to chat with me.", kind: "social", importance: 3, valence: 0.3, people: [], key: "visitor" });
   }
 
   /** What happens in a conversation the town has already settled, in words (null for a chat). */
@@ -988,6 +1030,7 @@ export class AIDirector {
       else if (d.pending.kind === "plan") this.applyPlanResult(world, d);
       else if (d.pending.kind === "dayplan") this.applyDayPlanResult(world, d);
       else if (d.pending.kind === "diary") this.applyDiaryResult(world, d);
+      else if (d.pending.kind === "chat") this.applyChatResult(world, d);
       else if (d.pending.turn) this.applyTurnResult(world, d);
       else this.applyConversationResult(world, d);
     }
