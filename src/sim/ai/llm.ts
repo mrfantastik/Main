@@ -9,12 +9,15 @@ import { EMOTIONS, type Citizen, type Conversation, type Memory, type Reflection
 import { money } from "../util";
 import { relLabel } from "../social/relationships";
 import { situation } from "./situation";
+import type { SmallPrompt } from "./small";
 
 export interface LLMRequest {
   system: string;
   user: string;
   schema: Record<string, unknown>;
   maxTokens: number;
+  /** For a small in-page model: the same request, as a short prompt in a plain format. */
+  small?: SmallPrompt;
 }
 
 export interface LLMResponse {
@@ -26,6 +29,18 @@ export interface LLMResponse {
 
 export interface LLMClient {
   readonly model: string;
+  /** No cost and no budget: a free public AI (rate limited instead). */
+  readonly free?: boolean;
+  /** What the player sees ("Free AI (Pollinations)"); defaults to "Claude (model)". */
+  readonly label?: string;
+  /** A small model running in the page: send `small` prompts, one at a time, nothing too ambitious. */
+  readonly small?: boolean;
+  /** False while it can't take requests yet (e.g. the in-page model is still loading). */
+  ready?(): boolean;
+  /** Slow (an in-page model on a processor): keep it for what the player is watching. */
+  slow?(): boolean;
+  /** How many requests it can work on at once (an in-page model on a graphics card writes for several people together). */
+  parallel?(): number;
   complete(req: LLMRequest): Promise<LLMResponse>;
 }
 
@@ -161,8 +176,12 @@ export function conversationPrompt(world: WorldState, conv: Conversation, brief:
     `B sees A as: ${rel(b, a)}.${memB.length ? ` B remembers:\n${memB.join("\n")}` : ""}`,
     lessonLines(a, 2, b.id).length ? `A's lessons:\n${lessonLines(a, 2, b.id).join("\n")}` : "",
     lessonLines(b, 2, a.id).length ? `B's lessons:\n${lessonLines(b, 2, a.id).join("\n")}` : "",
+    conv.topic === "chat" && newsKnown(world, a).length ? `Town news A knows:\n${newsKnown(world, a).join("\n")}` : "",
+    conv.topic === "chat" && newsKnown(world, b).length ? `Town news B knows:\n${newsKnown(world, b).join("\n")}` : "",
     `Situation and constraints: ${brief}`,
-    `Write 3-6 alternating lines, A first. Each speaks in their own style (A ${a.personality.style}, B ${b.personality.style}), shows how they feel right now, and may bring up something they remember about the other. Then the outcome.`,
+    conv.topic === "chat"
+      ? `Write 5-10 alternating lines, A first: a natural chat that covers those beats, in their own styles (A ${a.personality.style}, B ${b.personality.style}), with their real feelings and opinions. Then the outcome (an empty object).`
+      : `Write 3-6 alternating lines, A first. Each speaks in their own style (A ${a.personality.style}, B ${b.personality.style}), shows how they feel right now, and may bring up something they remember about the other. Then the outcome.`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -185,6 +204,89 @@ export function conversationPrompt(world: WorldState, conv: Conversation, brief:
     additionalProperties: false,
   };
   return { user, schema };
+}
+
+export const THOUGHT_SYSTEM =
+  "You are the inner voice of a resident of Hustle City, a small British town in a life simulation. " +
+  "Say what they're thinking right now, in the first person, in their own voice: their worries, hopes, plans, grudges and reactions to what's going on. " +
+  "One or two sentences, under 30 words. Plain British English. No quotation marks.";
+
+/** What someone is thinking right now (the free AI writes it; nothing in the world changes). */
+export function thoughtPrompt(world: WorldState, c: Citizen): { user: string; schema: Record<string, unknown> } {
+  const s = situation(world, c);
+  const news = newsKnown(world, c).slice(-2);
+  const mem = [...c.memories.short]
+    .sort((x, y) => y.t - x.t)
+    .slice(0, 3)
+    .map((m) => `- ${m.text}`);
+  const user = [
+    `It's ${formatTime(world.time)}. ${c.name} is ${c.activity.label.toLowerCase()} (${placeName(world, c.insideId)}).`,
+    `Who they are: ${profile(world, c)}`,
+    s.worry ? `On their mind: ${s.worry}` : "",
+    mem.length ? `Lately:\n${mem.join("\n")}` : "",
+    news.length ? `News they've heard:\n${news.join("\n")}` : "",
+    `What the simulation says they're thinking (for reference only, say it your own way or think about something else on their mind): ${c.thought}`,
+    `Reply as JSON: {"thought": "..."}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return { user, schema: { type: "object", properties: { thought: { type: "string" } }, required: ["thought"] } };
+}
+
+export const FREE_CONVERSATION_SYSTEM =
+  "You write short, natural, spoken dialogue between two residents of Hustle City, a small British town in a life simulation. " +
+  "Every conversation is different: give them real opinions, jokes, questions, little details from their lives, and let their personalities and moods show. " +
+  "Spoken words only: no narration, no stage directions, no names in front of lines. Plain British English.";
+
+/**
+ * The prompt for the free AI. It writes the words; the town has already
+ * decided what happens (who agrees, how much, what news gets passed on), so
+ * a smaller model can't break the economy.
+ */
+export function freeConversationPrompt(world: WorldState, conv: Conversation, brief: string): { user: string; schema: Record<string, unknown> } {
+  const a = world.citizens[conv.a];
+  const b = world.citizens[conv.b];
+  const chat = conv.topic === "chat";
+  const rel = (x: Citizen, y: Citizen) => {
+    if (x.family.includes(y.id)) return "family";
+    const r = x.relationships[y.id];
+    return r ? relLabel(r).toLowerCase() : "strangers";
+  };
+  const mem = (x: Citizen, y: Citizen) => memoryLines(x, 2, y.id);
+  const gist = chat
+    ? `What they talk about (cover these points in order, in your own words): ${brief.replace(/^A casual chat\. Beats, in order \(keep to them, in your own words\): /, "")}`
+    : `What happens. This is already decided: keep the same decision, amounts and facts, but write it fresh, in your own words:\n${(conv.fallback?.lines ?? []).map((l) => `${l.speaker === conv.a ? "A" : "B"}: ${l.text}`).join("\n")}`;
+  const user = [
+    `Where: ${placeName(world, conv.buildingId)}, ${formatTime(world.time)}.`,
+    `A is ${profile(world, a)}`,
+    `B is ${profile(world, b)}`,
+    `A sees B as: ${rel(a, b)}.${mem(a, b).length ? ` A remembers:\n${mem(a, b).join("\n")}` : ""}`,
+    `B sees A as: ${rel(b, a)}.${mem(b, a).length ? ` B remembers:\n${mem(b, a).join("\n")}` : ""}`,
+    chat && newsKnown(world, a).length ? `News A has heard:\n${newsKnown(world, a).join("\n")}` : "",
+    chat && newsKnown(world, b).length ? `News B has heard:\n${newsKnown(world, b).join("\n")}` : "",
+    gist,
+    `Write ${chat ? "6 to 10" : "3 to 6"} lines of dialogue, A (${a.name}) speaking first, mostly taking turns. Each line under 25 words. In the dialogue, call them ${a.name} and ${b.name}, never "A" or "B". A speaks in a ${a.personality.style} way, B in a ${b.personality.style} way.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const schema = {
+    type: "object",
+    properties: {
+      lines: { type: "array", items: { type: "object", properties: { speaker: { type: "string", enum: ["A", "B"] }, text: { type: "string" } }, required: ["speaker", "text"] } },
+    },
+    required: ["lines"],
+  };
+  return { user, schema };
+}
+
+/** What a citizen has heard about lately, and their take. */
+function newsKnown(world: WorldState, c: Citizen): string[] {
+  return c.news.slice(-4).flatMap((k) => {
+    const h = world.happenings.find((x) => x.id === k.id);
+    if (!h) return [];
+    const take = k.stance <= -0.4 ? "upset" : k.stance < -0.1 ? "sorry about it" : k.stance >= 0.4 ? "pleased" : k.stance > 0.1 ? "quietly glad" : "not bothered";
+    return [`- ${h.title}: ${h.text} (${take})`];
+  });
 }
 
 // ------------------------------------------------------- reflection prompt

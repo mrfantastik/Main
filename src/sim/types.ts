@@ -409,6 +409,65 @@ export interface DecisionRecord {
   thought: string;
 }
 
+/** One line of a citizen's own plan for the day (written by the town's brain). */
+export interface AgentPlanItem {
+  /** Hour of the day (7.5 = 7:30am). */
+  hour: number;
+  /** The activity option it refers to (e.g. "pub", "work_corp", "see:c4"). */
+  id: string;
+  label: string;
+  /** Why, in their words. */
+  why: string;
+  status: "todo" | "done" | "skipped";
+}
+
+/** What a citizen run by the town's brain keeps for itself: today's plan, and its diary. */
+export interface AgentMind {
+  plan: { day: number; items: AgentPlanItem[] } | null;
+  /** Last few nights' diary entries, newest last. */
+  diary: { day: number; text: string }[];
+}
+
+/**
+ * A citizen's chatbot: a character card the AI speaks from (its system
+ * prompt). Generated from their personality and story; the player can rewrite
+ * any of it.
+ */
+export interface BotCard {
+  /** Written or edited by the player. */
+  custom: boolean;
+  /** Who they are and where they come from. */
+  bio: string;
+  /** How they talk. */
+  voice: string;
+  /** Things they'd say, to show the AI their voice. */
+  examples: string[];
+  /** What matters to them, what they love and hate, what they fear and dream of. */
+  cares: string;
+  /** Something they keep to themselves. */
+  secret: string;
+  /** Anything else the player wants them to be or do. */
+  instructions: string;
+  /** 0 (steady, predictable) to 1 (wild): how adventurous their replies are. */
+  creativity: number;
+  /** 0 (a few words) to 1 (talks your ear off). */
+  chattiness: number;
+}
+
+/** The end of the last conversation two people had, as one of them remembers it. */
+export interface PairChat {
+  t: number;
+  lines: { me: boolean; text: string }[];
+}
+
+/** A line between the player and a citizen. */
+export interface PlayerChatLine {
+  t: number;
+  /** Said by the citizen (otherwise by the player). */
+  me: boolean;
+  text: string;
+}
+
 export interface Citizen {
   id: CitizenId;
   name: string;
@@ -449,6 +508,8 @@ export interface Citizen {
   reflections: Reflection[];
   /** Day number of the last nightly reflection. */
   lastReflectionDay: number;
+  /** Town news they know about (most recent last). */
+  news: KnownNews[];
   /** Daily "wants" for durable goods: 0..100. */
   wants: Record<ProductId, number>;
   mood: number;
@@ -459,6 +520,20 @@ export interface Citizen {
   goal: Goal;
   thought: string;
   thoughtSource: "utility" | "llm";
+  /** Only when the town's brain runs them: their plan for the day and their diary. */
+  agent?: AgentMind;
+  /** The last thing that happened to them out of the blue (God Mode), for reacting to it. */
+  shock?: { t: number; text: string };
+  /** Wordings they've used lately in conversation (so they don't keep saying the same thing). */
+  said?: string[];
+  /** Their chatbot, as the player wrote or edited it (otherwise it's generated from their personality: see mind/bot.ts). */
+  bot?: BotCard;
+  /** The last few things they said with each person, for the next time they meet. */
+  chats?: Record<CitizenId, PairChat>;
+  /** What they and the player have said to each other (newest last). */
+  playerChat?: PlayerChatLine[];
+  /** The player is waiting for their answer. */
+  chatWaiting?: boolean;
   thoughtT: number;
   /** 1 mundane, 2 urgent need, 3 strategic/social, 4 major life event. */
   thoughtPriority: number;
@@ -629,6 +704,8 @@ export interface Business {
   /** Shopping hours in which someone was serving. */
   staffedHoursToday: number;
   staffedHoursYesterday: number;
+  /** Shut by a town happening (fire, food scare) until this time. */
+  closedUntil?: number;
 }
 
 export interface Loan {
@@ -673,7 +750,9 @@ export type TxKind =
   | "capital"
   | "leisure"
   | "fee"
-  | "liquidation";
+  | "liquidation"
+  | "theft"
+  | "prize";
 
 export interface Transaction {
   id: number;
@@ -695,7 +774,8 @@ export type EventCategory =
   | "god"
   | "life"
   | "ai"
-  | "conversation";
+  | "conversation"
+  | "town";
 
 export interface SimEvent {
   id: number;
@@ -742,7 +822,10 @@ export interface Conversation {
   lines: ConversationLine[];
   revealed: number;
   nextRevealT: number;
-  status: "talking" | "awaiting_ai" | "done";
+  /** "live": the AI is writing it line by line, each person speaking for themselves. */
+  status: "talking" | "awaiting_ai" | "live" | "done";
+  /** A live chat: whether they've said goodbye, and when the last line came (game time). */
+  live?: { done: boolean; lastLineT: number };
   /** What the initiator wanted (amount, purpose, business, loan...). */
   agenda: Record<string, ConvValue>;
   /** Engine-computed negotiation terms and limits (AI output is validated against them). */
@@ -754,6 +837,80 @@ export interface Conversation {
   summary: string;
   source: "template" | "llm";
   endT: number;
+  /** What an improvised chat changes when it ends (news passed on, minds changed...). */
+  notes?: ConvNote[];
+  /** What they talked about, for the UI ("the fire at Mike's stall", "money worries"). */
+  topics?: string[];
+}
+
+/** One consequence of an improvised conversation, applied when it ends. */
+export type ConvNote =
+  | { t: "news"; from: CitizenId; to: CitizenId; id: number }
+  | { t: "stance"; who: CitizenId; id: number; delta: number }
+  | { t: "rel"; who: CitizenId; about: CitizenId; affinity: number; trust: number }
+  | { t: "feel"; who: CitizenId; e: Partial<Emotions> }
+  | { t: "gift"; from: CitizenId; to: CitizenId; amount: number; why: string }
+  | { t: "memory"; who: CitizenId; text: string; importance: number; valence: number; people: CitizenId[] };
+
+// ------------------------------------------------------- town happenings
+
+export type HappeningKind =
+  | "fire"
+  | "burglary"
+  | "festival"
+  | "storm"
+  | "power_cut"
+  | "lottery"
+  | "celebrity"
+  | "food_poisoning"
+  | "rent_rise"
+  | "sculpture"
+  | "party";
+
+/** Something that happens in town: news people react to and talk about. */
+export interface Happening {
+  id: number;
+  kind: HappeningKind;
+  t: number;
+  /** When its effects end (a storm passes, a shop reopens). */
+  until: number;
+  /** Headline: "Fire at Mike's Grocer Stall". */
+  title: string;
+  /** How people refer to it mid-sentence: "the fire at Mike's Grocer Stall". */
+  about: string;
+  /** A sentence or two on what happened. */
+  text: string;
+  buildingId: BuildingId | null;
+  /** Who it happened to (victim, winner, host). */
+  subject: CitizenId | null;
+  businessId: BusinessId | null;
+  /** Money involved (stock lost, cash stolen, prize). */
+  amount: number;
+  /** 1 (minor) .. 3 (big news). */
+  scale: number;
+  /** How the town broadly takes it: -1 bad .. 1 good. */
+  tone: number;
+  source: "world" | "god" | "llm";
+  /** Set once its after-effects have been wrapped up. */
+  ended?: boolean;
+  /** Friends who chipped in to help (capped). */
+  gifts?: number;
+  /** Who turned up (festival, party). */
+  crowd?: CitizenId[];
+}
+
+/** A piece of news a citizen knows, and their take on it. */
+export interface KnownNews {
+  id: number;
+  t: number;
+  /** Who told them (a citizen id), or "saw" (they were there), "paper", "self". */
+  via: string;
+  /** Their take: -1 (sorry/angry/worried) .. 1 (glad). */
+  stance: number;
+  /** People they've already told. */
+  told: CitizenId[];
+  /** How many times they've talked it over (old news gets boring). */
+  talked?: number;
 }
 
 // --------------------------------------------------------------- world
@@ -825,7 +982,7 @@ export interface AILogEntry {
   id: number;
   t: number;
   citizenId: CitizenId | null;
-  kind: "strategy" | "conversation" | "reflection";
+  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary" | "chat";
   prompt: string;
   response: string;
   costUsd: number;
@@ -873,6 +1030,8 @@ export interface WorldState {
   conversations: Conversation[];
   /** Finished conversations (most recent last), for the UI. */
   conversationLog: Conversation[];
+  /** Wordings used lately in conversations around town (so the same ones don't keep coming up). */
+  talkRecent?: string[];
   events: SimEvent[];
   transactions: Transaction[];
   txCount: number;
@@ -880,4 +1039,8 @@ export interface WorldState {
   ai: AIState;
   /** Inventions not yet discovered. */
   inventionPool: string[];
+  /** Town happenings (most recent last). */
+  happenings: Happening[];
+  /** When the next unplanned happening is due. */
+  nextHappeningT: number;
 }

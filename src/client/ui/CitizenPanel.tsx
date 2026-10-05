@@ -4,9 +4,10 @@ import type { DecisionRecord } from "../../sim/types";
 import { renderer } from "../App";
 import { store, useStore } from "../net/store";
 import { Avatar } from "./CitizenList";
-import { EMOTION_UI, gbp, KIND_LABEL, OCC_COLORS, OCC_LABEL, VALUE_LABEL, when } from "./format";
+import { aiName, EMOTION_UI, gbp, KIND_LABEL, OCC_COLORS, OCC_LABEL, VALUE_LABEL, when } from "./format";
 import { Sparkline } from "./charts";
 import { Transcript } from "./Transcript";
+import { ChatbotTab } from "./ChatbotTab";
 
 function Bar({ label, value, max = 100, color }: { label: string; value: number; max?: number; color: string }) {
   return (
@@ -82,11 +83,12 @@ function Who({ d }: { d: CitizenDetail }) {
 }
 
 function Decision({ d }: { d: DecisionRecord }) {
+  const ai = aiName(useStore((s) => s.state?.ai));
   return (
     <details className="item decision">
       <summary>
         <div className="meta">
-          {when(d.t)} · {d.kind} · {d.source === "llm" ? <span style={{ color: "var(--llm)" }}>🧠 Claude</span> : d.source === "llm-rejected" ? "Claude (rejected → fallback)" : "utility AI"}
+          {when(d.t)} · {d.kind} · {d.source === "llm" ? <span style={{ color: "var(--llm)" }}>🧠 {ai}</span> : d.source === "llm-rejected" ? `${ai} (rejected → fallback)` : "utility AI"}
         </div>
         <div>
           ➜ <b>{d.options.find((o) => o.id === d.chosen)?.label ?? d.chosen}</b>
@@ -122,13 +124,15 @@ function Decision({ d }: { d: DecisionRecord }) {
 }
 
 function Overview({ d }: { d: CitizenDetail }) {
+  const ai = aiName(useStore((s) => s.state?.ai));
   return (
     <>
       <div className="section">💭 What is {d.name} thinking?</div>
       <div className={`thought ${d.thoughtSource === "llm" ? "llm" : ""}`}>
         {d.thought}
-        <span className="src">{d.thoughtSource === "llm" ? "🧠 Reasoned by Claude" : "⚙️ From the utility AI's current decision"}</span>
+        <span className="src">{d.thoughtSource === "llm" ? `🧠 Reasoned by ${ai}` : "⚙️ From the utility AI's current decision"}</span>
       </div>
+      {d.agent?.plan && <TodaysPlan d={d} ai={ai} />}
       <div className="section">
         How {d.name} feels{d.emotion ? ` — mostly ${EMOTION_UI.find((e) => e.key === d.emotion!.kind)?.label.toLowerCase()} ${d.emotion.emoji}` : " — calm"}
       </div>
@@ -138,7 +142,14 @@ function Overview({ d }: { d: CitizenDetail }) {
         <span className="k">Goal</span>
         <span>🎯 {d.goal.label}</span>
         <span className="k">Doing</span>
-        <span>{d.activity}</span>
+        <span>
+          {d.activity}
+          {d.decisions.find((x) => x.kind === "activity")?.source === "llm" && (
+            <span className="chip llm" title={`${ai} chose this`} style={{ marginLeft: 6 }}>
+              🧠 {ai}'s pick
+            </span>
+          )}
+        </span>
         <span className="k">Location</span>
         <span>{d.location}</span>
         <span className="k">Home</span>
@@ -236,11 +247,52 @@ function Overview({ d }: { d: CitizenDetail }) {
   );
 }
 
+/** "8am", "1:30pm". */
+function clock(h: number): string {
+  const hh = Math.floor(h) % 24;
+  const mm = Math.round((h - Math.floor(h)) * 60);
+  return `${hh % 12 === 0 ? 12 : hh % 12}${mm ? `:${String(mm).padStart(2, "0")}` : ""}${hh < 12 ? "am" : "pm"}`;
+}
+
+/** Their own plan for today, as the town's brain wrote it, ticked off as they go. */
+function TodaysPlan({ d, ai }: { d: CitizenDetail; ai: string }) {
+  return (
+    <>
+      <div className="section">📝 {d.name}'s plan for today</div>
+      <div className="list plan">
+        {d.agent!.plan!.map((it, i) => (
+          <div key={i} className={`item ${it.status}`} style={{ opacity: it.status === "skipped" ? 0.5 : 1 }}>
+            <span className="chip">{clock(it.hour)}</span> {it.status === "done" ? "✅" : it.status === "skipped" ? "✖️" : "⏳"} <b>{it.label}</b>
+            {it.why && <div className="meta">"{it.why}"</div>}
+          </div>
+        ))}
+      </div>
+      <div className="muted" style={{ fontSize: 11 }}>
+        Written by {ai} for their day (overnight, or when they first need one). They follow it when it still makes sense; anything more than three
+        hours late is dropped.
+      </div>
+    </>
+  );
+}
+
 function Mind({ d }: { d: CitizenDetail }) {
   return (
     <>
       <div className="section">Current thought</div>
       <div className={`thought ${d.thoughtSource === "llm" ? "llm" : ""}`}>{d.thought}</div>
+      {d.agent && d.agent.diary.length > 0 && (
+        <>
+          <div className="section">📔 Diary</div>
+          <div className="list">
+            {d.agent.diary.map((e) => (
+              <div key={e.day} className="item" style={{ fontStyle: "italic" }}>
+                {e.text}
+                <div className="meta">Day {e.day}, last thing at night</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
       <div className="section">Key insights (lessons from sleeping on it)</div>
       {d.lessons.length === 0 ? (
         <div className="empty">Nothing learned yet. They reflect on the day while they sleep.</div>
@@ -248,7 +300,7 @@ function Mind({ d }: { d: CitizenDetail }) {
         <div className="list">
           {d.lessons.map((r) => (
             <div key={r.id} className="item" style={{ opacity: 0.45 + r.strength * 0.55 }}>
-              {r.valence >= 0 ? "💡" : "⚠️"} {r.text} {r.source === "llm" && <span className="chip llm">Claude</span>}
+              {r.valence >= 0 ? "💡" : "⚠️"} {r.text} {r.source === "llm" && <span className="chip llm">AI-worded</span>}
               <div className="meta">
                 {when(r.t)} · {r.kind}
               </div>
@@ -302,9 +354,25 @@ function Mind({ d }: { d: CitizenDetail }) {
   );
 }
 
+function stanceLabel(s: number): string {
+  return s <= -0.5 ? "😟 upset" : s < -0.1 ? "😕 sorry about it" : s >= 0.5 ? "😄 pleased" : s > 0.1 ? "🙂 quietly glad" : "😐 not bothered";
+}
+
 function Social({ d }: { d: CitizenDetail }) {
   return (
     <>
+      <div className="section">What they've heard</div>
+      <div className="list">
+        {d.news.length === 0 && <div className="empty">No news yet. People pass it on when they talk.</div>}
+        {d.news.slice(0, 8).map((n) => (
+          <div key={n.id} className="item news-item">
+            {n.icon} {n.title}
+            <div className="meta">
+              {when(n.t)} · {n.via} · <span className="stance">{stanceLabel(n.stance)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
       <div className="section">Recent conversations</div>
       <div className="list">
         {d.conversations.length === 0 && <div className="empty">Hasn't talked to anyone yet.</div>}
@@ -439,7 +507,7 @@ export function CitizenPanel() {
   const d = useStore((s) => (s.detail?.kind === "citizen" ? s.detail : null));
   const follow = useStore((s) => s.followSelected);
   const summary = useStore((s) => s.state?.citizens.find((c) => c.id === s.selection?.id));
-  const [tab, setTab] = useState<"overview" | "mind" | "social" | "money">("overview");
+  const [tab, setTab] = useState<"overview" | "bot" | "mind" | "social" | "money">("overview");
   if (!d) {
     return (
       <div className="side-body">
@@ -468,9 +536,9 @@ export function CitizenPanel() {
       </div>
       <div style={{ padding: "0 12px" }}>
         <div className="tabs">
-          {(["overview", "mind", "social", "money"] as const).map((t) => (
+          {(["overview", "bot", "mind", "social", "money"] as const).map((t) => (
             <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
-              {t === "overview" ? "Overview" : t === "mind" ? "🧠 Mind" : t === "social" ? "Social" : "Money"}
+              {t === "overview" ? "Overview" : t === "bot" ? "🤖 Chatbot" : t === "mind" ? "🧠 Mind" : t === "social" ? "Social" : "Money"}
             </button>
           ))}
         </div>
@@ -490,6 +558,7 @@ export function CitizenPanel() {
       </div>
       <div className="side-body">
         {tab === "overview" && <Overview d={d} />}
+        {tab === "bot" && <ChatbotTab d={d} />}
         {tab === "mind" && <Mind d={d} />}
         {tab === "social" && <Social d={d} />}
         {tab === "money" && <Money d={d} />}

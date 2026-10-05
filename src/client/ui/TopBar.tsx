@@ -44,14 +44,43 @@ export function TopBar() {
         <span className={`chip ${st.economy.mode === "boom" ? "good" : "bad"}`}>{st.economy.mode === "boom" ? "📈 BOOM" : "📉 CRASH"}</span>
       )}
       <div className="toolbar">
-        <span className={`chip ${connected ? "good" : "bad"}`} title={st?.savedAt ? "Running · last autosave" : undefined}>
+        {/* Always the same width, so the first autosave doesn't reflow the bar (and shift the map). */}
+        <span className={`chip status ${connected ? "good" : "bad"}`} title={connected ? (st?.savedAt ? `Running · last autosave ${clock(st.savedAt)}` : "Running") : "Not connected"}>
           <i className="dot" style={{ background: connected ? "#2fbf71" : "#e5484d" }} />
-          {connected ? "Live" : "Offline"}
-          {connected && st?.savedAt ? <span className="muted"> · 💾 {clock(st.savedAt)}</span> : null}
+          {!connected ? "Offline" : st?.savedAt ? <span>💾 {clock(st.savedAt)}</span> : "Live"}
         </span>
-        {ai && (
+        {ai?.brain && (ai.brain.state === "off" || ai.brain.state === "error") && (
+          <button
+            className="tool"
+            aria-label="Wake the town's brain"
+            title="Wake the town's brain: an open-source AI on your computer that runs the people"
+            onClick={() => {
+              // No model yet (or no engine): the AI panel is where you choose one.
+              if (ai.brain!.needsModel || !ai.brain!.engine) {
+                if (store.getSnapshot().panel !== "ai") store.setPanel("ai");
+              } else store.send({ type: "ai", brain: "load" });
+            }}
+          >
+            🧠 Wake the brain
+          </button>
+        )}
+        {ai && !(ai.brain && (ai.brain.state === "off" || ai.brain.state === "error")) && (
           <span className={`chip ${ai.mode === "llm" ? "llm" : ""}`} title="AI decision engine">
-            🧠 {ai.mode === "llm" ? `Claude · $${ai.spentUsd.toFixed(3)} / $${ai.budgetUsd}` : "Utility AI"}
+            {ai.brain
+              ? ai.brain.state === "ready"
+                ? `🧠 Town brain · ${ai.brain.device === "webgpu" ? "GPU" : "CPU"}`
+                : ai.brain.state === "loading"
+                  ? `🧠 Waking… ${ai.brain.total ? Math.round((ai.brain.loaded / ai.brain.total) * 100) : 0}%`
+                  : "🧠 Built-in AI"
+              : ai.mode === "llm"
+              ? ai.free
+                ? ai.connection?.connected
+                  ? `🌐 Free AI · ${ai.connection.active}`
+                  : ai.connection?.blocked
+                    ? "🧠 Built-in AI (no internet here)"
+                    : "🌐 Free AI · connecting…"
+                : `🧠 Claude · $${ai.spentUsd.toFixed(3)} / $${ai.budgetUsd}`
+              : "🧠 Utility AI"}
           </span>
         )}
         <button className={`tool ${panel === "dashboard" ? "on" : ""}`} onClick={() => store.setPanel("dashboard")}>

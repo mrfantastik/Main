@@ -16,10 +16,15 @@
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "diagnose": "tsx scripts/diagnose.ts",
-    "build:standalone": "vite build --mode standalone && tsx scripts/standalone.ts"
+    "chatcheck": "tsx scripts/chatcheck.ts",
+    "build:standalone": "vite build --mode standalone && tsx scripts/build-brain.ts && tsx scripts/standalone.ts && tsx scripts/three.ts",
+    "build:three": "vite build --mode standalone && tsx scripts/build-brain.ts && tsx scripts/three.ts",
+    "fetch-brain": "tsx scripts/fetch-brain.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
+    "@huggingface/tokenizers": "0.2.0",
+    "onnxruntime-web": "1.30.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.186.1",
@@ -32,6 +37,7 @@
     "@types/three": "^0.186.0",
     "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^6.1.1",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.2"

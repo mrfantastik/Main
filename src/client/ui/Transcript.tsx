@@ -1,6 +1,7 @@
 import type { ConversationDTO } from "../../shared/protocol";
-import { store } from "../net/store";
-import { when } from "./format";
+import { store, useStore } from "../net/store";
+import { Avatar } from "./CitizenList";
+import { aiName, when } from "./format";
 
 const TOPIC: Record<string, string> = {
   chat: "Chat",
@@ -16,6 +17,9 @@ const TOPIC: Record<string, string> = {
 };
 
 export function Transcript({ c }: { c: ConversationDTO }) {
+  const ai = aiName(useStore((s) => s.state?.ai));
+  const citizens = useStore((s) => s.state?.citizens);
+  const colorOf = (id: string) => citizens?.find((x) => x.id === id)?.color ?? "#8a93a8";
   return (
     <div className="item" style={{ borderColor: c.source === "llm" ? "var(--llm)" : undefined }}>
       <div className="meta" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -23,17 +27,47 @@ export function Transcript({ c }: { c: ConversationDTO }) {
         <span>
           {when(c.t)} · {c.place}
         </span>
-        {c.source === "llm" ? <span className="chip llm">🧠 Claude</span> : <span className="chip">template</span>}
+        {c.source === "llm" ? <span className="chip llm">{c.spoken ? "🧠 each speaking for themselves" : `✨ ${ai}`}</span> : <span className="chip">{c.topic === "chat" ? "improvised" : "built-in AI"}</span>}
+        {c.live && <span className="chip good">talking now</span>}
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4, margin: "6px 0" }}>
-        {c.lines.map((l, i) => (
-          <div key={i} style={{ display: "flex", gap: 6, flexDirection: l.speaker === c.a ? "row" : "row-reverse" }}>
-            <span className="who" style={{ fontWeight: 700, cursor: "pointer", color: "var(--accent-2)", whiteSpace: "nowrap" }} onClick={() => store.select({ kind: "citizen", id: l.speaker })}>
-              {l.name}
+      {c.topics.length > 0 && <div className="meta">Talked about: {c.topics.join(" · ")}</div>}
+      <div className="tlines">
+        {c.lines.map((l, i) => {
+          const left = l.speaker === c.a;
+          const first = i === 0 || c.lines[i - 1].speaker !== l.speaker;
+          const color = colorOf(l.speaker);
+          return (
+            <div key={i} className={`tline ${left ? "left" : "right"}${first ? " first" : ""}`}>
+              <button className="tav" title={`See ${l.name}`} onClick={() => store.select({ kind: "citizen", id: l.speaker })} style={{ visibility: first ? "visible" : "hidden" }}>
+                <Avatar name={l.name} color={color} small />
+              </button>
+              <div className="tbody">
+                {first && (
+                  <span className="tname" style={{ color }}>
+                    {l.name}
+                  </span>
+                )}
+                <span className="tbubble" style={{ ["--c" as string]: color }}>
+                  {l.text}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+        {c.writing && (
+          <div className={`tline ${c.lines.length % 2 === 0 ? "left" : "right"}`}>
+            <span className="tav">
+              <Avatar name={c.lines.length % 2 === 0 ? c.aName : c.bName} color={colorOf(c.lines.length % 2 === 0 ? c.a : c.b)} small />
             </span>
-            <span style={{ background: l.speaker === c.a ? "#26324a" : "#2e2a40", borderRadius: 8, padding: "3px 8px" }}>{l.text}</span>
+            <div className="tbody">
+              <span className="bubble typing" title={`${c.lines.length % 2 === 0 ? c.aName : c.bName} is speaking…`}>
+                <i />
+                <i />
+                <i />
+              </span>
+            </div>
           </div>
-        ))}
+        )}
       </div>
       {c.summary && <div className="meta">➜ {c.summary}</div>}
     </div>
