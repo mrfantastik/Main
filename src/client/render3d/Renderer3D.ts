@@ -23,6 +23,7 @@ import {
   PerspectiveCamera,
   Plane,
   PMREMGenerator,
+  Ray,
   Raycaster,
   RingGeometry,
   Scene,
@@ -203,6 +204,9 @@ export class Renderer3D implements CityRenderer {
   private gSubject: string | null = null;
   private gEye = new Vector3();
   private gLook = new Vector3();
+  private gRay = new Ray();
+  private gFrom = new Vector3();
+  private gHit = new Vector3();
   private vis = new Map<string, Vis>();
   private selRing: Mesh;
   private hoverRing: Mesh;
@@ -549,6 +553,7 @@ export class Renderer3D implements CityRenderer {
     c.far = 900;
     c.updateProjectionMatrix();
     this.gEye.set(fx + Math.sin(this.gYaw) * d, fy + 0.75 + d * 0.16, fz + Math.cos(this.gYaw) * d);
+    if (p?.visible) this.keepEyeOutOfBuildings(fx, fy, fz);
     this.gLook.set(fx - Math.sin(this.gYaw) * 6, fy + 0.95 + d * 0.05, fz - Math.cos(this.gYaw) * 6);
     c.position.copy(this.gEye);
     c.lookAt(this.gLook);
@@ -557,6 +562,22 @@ export class Renderer3D implements CityRenderer {
     this.fwd.set(-Math.sin(this.gYaw), 0, -Math.cos(this.gYaw));
     this.fog.near = 30;
     this.fog.far = this.look === "dream" ? 260 : 160;
+  }
+
+  /** If a building stands between the subject and the ground camera, bring the camera in front of it. */
+  private keepEyeOutOfBuildings(fx: number, fy: number, fz: number): void {
+    const from = this.gFrom.set(fx, fy + 0.9, fz);
+    const dir = this.gHit.copy(this.gEye).sub(from);
+    const len = dir.length();
+    if (len < 0.01) return;
+    this.gRay.set(from, dir.divideScalar(len));
+    let near = len;
+    for (const bi of this.info.values()) {
+      if (bi.mode === "open" || bi.box.containsPoint(from)) continue;
+      const hit = this.gRay.intersectBox(bi.box, this.v2);
+      if (hit) near = Math.min(near, hit.distanceTo(from));
+    }
+    if (near < len) this.gEye.copy(from).addScaledVector(this.gRay.direction, Math.max(0.7, near - 0.3));
   }
 
   /** Show the whole city, centred. */
