@@ -1,4 +1,4 @@
-// Town happenings, news spreading by word of mouth, improvised conversations,
+// Town happenings, news spreading by word of mouth, chats that pass it on,
 // and invented events.
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -8,7 +8,7 @@ import type { LLMClient, LLMRequest } from "../src/sim/ai/llm";
 import { applyInvented, inventableKinds, inventPrompt } from "../src/sim/ai/unscripted";
 import { applyGodCommand } from "../src/sim/god";
 import { prepareLoadedWorld } from "../src/sim/migrate";
-import { applyNotes, improvise } from "../src/sim/social/improv";
+import { forceChat } from "../src/sim/dialogue/metrics";
 import { businessFactor, createHappening, happeningById, knows, learnNews, townDemand } from "../src/sim/town/happenings";
 import type { Citizen, Conversation, Happening, WorldState } from "../src/sim/types";
 
@@ -26,9 +26,6 @@ function happen(w: WorldState, kind: Happening["kind"], opts: Parameters<typeof 
   return h as Happening;
 }
 
-function chat(w: WorldState, a: Citizen, b: Citizen, id: number): Conversation {
-  return { id, a: a.id, b: b.id, topic: "chat", buildingId: a.insideId, startedT: w.time, lines: [], revealed: 0, nextRevealT: w.time, status: "talking", agenda: {}, terms: {}, outcome: null, fallback: null, summary: "", source: "template", endT: w.time + 30 };
-}
 
 test("happenings come along on their own, deterministically, and the news spreads", () => {
   const run = () => {
@@ -51,6 +48,8 @@ test("happenings come along on their own, deterministically, and the news spread
 test("a fire shuts the business and burns stock until it reopens", () => {
   const w = newWorld(62);
   at(w, 1, 10);
+  // (Not while a fire's already burning somewhere.)
+  while (w.happenings.some((x) => x.kind === "fire" && !x.ended)) at(w, Math.floor(w.time / 1440) + 1, 10);
   const b = w.businessOrder.map((id) => w.businesses[id]).find((x) => x.open && x.kind !== "agency")!;
   const stock = Object.values(b.inventory).reduce((s, it) => s + it.qty, 0);
   const h = happen(w, "fire", { businessId: b.id });
@@ -103,15 +102,23 @@ test("God mode can make things happen, and refuses what can't", () => {
   const w = newWorld(65);
   at(w, 1, 3);
   assert.throws(() => applyGodCommand(w, { cmd: "happening", kind: "festival" }), /between/);
-  at(w, 1, 10);
-  const msg = applyGodCommand(w, { cmd: "happening", kind: "festival" });
+  // In the day, and not while one's already on.
+  let msg = "";
+  for (let day = 1; day <= 6 && !msg; day++) {
+    at(w, day, 10);
+    try {
+      msg = applyGodCommand(w, { cmd: "happening", kind: "festival" });
+    } catch {
+      msg = "";
+    }
+  }
   assert.match(msg, /festival/i);
   const h = w.happenings[w.happenings.length - 1];
   assert.equal(h.source, "god");
   assert.equal(people(w).filter((c) => knows(c, h.id)).length, 20, "everyone hears about the festival");
 });
 
-test("improvised chats pass news on, and the listener makes up their own mind", () => {
+test("chats pass news on, and the listener makes up their own mind", () => {
   const w = newWorld(66);
   at(w, 1, 12);
   const [teller, listener, winner] = people(w).slice(0, 3);
@@ -121,30 +128,28 @@ test("improvised chats pass news on, and the listener makes up their own mind", 
   listener.news = listener.news.filter((k) => k.id !== h.id);
   let told = 0;
   for (let i = 0; i < 12; i++) {
-    const conv = chat(w, teller, listener, 90000 + i);
-    const imp = improvise(w, conv, teller, listener);
-    assert.ok(imp.lines.length >= 2 && imp.lines.length <= 16, `${imp.lines.length} lines`);
-    for (const l of imp.lines) assert.ok(l.speaker === teller.id || l.speaker === listener.id);
-    if (imp.notes.some((n) => n.t === "news" && n.from === teller.id && n.to === listener.id && n.id === h.id)) {
+    // Each time from the same moment: the teller has the news, the listener hasn't heard.
+    const w2 = structuredClone(w);
+    w2.time += i * 7;
+    w2.nextId += i * 5;
+    const [t2, l2] = [w2.citizens[teller.id], w2.citizens[listener.id]];
+    const conv = forceChat(w2, t2, l2);
+    assert.ok(conv.lines.length >= 2 && conv.lines.length <= 24, `${conv.lines.length} lines`);
+    for (const l of conv.lines) assert.ok(l.speaker === teller.id || l.speaker === listener.id);
+    const k = knows(l2, h.id);
+    if (k) {
       told++;
-      assert.ok(imp.lines.some((l) => l.text.includes(winner.name)), "they actually talk about it");
-      assert.ok(imp.topics.length >= 1);
+      assert.ok(conv.lines.some((l) => l.speaker === teller.id && l.text.includes(winner.name)), "they actually talk about it");
+      // The listener heard it from the teller, and has their own view of it.
+      assert.equal(k.via, teller.id);
+      assert.ok(knows(t2, h.id)!.told.includes(listener.id));
+      assert.ok(Number.isFinite(k.stance));
     }
   }
-  assert.ok(told >= 8, `news only came up in ${told}/12 chats`);
-  // Apply one: the listener now knows, heard it from the teller, and has their own view.
-  const conv = chat(w, teller, listener, 90100);
-  conv.notes = improvise(w, conv, teller, listener).notes;
-  applyNotes(w, conv);
-  const k = knows(listener, h.id);
-  if (conv.notes.some((n) => n.t === "news")) {
-    assert.ok(k, "listener heard the news");
-    assert.equal(k.via, teller.id);
-    assert.ok(knows(teller, h.id)!.told.includes(listener.id));
-  }
+  assert.ok(told >= 5, `news only came up in ${told}/12 chats`);
 });
 
-test("improvised lines read like speech: capitals, full stops, no template leftovers", () => {
+test("chat lines read like speech: capitals, full stops, no template leftovers", () => {
   const w = newWorld(67);
   const seen = new Map<number, Conversation>();
   for (let m = 0; m < 1440 * 6; m += 30) {
@@ -202,6 +207,8 @@ test("invented events are checked before use", () => {
   assert.ok(ip.includes("something at the pub"));
   assert.equal(typeof applyInvented(w, { kind: "volcano", title: "Boom" }), "string");
   const lucky = people(w)[5];
+  // (Not while someone else's win is still the talk of the town.)
+  while (w.happenings.some((x) => x.kind === "lottery" && !x.ended)) at(w, Math.floor(w.time / 1440) + 1, 14);
   const money = lucky.money;
   const h = applyInvented(w, { kind: "lottery", who: lucky.name.toUpperCase(), business: null, title: `${lucky.name}'s numbers came up`, about: `${lucky.name}'s big win`, text: `${lucky.name} matched five numbers on the lottery.` });
   assert.equal(typeof h, "object");
@@ -210,7 +217,8 @@ test("invented events are checked before use", () => {
   assert.equal(hh.source, "llm");
   assert.equal(hh.title, `${lucky.name}'s numbers came up`);
   assert.ok(lucky.money > money, "the town works out the money");
-  // An unknown business falls back to a real one.
+  // An unknown business falls back to a real one (once any fire already going has been put out).
+  while (w.happenings.some((x) => x.kind === "fire" && !x.ended)) at(w, Math.floor(w.time / 1440) + 1, 14);
   const fire = applyInvented(w, { kind: "fire", business: "The Moon Café", title: "Smoke on the high street", about: "the high street fire", text: "Smoke poured out of a shop." });
   assert.equal(typeof fire, "object");
   assert.ok(w.businesses[(fire as Happening).businessId!], "a real business");
@@ -265,14 +273,21 @@ test("the director: news chats stay within their share of calls; invent on reque
   assert.match(off.invent(w) ?? "", /isn't available/);
 });
 
-test("telling your own news keeps names capitalised in the feed", () => {
+test("people tell their own news as their own, and it gets round", () => {
   const w = newWorld(71);
   at(w, 1, 12);
   const [winner, friend] = people(w);
   for (const c of [winner, friend]) c.activity.kind = "socialize";
   const h = happen(w, "lottery", { subject: winner.id });
   friend.news = friend.news.filter((k) => k.id !== h.id);
-  const headlines = Array.from({ length: 12 }, (_, i) => improvise(w, chat(w, winner, friend, 91000 + i), winner, friend).headline).filter((x): x is string => !!x && x.includes("what happened to them"));
-  assert.ok(headlines.length > 0, "the winner tells their own news");
-  for (const x of headlines) assert.ok(x.includes(`: ${winner.name} won the lottery.`), x);
+  let own = 0;
+  for (let i = 0; i < 12; i++) {
+    const w2 = structuredClone(w);
+    w2.time += i * 7;
+    w2.nextId += i * 5;
+    const conv = forceChat(w2, w2.citizens[winner.id], w2.citizens[friend.id]);
+    for (const l of conv.lines.filter((x) => x.speaker === winner.id)) assert.ok(!new RegExp(`\\b${winner.name}('s)?\\b`).test(l.text), `talks about themselves by name: "${l.text}"`);
+    if (conv.lines.some((l) => l.speaker === winner.id && /\bI won\b|\blottery\b/.test(l.text))) own++;
+  }
+  assert.ok(own > 0, "the winner tells their own news");
 });

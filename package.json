@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "diagnose": "tsx scripts/diagnose.ts",
     "chatcheck": "tsx scripts/chatcheck.ts",
+    "talkbench": "tsx scripts/talkbench.ts",
     "build:standalone": "vite build --mode standalone && tsx scripts/build-brain.ts && tsx scripts/standalone.ts && tsx scripts/three.ts",
     "build:three": "vite build --mode standalone && tsx scripts/build-brain.ts && tsx scripts/three.ts",
     "fetch-brain": "tsx scripts/fetch-brain.ts"

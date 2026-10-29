@@ -1,3 +1,4 @@
+import { dialogueDaily } from "./dialogue";
 import { happeningsHourly } from "./town/happenings";
 import { beginAction, finishActivity, makeAction, startActivity, tickActivity } from "./ai/actions";
 import { updateBeliefsDaily } from "./ai/beliefs";
@@ -156,6 +157,7 @@ function daily(world: WorldState): void {
     decayRelationships(world, c);
   }
   updateBeliefsDaily(world);
+  dialogueDaily(world);
   world.ai.callsToday = 0;
   statsDaily(world);
 }

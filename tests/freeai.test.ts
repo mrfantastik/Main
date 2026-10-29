@@ -5,7 +5,6 @@ import { test } from "node:test";
 import { advance, newWorld } from "../src/sim";
 import { AIDirector } from "../src/sim/ai/director";
 import { createFreeAIClient, extractJson, FreeAIError, pickModel, shapeOf } from "../src/sim/ai/freeai";
-import { cleanLines } from "../src/sim/ai/lines";
 import type { Conversation, WorldState } from "../src/sim/types";
 
 type Call = { url: string; body: Record<string, unknown> };
@@ -21,17 +20,12 @@ function fakeEndpoint(calls: Call[], reply: (body: Record<string, unknown>, n: n
   }) as typeof fetch;
 }
 
-/** Dialogue in the shape a smaller model tends to send: names as speakers, a "Name:" prefix, a stage direction, a code fence. */
-function messyDialogue(body: Record<string, unknown>): string {
-  const user = String((body.messages as { content: string }[])[1].content);
-  const a = user.match(/^A is (\w+)/m)?.[1] ?? "A";
-  const b = user.match(/^B is (\w+)/m)?.[1] ?? "B";
-  return "```json\n" + JSON.stringify({ lines: [
-    { speaker: a, text: `${a}: *waves* Fancy seeing you here, ${b}!` },
-    { speaker: "B", text: `"Oh, you know me. Can't keep away."` },
-    { speaker: "A", text: "Have you tried the new pastries? (laughs) Dangerous." },
-    { speaker: b, text: "Don't. I've had three." },
-  ], outcome: { agreed: false, amount: 99999 } }) + "\n```";
+/** One turn in the shape a smaller model tends to send: a code fence, their name as a prefix, a stage direction. */
+function messyTurn(body: Record<string, unknown>, n: number): string {
+  const sys = String((body.messages as { content: string }[])[0].content);
+  const me = sys.match(/You are (\w+) \w+, \d+\./)?.[1] ?? "Someone";
+  const said = ["the queue at the bank was a joke", "I've not stopped all day", "the pies at the diner are back", "my feet are killing me", "rent's due on Friday", "I saw the rain coming a mile off", "I've been meaning to ask you something", "it's been a mad week", "I fancy a pint later", "the market's heaving"];
+  return "```json\n" + JSON.stringify({ spoken: `${me}: *shrugs* Turn ${n}: ${said[n % said.length]}. (laughs)`, intent: "pass time", topic: "x", tone: "light", endConversation: false, learned: [], perceived: null }) + "\n```";
 }
 
 test("reading a smaller model's replies: fences, chatter around the JSON, or plain A:/B: lines", () => {
@@ -140,24 +134,6 @@ test("probe() reports each service, and spots a page with no internet", async ()
   assert.equal(st2.active, "Pollinations");
 });
 
-test("model lines become clean spoken lines", () => {
-  const w = newWorld(80);
-  const [a, b] = w.citizenOrder.map((id) => w.citizens[id]);
-  const conv = { id: 1, a: a.id, b: b.id } as Conversation;
-  const lines = cleanLines(w, conv, [
-    { speaker: a.name, text: `${a.name}: *sighs* Long day.` },
-    { speaker: "B", text: '"Tell me about it."' },
-    { speaker: "C", text: "Who am I?" },
-    { speaker: "A", text: "(pause)" },
-    { speaker: "A", text: "Look at https://example.com" },
-    { speaker: "B", text: "Right. Pint?" },
-  ]);
-  assert.deepEqual(lines, [
-    { speaker: a.id, text: "Long day." },
-    { speaker: b.id, text: "Tell me about it." },
-    { speaker: b.id, text: "Right. Pint?" },
-  ]);
-});
 
 async function run(w: WorldState, director: AIDirector, minutes: number): Promise<void> {
   for (let i = 0; i < minutes / 5; i++) {
@@ -167,9 +143,9 @@ async function run(w: WorldState, director: AIDirector, minutes: number): Promis
   }
 }
 
-test("with the free AI, conversations get fresh words; the town still decides what happens; it costs nothing", async () => {
+test("with the free AI, each person speaks for themselves a turn at a time; the town still decides what happens; it costs nothing", async () => {
   const calls: Call[] = [];
-  const client = createFreeAIClient({ url: "http://fake/openai", fetchImpl: fakeEndpoint(calls, (body) => ({ content: messyDialogue(body) })) });
+  const client = createFreeAIClient({ url: "http://fake/openai", fetchImpl: fakeEndpoint(calls, (body, n) => ({ content: messyTurn(body, n) })) });
   const director = new AIDirector(client, { total: () => 1e9, add: () => assert.fail("nothing to pay") }, { maxConcurrent: 2, minIntervalMs: 0, timeoutMs: 5000 });
   director.attach();
   const w = newWorld(81);
@@ -183,18 +159,25 @@ test("with the free AI, conversations get fresh words; the town still decides wh
   }
   const all = [...seen.values()];
   const voiced = all.filter((c) => c.source === "llm");
-  assert.ok(voiced.length >= 20, `only ${voiced.length} of ${all.length} conversations voiced`);
+  assert.ok(voiced.length >= 10, `only ${voiced.length} of ${all.length} conversations voiced`);
   assert.ok(voiced.some((c) => c.topic !== "chat"), "deals and favours get voiced too");
   for (const c of voiced) {
-    assert.deepEqual(c.lines.map((l) => l.text), ["Fancy seeing you here, " + w.citizens[c.b].name + "!", "Oh, you know me. Can't keep away.", "Have you tried the new pastries? Dangerous.", "Don't. I've had three."]);
-    assert.deepEqual(c.outcome, c.fallback!.outcome, "the outcome is the town's, not the model's");
+    const turns = c.dlg!.turns;
+    assert.equal(turns.length, c.lines.length, "every line is a turn");
+    c.lines.forEach((l, i) => {
+      if (i) assert.notEqual(l.speaker, c.lines[i - 1].speaker, "they take turns");
+      // Cleaned up: no name, no stage directions, no brackets.
+      if (turns[i].by === "llm") assert.match(l.text, /^Turn \d+: [^*()]+\.$/, `cleaned: "${l.text}"`);
+    });
+    if (c.topic !== "chat") assert.deepEqual(c.outcome, c.fallback!.outcome, "the outcome is the town's, not the model's");
   }
   assert.equal(w.ai.spentUsd, 0);
-  // The prompt carries who they are and what to cover.
-  const chatPrompt = calls.map((c) => String((c.body.messages as { content: string }[])[1].content)).find((u) => u.includes("What they talk about"));
-  assert.ok(chatPrompt, "a chat prompt");
-  assert.match(chatPrompt!, /A is \w+ \w+, \d+\./);
-  assert.match(chatPrompt!, /never "A" or "B"/);
+  // Each request is one person's turn, from their own side.
+  const turn = calls.map((c) => c.body.messages as { content: string }[]).find((m) => /This turn:/.test(m[1].content));
+  assert.ok(turn, "a turn prompt");
+  assert.match(turn![0].content, /^You write one line of dialogue for (\w+)[\s\S]*You are \1 \w+, \d+\./, "who they are, in the system prompt");
+  assert.match(turn![0].content, /WHO YOU ARE[\s\S]*RIGHT NOW[\s\S]*AS YOU SEE THEM/);
+  assert.match(turn![0].content, /"spoken"/, "and the shape to answer in");
 });
 
 test("when the free AI says slow down (or can't be reached), the town backs off and talks for itself", async () => {
@@ -218,7 +201,7 @@ test("with the free AI, people think out loud: whoever you're looking at first",
     url: "http://fake/openai",
     fetchImpl: fakeEndpoint(calls, (body) => {
       const sys = String((body.messages as { content: string }[])[0].content);
-      return { content: /inner voice/.test(sys) ? '{"thought": "Rent first, dreams later. Then maybe that stall."}' : messyDialogue(body) };
+      return { content: /inner voice/.test(sys) ? '{"thought": "Rent first, dreams later. Then maybe that stall."}' : messyTurn(body, calls.length) };
     }),
   });
   const director = new AIDirector(client, { total: () => 0, add: () => {} }, { maxConcurrent: 2, minIntervalMs: 0, timeoutMs: 5000 });

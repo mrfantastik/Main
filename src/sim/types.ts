@@ -5,6 +5,8 @@
 // That makes saving/loading trivial and lets the same world run in the
 // browser, on a server, or in a headless test.
 
+import type { DialogueState, TalkState } from "./dialogue/types";
+
 export type CitizenId = string;
 export type BusinessId = string;
 export type BuildingId = string;
@@ -534,6 +536,8 @@ export interface Citizen {
   playerChat?: PlayerChatLine[];
   /** The player is waiting for their answer. */
   chatWaiting?: boolean;
+  /** How they talk, what they privately know, and what they remember of each person they talk to (see dialogue/). */
+  talk?: TalkState;
   thoughtT: number;
   /** 1 mundane, 2 urgent need, 3 strategic/social, 4 major life event. */
   thoughtPriority: number;
@@ -833,7 +837,7 @@ export interface Conversation {
   /** Final agreed outcome (e.g. agreed, amount, rate). */
   outcome: Record<string, ConvValue> | null;
   /** Template version, used if the AI is unavailable or replies with nonsense. */
-  fallback: { lines: ConversationLine[]; outcome: Record<string, ConvValue> } | null;
+  fallback: { lines: ConversationLine[]; outcome: Record<string, ConvValue>; dlg?: DialogueState } | null;
   summary: string;
   source: "template" | "llm";
   endT: number;
@@ -841,6 +845,8 @@ export interface Conversation {
   notes?: ConvNote[];
   /** What they talked about, for the UI ("the fire at Mike's stall", "money worries"). */
   topics?: string[];
+  /** The conversation system's state: topic, tone, intents, what each brought, what each line did (see dialogue/). */
+  dlg?: DialogueState;
 }
 
 /** One consequence of an improvised conversation, applied when it ends. */

@@ -1,3 +1,4 @@
+import { endLive } from "./social/conversation";
 import { firstHappeningT } from "./town/happenings";
 import { neutralEmotions } from "./mind/emotions";
 import { generatePersonality } from "./mind/personality";
@@ -63,13 +64,19 @@ function migrate(raw: unknown): WorldState | null {
     b.staffedHoursYesterday ??= 0;
     b.agencyEarned ??= 0;
   }
-  // Conversations waiting on an AI reply fall back to their template version;
-  // a live chat that was cut off by saving ends there, with a goodbye.
+  // Conversations waiting on an AI reply fall back to their built-in version;
+  // a live chat that was cut off by saving is finished by the built-in voices
+  // (or, from an older save, ends there with a goodbye).
   for (const conv of w.conversations) {
     if (conv.status === "awaiting_ai" && conv.fallback) {
       conv.status = "talking";
       conv.lines = conv.fallback.lines;
       conv.outcome = conv.fallback.outcome;
+      if (conv.fallback.dlg) conv.dlg = conv.fallback.dlg;
+    }
+    if (conv.status === "live" && conv.live && !conv.live.done && conv.dlg && conv.dlg.turns.length === conv.lines.length) {
+      endLive(w, conv.id, true);
+      continue;
     }
     if (conv.status === "live" && conv.live && !conv.live.done && conv.fallback) {
       conv.live.done = true;

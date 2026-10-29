@@ -18,10 +18,12 @@ import { dayOf } from "../time";
 import type { Citizen, Conversation, ConversationTopic, ConvValue, EventCategory, Loan, WorldState } from "../types";
 import { clamp, inDays, money, newId, pct, pushRing, round2 } from "../util";
 import { hotNews, knows } from "../town/happenings";
-import { applyNotes, improvise } from "./improv";
+import { applyNotes } from "./notes";
+import { adoptLines, beginDialogue, builtInTurn, endDialogue, planTurn, recordLine, revealMinutes, scriptConversation, whoseTurn, type Directive } from "../dialogue";
+import type { TurnMeta } from "../dialogue/types";
 import { rememberChat } from "../mind/bot";
 import { talkIn } from "./talk";
-import { argueDialogue, helpDialogue, investDialogue, jobDialogue, loanDialogue, repaymentDialogue, tipDialogue } from "./dialogue";
+import { helpDialogue, investDialogue, jobDialogue, loanDialogue, repaymentDialogue, tipDialogue } from "./dialogue";
 import { compatibility } from "./encounters";
 import { helpTerms, investmentTerms, jobTerms, loanTerms, lookWealthy as lookWealthyRaw, MAX_STAFF, settleLoan } from "./negotiation";
 import { adjustRel, getRel, peekRel } from "./relationships";
@@ -29,11 +31,12 @@ import { adjustRel, getRel, peekRel } from "./relationships";
 // Conversations. Citizens have agendas (need a loan, want a job, want their
 // money back...). When they meet the right person — by chance, or by going
 // to find them — they talk. The engine works out the real limits of the
-// deal; the words come from templates or, when enabled, from Claude. The
-// outcome is then validated and applied: money moves, jobs change hands,
-// memories and relationships update.
+// deal; the outcome is then validated and applied: money moves, jobs change
+// hands, memories and relationships update. Chats and rows are planned and
+// spoken by the conversation system (dialogue/): each person from their own
+// knowledge, history with the other and way of talking, a turn at a time,
+// with a language model writing the words when one is awake.
 
-export const LINE_MINUTES = 6;
 const CONVERSATION_LOG_LIMIT = 80;
 
 export interface Agenda {
@@ -560,9 +563,13 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
 
   argue: {
     schema: {},
-    prepare(world, conv, a, b, r) {
+    prepare(world, conv, a, b) {
+      // A row with a shape: accusation, defence, old history dragged up, an apology or someone walking off.
       const reason = String(conv.agenda.reason ?? "You know what you did.");
-      return { terms: { reason }, lines: argueDialogue(r, a, b, reason), outcome: {}, stakes: 0, brief: `A confronts B: "${reason}". It's an argument; nobody backs down.` };
+      conv.terms = { reason };
+      beginDialogue(world, conv, a, b, "argument");
+      const lines = scriptConversation(world, conv).slice();
+      return { terms: { reason }, lines, outcome: {}, stakes: 0, brief: `A confronts B: "${reason}".` };
     },
     validate: () => ({}),
     apply(world, conv, a, b) {
@@ -577,17 +584,17 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
   chat: {
     schema: {},
     prepare(world, conv, a, b) {
-      // Improvised from what's on their minds: news, gossip, worries, feelings, dreams.
-      const imp = improvise(world, conv, a, b);
-      conv.notes = imp.notes;
-      conv.topics = imp.topics;
-      const hasNews = imp.notes.some((n) => n.t === "news");
+      // Planned turn by turn by the conversation system, each of them from their own side.
+      const st = beginDialogue(world, conv, a, b);
+      const lines = scriptConversation(world, conv).slice();
+      conv.topics = st.covered.slice(0, 4);
+      const hasNews = st.turns.some((t) => t.kind === "news" || t.kind === "gossip");
       return {
-        terms: { headline: imp.headline ?? "", summary: imp.summary, news: hasNews },
-        lines: imp.lines,
+        terms: { headline: "", summary: chatSummary(world, conv, a, b), news: hasNews },
+        lines,
         outcome: {},
         stakes: 0,
-        brief: `A casual chat. Beats, in order (keep to them, in your own words): ${imp.brief.join(" ")}`,
+        brief: st.reason,
       };
     },
     validate: () => ({}),
@@ -598,7 +605,7 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
         const said = conv.lines.map((l) => l.text.toLowerCase()).join(" ");
         const names = new Set(world.citizenOrder.map((id) => world.citizens[id].name.toLowerCase()));
         conv.topics = (conv.topics ?? []).filter((t) => t.toLowerCase().split(/[^a-z]+/).some((w) => w.length >= 5 && !names.has(w) && !/^(about|their|plans|later|news|feels|good|having|people|place)$/.test(w) && said.includes(w)));
-        conv.terms.summary = conv.topics.length ? `${a.name} and ${b.name} talked about ${conv.topics.slice(0, 3).join(", ")}.` : `${a.name} and ${b.name} had a chat.`;
+        conv.terms.summary = chatSummary(world, conv, a, b);
         conv.terms.headline = "";
       }
       // Gossip: they learn how each other are doing (fuel for imitation).
@@ -639,6 +646,18 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
 
 function placeLabel(world: WorldState, conv: Conversation): string {
   return placeName(world, conv.buildingId);
+}
+
+/** One line on what a chat was, for the feed and the transcript. */
+function chatSummary(world: WorldState, conv: Conversation, a: Citizen, b: Citizen): string {
+  const st = conv.dlg;
+  if (!st) return `${a.name} and ${b.name} caught up.`;
+  if (st.mode === "fail") return `${a.name} said hello to ${b.name}${st.reason ? ` (${st.reason})` : ""}.`;
+  const topics = (conv.topics ?? st.covered).filter(Boolean).slice(0, 3);
+  const told = st.learned.filter((l) => l.sensitive >= 0.5).length;
+  const tense = st.tension > 0.5 ? " It got tense." : "";
+  if (!topics.length) return `${a.name} and ${b.name} ${st.mode === "brief" ? "said hello" : "made small talk"}.${tense}`;
+  return `${a.name} and ${b.name} talked about ${topics.join(", ")}.${told ? " Something personal came up." : ""}${tense}`;
 }
 
 // ------------------------------------------------------- lifecycle
@@ -695,9 +714,15 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
     talkIn(was, world.time);
   }
   if (!prepared) return null;
-  prepared.lines = voiceConversation(conv.id, topic === "chat" ? "improv" : topic, a, b, prepared.lines, typeof prepared.outcome.agreed === "boolean" ? prepared.outcome.agreed : null, dayOf(world.time));
+  // Chats and rows are already in each person's own voice; deals get theirs here.
+  if (topic !== "chat" && topic !== "argue") {
+    prepared.lines = voiceConversation(conv.id, topic, a, b, prepared.lines, typeof prepared.outcome.agreed === "boolean" ? prepared.outcome.agreed : null, dayOf(world.time));
+    beginDialogue(world, conv, a, b, "deal", prepared.brief);
+    adoptLines(world, conv, prepared.lines);
+  }
+  conv.lines = [];
   conv.terms = prepared.terms;
-  conv.fallback = { lines: prepared.lines, outcome: handlers[topic].validate(conv, prepared.outcome) };
+  conv.fallback = { lines: prepared.lines, outcome: handlers[topic].validate(conv, prepared.outcome), dlg: conv.dlg ? JSON.parse(JSON.stringify(conv.dlg)) : undefined };
   // Register first: interrupting their current activities must not start
   // another conversation (e.g. finishing a "go and find X" errand).
   world.conversations.push(conv);
@@ -713,6 +738,9 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
     conv.outcome = conv.fallback.outcome;
     conv.source = "llm";
     conv.live = { done: false, lastLineT: world.time };
+    // A fresh start for the live version (the same plan; the built-in script is kept as the fallback).
+    if (topic === "chat" || topic === "argue") beginDialogue(world, conv, a, b, topic === "argue" ? "argument" : undefined);
+    else if (conv.dlg) conv.dlg.turns = [];
     return conv;
   }
   if (ai) {
@@ -722,6 +750,7 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
   }
   conv.lines = conv.fallback.lines;
   conv.outcome = conv.fallback.outcome;
+  if (conv.fallback.dlg) conv.dlg = conv.fallback.dlg;
   return conv;
 }
 
@@ -736,6 +765,7 @@ export function resolveConversationAI(world: WorldState, convId: number, ai: { l
   if (!ai || ai.lines.length < 2) {
     conv.lines = conv.fallback!.lines;
     conv.outcome = conv.fallback!.outcome;
+    if (conv.fallback?.dlg) conv.dlg = conv.fallback.dlg;
     return "fallback";
   }
   conv.lines = ai.lines.filter((l) => l.speaker === conv.a || l.speaker === conv.b).slice(0, conv.topic === "chat" ? 12 : 8);
@@ -744,39 +774,50 @@ export function resolveConversationAI(world: WorldState, convId: number, ai: { l
   return "ok";
 }
 
-/** A live chat: the next thing someone says. False if the chat is over. */
-export function addLiveLine(world: WorldState, convId: number, line: { speaker: string; text: string }): boolean {
+/**
+ * A live chat: the next turn, as planned by the dialogue engine and put into
+ * words by the AI (or, when it couldn't, by the built-in voice). False if the
+ * chat is over.
+ */
+export function sayLive(world: WorldState, convId: number, speaker: string, d: Directive, text: string, meta: TurnMeta, extras: Parameters<typeof recordLine>[6] = {}): boolean {
   const conv = world.conversations.find((c) => c.id === convId);
-  if (!conv || conv.status !== "live" || !conv.live || conv.live.done) return false;
-  if (line.speaker !== conv.a && line.speaker !== conv.b) return false;
-  conv.lines.push({ speaker: line.speaker, text: line.text });
+  if (!conv || conv.status !== "live" || !conv.live || conv.live.done || !conv.dlg) return false;
+  if (speaker !== conv.a && speaker !== conv.b) return false;
+  recordLine(world, conv, speaker, d, text, meta, extras);
   conv.live.lastLineT = world.time;
   return true;
 }
 
+/** The rest of a conversation in the built-in voices (the AI stopped, or the game was saved mid-chat). */
+export function finishBuiltIn(world: WorldState, conv: Conversation, maxLines = 8): void {
+  if (!conv.dlg) return;
+  for (let n = 0; n < maxLines; n++) {
+    const speaker = whoseTurn(conv);
+    const d = planTurn(world, conv, speaker);
+    if (!d) break;
+    const t = builtInTurn(world, conv, speaker, d);
+    recordLine(world, conv, speaker, d, t.text, t.meta, t.extras);
+  }
+}
+
 /**
- * A live chat is over: they've said goodbye (`wrap` false), or the AI stopped
- * and they part with the built-in goodbye. If it barely got going, the
- * built-in conversation is used instead.
+ * A live chat is over: they've said all they had to say (`wrap` false), or
+ * the AI stopped and the built-in voices carry it to its end. If it barely
+ * got going, the built-in conversation is used instead.
  */
 export function endLive(world: WorldState, convId: number, wrap: boolean): void {
   const conv = world.conversations.find((c) => c.id === convId);
   if (!conv || conv.status !== "live" || !conv.live || conv.live.done) return;
-  conv.live.done = true;
-  const fb = conv.fallback?.lines ?? [];
   if (conv.lines.length < 2) {
-    conv.lines = fb.slice();
+    conv.live.done = true;
+    conv.lines = (conv.fallback?.lines ?? []).slice();
     conv.source = "template";
+    if (conv.fallback?.dlg) conv.dlg = conv.fallback.dlg;
     conv.revealed = Math.min(conv.revealed, conv.lines.length);
     return;
   }
-  if (wrap && fb.length >= 2) {
-    // The built-in goodbye, said by whoever didn't speak last.
-    const last = conv.lines[conv.lines.length - 1].speaker;
-    const [x, y] = last === conv.a ? [conv.b, conv.a] : [conv.a, conv.b];
-    const byes = fb.slice(-2);
-    conv.lines.push({ speaker: x, text: byes[0].text }, { speaker: y, text: byes[1].text });
-  }
+  if (wrap) finishBuiltIn(world, conv);
+  conv.live.done = true;
 }
 
 function finish(world: WorldState, conv: Conversation): void {
@@ -785,6 +826,9 @@ function finish(world: WorldState, conv: Conversation): void {
   conv.status = "done";
   conv.endT = world.time;
   rememberChat(world, conv);
+  // What each of them takes away: what they learned, what to ask next time, how it went.
+  if (conv.dlg) endDialogue(world, conv);
+  if (conv.fallback) delete conv.fallback.dlg;
   if (a && b && conv.outcome) {
     const item = handlers[conv.topic].apply(world, conv, a, b);
     if (item) logEvent(world, item.cat, item.text, item.importance, [a.id, b.id]).conversationId = conv.id;
@@ -831,8 +875,8 @@ export function conversationsTick(world: WorldState): void {
       // Lines show as they're written; they stand talking while the next one comes.
       if (conv.revealed < conv.lines.length) {
         if (world.time >= conv.nextRevealT) {
+          conv.nextRevealT = world.time + revealMinutes(conv.lines[conv.revealed].text);
           conv.revealed++;
-          conv.nextRevealT = world.time + LINE_MINUTES;
         }
       } else if (conv.live.done) {
         if (world.time >= conv.nextRevealT) finish(world, conv);
@@ -846,8 +890,8 @@ export function conversationsTick(world: WorldState): void {
     }
     if (world.time < conv.nextRevealT) continue;
     if (conv.revealed < conv.lines.length) {
+      conv.nextRevealT = world.time + revealMinutes(conv.lines[conv.revealed].text);
       conv.revealed++;
-      conv.nextRevealT = world.time + LINE_MINUTES;
     } else {
       finish(world, conv);
     }

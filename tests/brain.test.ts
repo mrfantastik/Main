@@ -5,7 +5,8 @@ import { test } from "node:test";
 import { advance, newWorld } from "../src/sim";
 import { AIDirector } from "../src/sim/ai/director";
 import type { LLMClient, LLMRequest } from "../src/sim/ai/llm";
-import { hourLabel, looksLikeSpeech, readChoice, readDiary, readLines, readPlan, readThought, readTurn, smallChoicePrompt, smallConversationPrompt, smallThoughtPrompt, smallTurnPrompt, withNames } from "../src/sim/ai/small";
+import { hourLabel, looksLikeSpeech, readChoice, readDiary, readLines, readPlan, readThought, readTurn, smallChoicePrompt, smallThoughtPrompt, withNames } from "../src/sim/ai/small";
+import { beginDialogue, builtInTurn, endDialogue, modelRequest, planTurn, recordLine } from "../src/sim/dialogue";
 import type { Conversation, WorldState } from "../src/sim/types";
 
 test("reading a small model's dialogue: only the two of them, until it wanders off", () => {
@@ -35,19 +36,11 @@ function chat(w: WorldState, i: number, j: number): Conversation {
   return { id: 99, a: a.id, b: b.id, topic: "chat", buildingId: a.insideId, startedT: w.time, lines: [], revealed: 0, nextRevealT: w.time, status: "talking", agenda: {}, terms: {}, outcome: null, summary: "", source: "template", endT: 0, fallback: { lines: [{ speaker: a.id, text: "Alright?" }, { speaker: b.id, text: "Not bad. You?" }], outcome: {} } };
 }
 
-test("small prompts: who, where, how they speak, what's on their minds, what happens, and a draft to improve", () => {
+test("small prompts: a thought, a choice, names for A and B", () => {
   const w = newWorld(90);
   advance(w, 600);
   const conv = chat(w, 0, 1);
   const [a, b] = [w.citizens[conv.a], w.citizens[conv.b]];
-  const p = smallConversationPrompt(w, conv, "A casual chat. Beats, in order (keep to them, in your own words): A greets B. B tells A about the fire at the café.");
-  assert.equal(p.kind, "lines");
-  assert.equal(p.prefill, `${a.name}:`, "the reply is started for it, in the right format");
-  assert.deepEqual(p.names, [a.name, b.name]);
-  assert.match(p.user, new RegExp(`- ${a.name} greets ${b.name}\\.`));
-  assert.match(p.user, new RegExp(`${b.name}: Not bad\\. You\\?`), "the draft is there to improve on");
-  assert.ok(!/\bA greets\b/.test(p.user), "no A/B placeholders left");
-  assert.ok(p.user.length < 1600, `short enough for a small model (${p.user.length} chars)`);
   assert.equal(withNames("A and B argue; B wins.", a, b), `${a.name} and ${b.name} argue; ${b.name} wins.`);
   const t = smallThoughtPrompt(w, a);
   assert.equal(t.kind, "thought");
@@ -83,7 +76,10 @@ function fakeBrain(seen: LLMRequest[], opts: { ready?: () => boolean; slow?: () 
       if (p.kind === "turn") {
         // A line of its own each time, as the person whose turn it is (the other's name shows it was meant for them).
         const n = seen.filter((r) => r.small?.kind === "turn").length;
-        const line = /goodbye/.test(p.user) ? `Right, I'd better go. Bye, ${p.names![1]}!` : `${p.names![1]}, that's the ${n}th thing I've said today, honestly.`;
+        const them = p.names![1];
+        const cue = p.messages?.at(-1)?.content ?? p.user;
+        const said = [`${them}, you'll never guess what I saw this morning.`, `Honestly, ${them}, the queue at the bank was a joke.`, `${them}, have you tried the pies at the diner?`, `I'm not so sure about that, ${them}.`, `Go on then, ${them}, tell me more.`, `That's the funniest thing I've heard all week, ${them}.`, `My feet are killing me, ${them}.`, `Rent's due Friday and I'm dreading it, ${them}.`, `Did you see the rain earlier, ${them}?`, `I've been meaning to ask you something, ${them}.`, `Mad week, ${them}. Mad.`];
+        const line = /\bbye\b/i.test(cue) ? `Right, I'd better go. Bye, ${them}!` : said[n % said.length];
         return { json: { line: readTurn(`${p.prefill} ${line}`, p.names![0], p.names![1]) }, inputTokens: 0, outputTokens: 0, model: "brain" };
       }
       const friend = p.options?.findIndex((id) => id.startsWith("see:")) ?? -1;
@@ -140,13 +136,16 @@ test("with the brain awake, people think and talk through it; asleep, nothing is
   for (const c of voiced) {
     const name = (id: string) => w.citizens[id].name;
     assert.equal(c.lines[0].speaker, c.a, "whoever started it speaks first");
-    assert.ok(c.lines.length >= 4, `a real exchange (${c.lines.length} lines)`);
+    assert.ok(c.lines.length >= 3, `a real exchange (${c.lines.length} lines)`);
+    assert.equal(c.dlg!.turns.length, c.lines.length, "every line is a planned turn");
     c.lines.forEach((l, i) => {
       if (i) assert.notEqual(l.speaker, c.lines[i - 1].speaker, "they take turns");
-      assert.ok(l.text.includes(name(l.speaker === c.a ? c.b : c.a)), `each line is said to the other one: "${l.text}"`);
+      // The brain's lines are said to the other one; a turn it couldn't write is the built-in voice's.
+      if (c.dlg!.turns[i].by === "llm") assert.ok(l.text.includes(name(l.speaker === c.a ? c.b : c.a)), `each line is said to the other one: "${l.text}"`);
     });
-    assert.match(c.lines[c.lines.length - 1].text, /\bBye\b/, "and they say goodbye");
+    assert.ok(c.dlg!.turns.filter((t) => t.by === "llm").length >= c.lines.length - 2, "the brain wrote (nearly) all of it");
   }
+  assert.ok(voiced.some((c) => /\bBye\b/.test(c.lines[c.lines.length - 1].text)), "and they say goodbye");
   assert.ok(
     seen.some((r) => r.small!.kind === "turn" && (r.small!.messages?.length ?? 0) >= 3 && r.small!.messages!.some((m) => m.role === "assistant")),
     "each turn is a real chat: what the other said, and what they've said themselves",
@@ -156,48 +155,52 @@ test("with the brain awake, people think and talk through it; asleep, nothing is
 });
 
 test("each citizen is their own chatbot: their character card, how they are, who they're with, and the chat so far", async () => {
-  const { botCard, defaultCard, saveCard, rememberChat } = await import("../src/sim/mind/bot");
+  const { botCard, defaultCard, saveCard } = await import("../src/sim/mind/bot");
   const w = newWorld(90);
   advance(w, 600);
   const conv = chat(w, 0, 1);
   const [a, b] = [w.citizens[conv.a], w.citizens[conv.b]];
+  beginDialogue(w, conv, a, b);
   const card = botCard(a);
   assert.equal(card.custom, false);
   assert.ok(card.examples.length >= 3 && card.bio.length > 20 && card.voice && card.cares && card.secret, "a full card, made from their personality");
   assert.notDeepEqual(defaultCard(a).examples, defaultCard(b).examples, "everyone's different");
-  const open = smallTurnPrompt(w, conv, a, b, "open", null);
+  const d = planTurn(w, conv, a.id)!;
+  const open = modelRequest(w, conv, a.id, d, true).small!;
   assert.equal(open.kind, "turn");
-  assert.match(open.system, new RegExp(`^You are ${a.name} ${a.surname}, ${a.age}`), "the system prompt is their own card");
-  assert.ok(open.system.includes(card.examples[0]), "with the way they talk");
-  assert.match(open.system, new RegExp(`You're talking to ${b.name} \\(`));
-  assert.match(open.system, /Stay in character/);
+  assert.match(open.system, new RegExp(`^You are ${a.name}, talking with ${b.name}`), "the system prompt is theirs");
+  assert.ok(open.system.includes(card.bio), "their own character card");
+  assert.match(open.system, /How you sound: "/, "with the way they talk");
   assert.equal(open.messages![0].role, "user");
-  assert.match(open.messages![0].content, /Start the conversation/);
-  conv.lines = [{ speaker: a.id, text: "Morning! You look shattered." }];
-  const reply = smallTurnPrompt(w, conv, b, a, "talk", null);
-  assert.equal(reply.messages!.length, 1);
-  assert.match(reply.messages![0].content, new RegExp(`^\\(You've run into ${a.name} at [^)]*\\)\\n${a.name}: Morning! You look shattered\\.$`), "the other person speaks as the user");
-  conv.lines.push({ speaker: b.id, text: "Cheers. Long night." });
-  const mine = smallTurnPrompt(w, conv, a, b, "talk", null);
-  assert.deepEqual(mine.messages!.slice(1), [{ role: "assistant", content: "Morning! You look shattered." }, { role: "user", content: `${b.name}: Cheers. Long night.` }], "and they speak as the assistant");
-  assert.match(smallTurnPrompt(w, conv, b, a, "wrap", null).messages!.at(-1)!.content, /say goodbye/);
-  const bye = smallTurnPrompt(w, conv, a, b, "byeback", `${b.name} says no.`);
-  assert.match(bye.system, new RegExp(`already decided, stick to it\\): ${b.name} says no\\.`));
-  assert.match(bye.messages!.at(-1)!.content, /Say goodbye back/);
+  assert.ok(open.messages!.at(-1)!.content.includes(d.hint), "this turn's plan is the cue");
+  // Their line, then the other's turn: what was said comes as the other person's words.
+  const t1 = builtInTurn(w, conv, a.id, d);
+  recordLine(w, conv, a.id, d, t1.text, t1.meta, t1.extras);
+  const d2 = planTurn(w, conv, b.id)!;
+  const reply = modelRequest(w, conv, b.id, d2, true).small!;
+  assert.match(reply.messages![0].content, new RegExp(`${a.name}: ${t1.text.replace(/[.?*+()[\]]/g, "\\$&")}`), "the other person speaks as the user");
+  assert.ok(!reply.system.includes(d.hint) && !reply.user.includes(d.hint), "and nobody sees what the other one privately meant to do");
+  const t2 = builtInTurn(w, conv, b.id, d2);
+  recordLine(w, conv, b.id, d2, t2.text, t2.meta, t2.extras);
+  const mine = modelRequest(w, conv, a.id, planTurn(w, conv, a.id)!, true).small!;
+  assert.deepEqual(mine.messages!.filter((m) => m.role === "assistant").map((m) => m.content), [t1.text], "their own lines are theirs");
   // The player's version of them, and their settings.
   saveCard(a, { instructions: "Always brings up football.", creativity: 1, chattiness: 0, examples: ["Up the Town!", "  "] });
-  const custom = smallTurnPrompt(w, conv, a, b, "talk", null);
+  const custom = modelRequest(w, conv, a.id, planTurn(w, conv, a.id)!, true).small!;
   assert.match(custom.system, /Also: Always brings up football\./);
   assert.match(custom.system, /"Up the Town!"/);
-  assert.match(custom.system, /one short sentence/);
-  assert.equal(custom.temperature, 1.05);
+  assert.match(custom.system, /a few words/);
+  assert.equal(custom.temperature, 1);
   assert.ok(botCard(a).custom && botCard(a).examples.length === 1, "blank example lines are dropped");
   saveCard(a, null);
   assert.equal(botCard(a).custom, false, "and back to how they were");
   // They remember how their last chat went, next time.
   conv.revealed = conv.lines.length;
-  rememberChat(w, conv);
-  assert.match(smallTurnPrompt(w, chat(w, 0, 1), a, b, "open", null).system, new RegExp(`Last time you two talked \\(earlier today\\):\\nYou: Morning! You look shattered\\.\\n${b.name}: Cheers\\. Long night\\.`));
+  endDialogue(w, conv);
+  const next = chat(w, 0, 1);
+  next.id = 100;
+  beginDialogue(w, next, a, b);
+  assert.match(modelRequest(w, next, a.id, planTurn(w, next, a.id)!, true).small!.system, /Last time you talked \(/);
   assert.ok(open.system.length < 2600, `short enough for a small model (${open.system.length} chars)`);
 });
 
@@ -220,8 +223,9 @@ test("a slow brain (no graphics card) only voices the conversations you're watch
   advance(w, 9 * 60);
   d.focus = w.citizenOrder[0];
   await run(w, d, 6 * 60);
-  const convPrompts = seen.filter((r) => r.small!.kind === "lines");
+  const convPrompts = seen.filter((r) => r.small!.kind === "turn");
   const focusName = w.citizens[d.focus].name;
+  assert.ok(convPrompts.length > 0, "the chats you're watching are spoken");
   assert.ok(convPrompts.every((r) => r.small!.names!.includes(focusName)), "only chats with the person in focus");
 });
 
