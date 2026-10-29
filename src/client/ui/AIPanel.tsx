@@ -155,6 +155,7 @@ function AgentsBox() {
           Set
         </button>
       </div>
+      <TalkLimits />
       <div className="tags">
         {s.roster.map((r) => (
           <button key={r.id} className="chip" onClick={() => store.select({ kind: "citizen", id: r.id })} title="See their agent inspector">
@@ -173,6 +174,66 @@ function AgentsBox() {
           ))}
         </details>
       )}
+    </div>
+  );
+}
+
+/** How much of the town's talking the AI does: conversations at once, requests at once, gap between calls. */
+function TalkLimits() {
+  const ai = useStore((x) => x.state?.ai);
+  const [chats, setChats] = useState("");
+  const [par, setPar] = useState("");
+  const [gap, setGap] = useState("");
+  const l = ai?.limits;
+  if (!ai || !l) return null;
+  const all = l.liveChats !== null && l.liveChats >= 12;
+  const on = ai.available && ai.mode === "llm";
+  return (
+    <div style={{ margin: "8px 0" }}>
+      <label style={{ display: "flex", gap: 6, alignItems: "flex-start", marginBottom: 6 }}>
+        <input type="checkbox" checked={!!ai.aiOnly} onChange={(e) => store.send({ type: "ai", aiOnly: e.target.checked })} />
+        <span>
+          <b>Only the AI speaks</b> (no built-in lines, ever). A conversation only happens if the AI can speak it; a line it gets wrong is asked for again, never filled in; if it stops answering, the conversation just ends there.
+          {ai.aiOnly && !on && <span className="chip bad" style={{ marginLeft: 6 }}>no AI connected: nobody's talking</span>}
+        </span>
+      </label>
+      <div className="kv">
+        <span className="k">AI-spoken chats</span>
+        <span>
+          {l.liveChats === null ? "a couple at a time (the rest in the built-in voice)" : l.liveChats === 0 ? "none" : `up to ${l.liveChats} at once${all ? " (everyone)" : ""}`} · {l.maxConcurrent} request{l.maxConcurrent === 1 ? "" : "s"} at once · {l.minIntervalMs} ms between calls
+        </span>
+      </div>
+      <div className="god-row">
+        <button className="btn" title="For a model of your own (Ollama, LM Studio, a paid service): every conversation spoken by the AI, and only by the AI" onClick={() => store.send({ type: "ai", limits: { liveChats: 20, maxConcurrent: 4, minIntervalMs: 0 }, aiOnly: true })}>
+          🗣️ The AI speaks for everyone
+        </button>
+        <button className="btn" onClick={() => store.send({ type: "ai", limits: { liveChats: null, maxConcurrent: ai.brain ? 1 : 2, minIntervalMs: ai.brain ? 0 : 2500 } })}>
+          Back to the default
+        </button>
+      </div>
+      <div className="god-row">
+        <input placeholder={`Chats at once`} value={chats} onChange={(e) => setChats(e.target.value)} style={{ width: 90 }} />
+        <input placeholder={`Requests at once`} value={par} onChange={(e) => setPar(e.target.value)} style={{ width: 110 }} />
+        <input placeholder={`Gap (ms)`} value={gap} onChange={(e) => setGap(e.target.value)} style={{ width: 80 }} />
+        <button
+          className="btn"
+          onClick={() => {
+            const lim: { liveChats?: number; maxConcurrent?: number; minIntervalMs?: number } = {};
+            if (chats.trim() && Number.isFinite(Number(chats))) lim.liveChats = Number(chats);
+            if (par.trim() && Number.isFinite(Number(par))) lim.maxConcurrent = Number(par);
+            if (gap.trim() && Number.isFinite(Number(gap))) lim.minIntervalMs = Number(gap);
+            if (Object.keys(lim).length) store.send({ type: "ai", limits: lim });
+            setChats("");
+            setPar("");
+            setGap("");
+          }}
+        >
+          Set
+        </button>
+      </div>
+      <p className="muted" style={{ fontSize: 11, margin: 0 }}>
+        A free public AI allows only a couple of chats at once and a call every few seconds. Your own model (or a paid one) can take far more: more chats at once means more of the town talks through it, as fast as it can answer. Whatever it can't keep up with, the built-in voice says, unless only the AI speaks: then those conversations wait until it can. Play at 1× for full conversations: at high speed the AI can't keep up and they're cut short.
+      </p>
     </div>
   );
 }

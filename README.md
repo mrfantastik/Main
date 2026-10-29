@@ -37,6 +37,45 @@ The **town checks every proposal** against the real world: do they have the mone
 
 ---
 
+## Only the AIs talk: the best way to run it
+
+Turn on **Only the AI speaks** and no built-in line is ever said. A conversation happens only if the AI will speak it. A line it gets wrong (a repeat, a name the speaker couldn't know, a made-up sum, assistant-speak) is sent back with the reason and asked for again, never replaced. If the AI stops answering, the conversation just ends where it is. Every line in the transcripts is then marked 🧠.
+
+How much the town talks then depends on how fast your model is. A town says about **570 lines a game day** across ~55 conversations (up to 5 at once), plus ~100 agent decisions: roughly **700 requests a game day**. Each prompt is under ~1,200 tokens and each reply a few dozen. At 1× a game day is 6 real minutes, so keeping up with everyone takes about **2 requests a second**. If the model is slower, nothing breaks: conversations take longer (people stand chatting longer) and fewer happen at once.
+
+**The best setup is the server version with a local model, through Ollama, on a graphics card.** It's free, private, has no rate limits, and keeps up with the whole town.
+
+1. Install [Ollama](https://ollama.com) and get a model:
+   - `ollama pull qwen2.5:7b`: needs ~6 GB of graphics memory; reliable, and follows the reply format well.
+   - `ollama pull qwen2.5:14b`: 10–12 GB; noticeably better conversations.
+   - `mistral-nemo` (12B) or `gemma2:9b`: livelier writing, if you have the memory.
+
+   Avoid "thinking" (reasoning) models: they're slow and wrap their replies in reasoning.
+2. Let it answer four at once: `OLLAMA_NUM_PARALLEL=4 ollama serve`.
+3. Run the town against it, with only the AI speaking:
+
+   ```bash
+   AI_PROVIDER=free FREE_AI_URL=http://localhost:11434/v1/chat/completions AI_MODEL=qwen2.5:7b \
+   FREE_AI_INTERVAL_MS=0 AI_CONCURRENCY=4 AI_LIVE_CHATS=20 AI_ONLY=1 npm start
+   ```
+
+4. Open http://localhost:3000 and play at **1×**. At higher speeds the model can't keep up, and conversations are cut short (cleanly, with nothing filled in).
+
+**Other ways, and what they give you:**
+
+| | Conversations | Notes |
+|---|---|---|
+| **Local model, server** (above) | the whole town | the recommended setup |
+| **Local model, browser game** | the whole town | Start Ollama with `OLLAMA_ORIGINS=*` (so the page may call it), open `ai-hustle-city.html?freeai=http://localhost:11434/v1/chat/completions&model=qwen2.5:7b`, then press **🗣️ The AI speaks for everyone** in the 🧠 AI panel's Agents box. |
+| **LM Studio, vLLM, any OpenAI-compatible server** | the whole town | the same, with its `/v1/chat/completions` URL and model name |
+| **A hosted model (Claude, or an OpenAI-compatible service)** | the whole town | Claude writes the best conversations, but every line is a paid call: about 700 calls a game day, around 6 million input tokens an hour at 1×. Fine for a session with a budget, expensive to leave running. Use `AI_PROVIDER=claude AI_ONLY=1 AI_LIVE_CHATS=20 AI_CONCURRENCY=4 AI_MAX_CALLS_PER_DAY=5000`, and raise `AI_BUDGET_USD`. |
+| **The town's brain** (in-page, no install) | a few at once | Small models (up to 1.5B): on a graphics card up to 3 conversations at once; on a processor only the one you're watching, so with only the AI speaking the rest of the town stays quiet. |
+| **The free public AI** (the default) | a couple at once | Rate-limited (two at a time, a call every few seconds): it can't speak for a whole town. |
+
+The same settings are in the game: the 🧠 AI panel's **Agents** box has the **Only the AI speaks** switch, how many conversations the AI speaks at once, how many requests it sends at once, and the gap between calls. **🗣️ The AI speaks for everyone** sets all of them for a model of your own.
+
+---
+
 ## Quick start
 
 You need [Node.js](https://nodejs.org) 22 or newer (20 works too, without the SQLite database).
@@ -126,7 +165,10 @@ One model serves the whole town. Each request carries one person's own context a
 | `FREE_AI_URL` | *(the built-in list)* | Use only this OpenAI-style chat endpoint (the full `/v1/chat/completions` URL): Ollama, LM Studio, vLLM, a hosted service. |
 | `AI_MODEL` | `openai` (free), `claude-opus-5-5` (Claude) | The model name the endpoint expects. |
 | `FREE_AI_KEY` | *(none)* | The endpoint's API key, if it needs one. |
-| `FREE_AI_INTERVAL_MS` | `2500` | Minimum gap between calls. |
+| `FREE_AI_INTERVAL_MS` | `2500` | Minimum gap between calls (set `0` for a model of your own). |
+| `AI_ONLY` | *(off)* | `1`: only the AI speaks, with no built-in lines at all (see above). |
+| `AI_LIVE_CHATS` | *(a couple)* | How many conversations the AI speaks at once, whatever they're about (`20`: everyone). |
+| `AI_CONCURRENCY` | `2` | Requests out at once (match it to your model server, e.g. `OLLAMA_NUM_PARALLEL`). |
 
 ### Using Claude instead (optional)
 

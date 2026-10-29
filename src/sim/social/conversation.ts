@@ -582,7 +582,8 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
       const reason = String(conv.agenda.reason ?? "You know what you did.");
       conv.terms = { reason };
       beginDialogue(world, conv, a, b, "argument");
-      const lines = scriptConversation(world, conv).slice();
+      // (Only the AI speaks: no built-in draft to fall back on.)
+      const lines = world.ai.aiOnly ? [] : scriptConversation(world, conv).slice();
       return { terms: { reason }, lines, outcome: {}, stakes: 0, brief: `A confronts B: "${reason}".` };
     },
     validate: () => ({}),
@@ -601,7 +602,8 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
     prepare(world, conv, a, b) {
       // Planned turn by turn by the conversation system, each of them from their own side.
       const st = beginDialogue(world, conv, a, b);
-      const lines = scriptConversation(world, conv).slice();
+      // (Only the AI speaks: no built-in draft to fall back on.)
+      const lines = world.ai.aiOnly ? [] : scriptConversation(world, conv).slice();
       conv.topics = st.covered.slice(0, 4);
       const hasNews = st.turns.some((t) => t.kind === "news" || t.kind === "gossip");
       return {
@@ -619,7 +621,7 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
         // Spoken live, they talked about what they chose: keep only the topics that came up.
         const said = conv.lines.map((l) => l.text.toLowerCase()).join(" ");
         const names = new Set(world.citizenOrder.map((id) => world.citizens[id].name.toLowerCase()));
-        conv.topics = (conv.topics ?? []).filter((t) => t.toLowerCase().split(/[^a-z]+/).some((w) => w.length >= 5 && !names.has(w) && !/^(about|their|plans|later|news|feels|good|having|people|place)$/.test(w) && said.includes(w)));
+        conv.topics = [...new Set([...(conv.dlg?.covered ?? []), ...(conv.topics ?? [])])].filter((t) => t.toLowerCase().split(/[^a-z]+/).some((w) => w.length >= 5 && !names.has(w) && !/^(about|their|plans|later|news|feels|good|having|people|place)$/.test(w) && said.includes(w)));
         conv.terms.summary = chatSummary(world, conv, a, b);
         conv.terms.headline = "";
       }
@@ -747,8 +749,11 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
   if (negotiated) {
     conv.terms = prepared.terms;
     beginDialogue(world, conv, a, b, "deal", prepared.brief);
-    prepared.lines = scriptConversation(world, conv).slice();
-    prepared.outcome = dealOutcome(conv);
+    // (Only the AI speaks: no built-in draft to fall back on.)
+    if (!world.ai.aiOnly) {
+      prepared.lines = scriptConversation(world, conv).slice();
+      prepared.outcome = dealOutcome(conv);
+    }
   } else if (topic !== "chat" && topic !== "argue") {
     prepared.lines = voiceConversation(conv.id, topic, a, b, prepared.lines, typeof prepared.outcome.agreed === "boolean" ? prepared.outcome.agreed : null, dayOf(world.time));
     beginDialogue(world, conv, a, b, "deal", prepared.brief);
@@ -757,6 +762,10 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
   conv.lines = [];
   conv.terms = prepared.terms;
   conv.fallback = { lines: prepared.lines, outcome: negotiated ? prepared.outcome : handlers[topic].validate(conv, prepared.outcome), dlg: conv.dlg ? JSON.parse(JSON.stringify(conv.dlg)) : undefined };
+  // Will the AI speak it? (Asked before anyone stops what they're doing: when only the AI
+  // speaks and it can't take this one now, it doesn't happen, and they'll try again later.)
+  const ai = aiHook ? aiHook(world, conv, prepared.brief, handlers[topic].schema, prepared.stakes) : false;
+  if (world.ai.aiOnly && ai !== "live") return null;
   // Acting on a decision: it's happening now (and settled when they've talked).
   const decision = typeof agenda.decision === "number" ? agenda.decision : null;
   if (decision !== null && a.society) a.society.intents = a.society.intents.filter((x) => x.decision !== decision);
@@ -767,7 +776,6 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
   lockIntoTalk(world, b, a, conv.id);
   a.cooldowns.lastTalk = world.time;
   b.cooldowns.lastTalk = world.time;
-  const ai = aiHook ? aiHook(world, conv, prepared.brief, handlers[topic].schema, prepared.stakes) : false;
   if (ai === "live") {
     // Each of them speaks for themselves, a line at a time, as the AI writes it. What happens is the town's.
     conv.status = "live";
@@ -849,6 +857,12 @@ export function finishBuiltIn(world: WorldState, conv: Conversation, maxLines = 
 export function endLive(world: WorldState, convId: number, wrap: boolean): void {
   const conv = world.conversations.find((c) => c.id === convId);
   if (!conv || conv.status !== "live" || !conv.live || conv.live.done) return;
+  // Only the AI speaks: it ends where it is, with nothing filled in.
+  if (world.ai.aiOnly) {
+    conv.live.done = true;
+    conv.revealed = Math.min(conv.revealed, conv.lines.length);
+    return;
+  }
   // A group: the built-in voices carry on from here (or it's over).
   if (conv.group) {
     if (wrap) conv.group.driver = "built-in";
@@ -868,6 +882,11 @@ export function endLive(world: WorldState, convId: number, wrap: boolean): void 
 }
 
 function finish(world: WorldState, conv: Conversation): void {
+  // Only the AI speaks, and it never got a word out: as if it never happened.
+  if (world.ai.aiOnly && conv.lines.length === 0) {
+    cancelConversation(world, conv);
+    return;
+  }
   if (conv.group) {
     finishGroup(world, conv);
     return;
@@ -923,6 +942,32 @@ function finish(world: WorldState, conv: Conversation): void {
 /** A live chat whose next line hasn't come for this long (game minutes) wraps up. */
 const LIVE_STALL = 90;
 
+/** AI-only: a chat the AI has stopped working on for this long (game minutes) ends where it is... */
+const AI_ONLY_ORPHAN = 60;
+/** ...and none goes on longer than this (at high speed the AI can't keep up; they have lives to get on with). */
+const AI_ONLY_LONGEST = 6 * 60;
+
+/** AI-only: the AI isn't carrying this one on any more, or it's gone on too long. */
+export function aiOnlyOverdue(world: WorldState, conv: Conversation): boolean {
+  const live = conv.live;
+  if (!live) return false;
+  return world.time - Math.max(live.lastLineT, live.heldT ?? -1e9) > AI_ONLY_ORPHAN || world.time - conv.startedT > AI_ONLY_LONGEST;
+}
+
+/** A conversation that never got going: everyone goes back to what they were doing, and nothing is kept. */
+export function cancelConversation(world: WorldState, conv: Conversation): void {
+  const ids = conv.group ? conv.group.members : [conv.a, conv.b];
+  for (const id of ids) {
+    const c = world.citizens[id];
+    if (!c) continue;
+    if (c.activity.kind === "talk" && c.activity.action?.params?.conversationId === conv.id) c.activity.endsAt = world.time;
+    c.awaitingAI = false;
+  }
+  const a = world.citizens[conv.a];
+  if (a && typeof conv.agenda.decision === "number") settleDecision(a, conv.agenda.decision, "expired", "Never got talking properly.");
+  world.conversations = world.conversations.filter((x) => x.id !== conv.id);
+}
+
 /** Every minute: reveal lines, end finished conversations. */
 export function conversationsTick(world: WorldState): void {
   for (const conv of [...world.conversations]) {
@@ -939,6 +984,9 @@ export function conversationsTick(world: WorldState): void {
         }
       } else if (conv.live.done) {
         if (world.time >= conv.nextRevealT) finish(world, conv);
+      } else if (world.ai.aiOnly) {
+        // Only the AI speaks: they wait for it (as long as it's still working on it).
+        if (aiOnlyOverdue(world, conv)) endLive(world, conv.id, false);
       } else if (world.time - conv.live.lastLineT > LIVE_STALL) endLive(world, conv.id, true);
       continue;
     }
@@ -1044,6 +1092,12 @@ export function registerConversationActions(): void {
         delete params.topic;
         // The seeker is idle at this point, so they can start talking straight away.
         if (startConversation(world, c, target, String(a.params.topic) as ConversationTopic, params)) return;
+        // (Only the AI speaks, and it's busy: they'll find a moment later.)
+        if (world.ai.aiOnly) {
+          setThought(world, c, `Couldn't get talking to ${target.name} just now. Later.`, 2);
+          c.cooldowns[`miss:${target.id}`] = world.time - 120;
+          return;
+        }
       }
       setThought(world, c, `${target.name} wasn't there. I'll catch them later.`, 2);
       c.cooldowns[`miss:${target.id}`] = world.time;

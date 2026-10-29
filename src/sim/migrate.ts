@@ -68,6 +68,18 @@ function migrate(raw: unknown): WorldState | null {
   // a live chat that was cut off by saving is finished by the built-in voices
   // (or, from an older save, ends there with a goodbye).
   for (const conv of w.conversations) {
+    // Only the AI speaks: whatever was being said waits for the AI to pick it up again
+    // (and ends where it is if it doesn't); nothing is filled in.
+    if (w.ai.aiOnly) {
+      if (conv.status === "awaiting_ai") {
+        conv.status = "live";
+        conv.lines = [];
+        conv.live = { done: true, lastLineT: w.time };
+      }
+      if (conv.live) conv.live.heldT = w.time;
+      if (conv.group) conv.group.driver = "ai";
+      continue;
+    }
     // A group chat carries on in the built-in voices (the AI picks up new ones).
     if (conv.group) {
       conv.group.driver = "built-in";

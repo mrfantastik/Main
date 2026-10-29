@@ -170,6 +170,10 @@ export interface AIStatusDTO {
   endpoint?: { url: string; model?: string } | null;
   /** The town's brain: an open-source model running on the player's own computer. */
   brain?: BrainDTO | null;
+  /** Requests out at once, the gap between calls, and how many conversations the AI voices at once (null: a couple, the ones that matter). */
+  limits?: { maxConcurrent: number; minIntervalMs: number; liveChats: number | null };
+  /** Only the AI speaks: no built-in lines at all (a conversation happens only if the AI speaks it). */
+  aiOnly?: boolean;
 }
 
 export interface BrainDTO {
@@ -492,6 +496,10 @@ export type ClientMsg =
       /** "get": download the model `model` (once), save the model file and start it; "forget": drop the copy kept in this browser. */
       brain?: "load" | "unload" | "get" | "forget";
       model?: string;
+      /** How hard the AI works: requests at once, gap between calls (ms), conversations voiced at once (null: back to the default). */
+      limits?: { maxConcurrent?: number; minIntervalMs?: number; liveChats?: number | null };
+      /** Only the AI speaks (no built-in lines), or the built-in voice fills in again. */
+      aiOnly?: boolean;
     }
   /** Rewrite a citizen's chatbot (null: back to the one made from their personality). */
   | { type: "bot"; id: string; card: Partial<BotCard> | null }

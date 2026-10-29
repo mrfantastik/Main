@@ -1,6 +1,6 @@
 import { describeSkip, type AIStatusDTO, type ClientMsg, type HelloMsg, type ServerMsg } from "../../shared/protocol";
 import { newWorld as createWorld } from "../../sim";
-import { AIDirector } from "../../sim/ai/director";
+import { AIDirector, type DirectorLimits } from "../../sim/ai/director";
 import { BrainClient } from "../brain/client";
 import { packFromFiles, saveToDisk } from "../brain/models";
 import { createFreeAIClient } from "../../sim/ai/freeai";
@@ -64,6 +64,27 @@ async function writeSave(json: string): Promise<boolean> {
 const AI_PREF = "hustle.ai";
 const BRAIN_PREF = "hustle.brain";
 const AI_ENDPOINT = "hustle.ai.endpoint";
+const AI_LIMITS = "hustle.ai.limits";
+const AI_ONLY_PREF = "hustle.ai.only";
+
+/** Whether the player wants only the AI to speak (kept in this browser; null: they haven't said). */
+function aiOnlyWanted(): boolean | null {
+  try {
+    const v = localStorage.getItem(AI_ONLY_PREF);
+    return v === "on" ? true : v === "off" ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The limits the player set (requests at once, gap between calls, conversations voiced at once), kept in this browser. */
+function savedLimits(): Partial<DirectorLimits> | null {
+  try {
+    return JSON.parse(localStorage.getItem(AI_LIMITS) ?? "null") as Partial<DirectorLimits> | null;
+  } catch {
+    return null;
+  }
+}
 
 type Endpoint = { url: string; model?: string; key?: string };
 
@@ -128,8 +149,11 @@ export class LocalHost {
       // ?freeai=<url> (tests, or a model server of your own): a free OpenAI-style endpoint instead.
       this.brain = null;
       this.endpoint = url === null ? null : savedEndpoint();
-      this.director = new AIDirector(url === null ? null : createFreeAIClient({ url, custom: this.endpoint }), { total: () => 0, add: () => undefined }, { maxConcurrent: 2, minIntervalMs: 2500, timeoutMs: 45_000 });
+      // (?model=: the model name the endpoint expects, e.g. llama3.1 for Ollama.)
+      this.director = new AIDirector(url === null ? null : createFreeAIClient({ url, model: params.get("model") || undefined, custom: this.endpoint }), { total: () => 0, add: () => undefined }, { maxConcurrent: 2, minIntervalMs: 2500, timeoutMs: 45_000 });
     }
+    const limits = savedLimits();
+    if (limits) this.director.setLimits(limits);
     this.director.attach();
   }
 
@@ -243,6 +267,7 @@ export class LocalHost {
   }
 
   private configureAI(world: WorldState): void {
+    world.ai.aiOnly = aiOnlyWanted() ?? !!world.ai.aiOnly;
     world.ai.model = this.director.model;
     world.ai.maxCallsPerDay = 5000;
     world.ai.mode = this.director.available && aiWanted() ? "llm" : "off";
@@ -268,6 +293,8 @@ export class LocalHost {
       connection: this.brain ? null : this.director.freeStatus(),
       endpoint: this.endpoint ? { url: this.endpoint.url, model: this.endpoint.model } : null,
       brain: this.brain ? { ...this.brain.status } : null,
+      limits: { ...this.director.limits, liveChats: this.director.limits.liveChats ?? null },
+      aiOnly: !!ai.aiOnly,
     };
   }
 
@@ -365,6 +392,18 @@ export class LocalHost {
         }
         break;
       case "ai":
+        if (msg.limits || msg.aiOnly !== undefined) {
+          if (msg.limits) this.director.setLimits(msg.limits);
+          if (msg.aiOnly !== undefined) w.ai.aiOnly = msg.aiOnly;
+          try {
+            localStorage.setItem(AI_LIMITS, JSON.stringify(this.director.limits));
+            localStorage.setItem(AI_ONLY_PREF, w.ai.aiOnly ? "on" : "off");
+          } catch {
+            // fine: just for this visit
+          }
+          this.pushState();
+          break;
+        }
         if (msg.brain === "load") {
           this.wakeBrain();
           this.pushState();

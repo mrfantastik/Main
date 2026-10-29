@@ -13,7 +13,7 @@ import { settleDecision } from "../society/state";
 import { happeningById, knows, learnNews } from "../town/happenings";
 import type { Citizen, CitizenId, Conversation, WorldState } from "../types";
 import { clamp, newId, pushRing } from "../util";
-import { canTalk, CONVERSATION_LOG_LIMIT, lockIntoTalk, voiceWithAI } from "./conversation";
+import { aiOnlyOverdue, canTalk, CONVERSATION_LOG_LIMIT, lockIntoTalk, voiceWithAI } from "./conversation";
 import { compatibility } from "./encounters";
 import { adjustRel } from "./relationships";
 
@@ -88,13 +88,16 @@ export function startGroupChat(world: WorldState, a: Citizen, b: Citizen, arrivi
   recallPerson(world, a, b.id);
   recallPerson(world, b, a.id);
   newGroup(world, conv, a, b, arriving, "built-in");
+  // The AI may speak for them, a line at a time. (When only the AI speaks and it can't take
+  // this one now, it doesn't start: asked before anyone stops what they're doing.)
+  const ai = voiceWithAI(world, conv) === "live";
+  if (world.ai.aiOnly && !ai) return null;
+  if (ai) conv.group!.driver = "ai";
   world.conversations.push(conv);
   lockIntoTalk(world, a, b, conv.id);
   lockIntoTalk(world, b, a, conv.id);
   a.cooldowns.lastTalk = world.time;
   b.cooldowns.lastTalk = world.time;
-  // The AI may speak for them, a line at a time.
-  if (voiceWithAI(world, conv) === "live") conv.group!.driver = "ai";
   return conv;
 }
 
@@ -183,6 +186,11 @@ export function groupTick(world: WorldState, conv: Conversation, finish: (conv: 
   if (world.time < conv.nextRevealT) return;
   if (conv.live.done) {
     finish(conv);
+    return;
+  }
+  // Only the AI speaks: wait for its next line; if it's stopped working on this one, it ends where it is.
+  if (world.ai.aiOnly) {
+    if (g.driver !== "ai" || aiOnlyOverdue(world, conv)) conv.live.done = true;
     return;
   }
   if (g.driver === "ai") {

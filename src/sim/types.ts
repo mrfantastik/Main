@@ -839,8 +839,8 @@ export interface Conversation {
   nextRevealT: number;
   /** "live": the AI is writing it line by line, each person speaking for themselves. */
   status: "talking" | "awaiting_ai" | "live" | "done";
-  /** A live chat: whether they've said goodbye, and when the last line came (game time). */
-  live?: { done: boolean; lastLineT: number };
+  /** A live chat: whether they've said goodbye, and when the last line came (game time). `heldT`: the AI was still working on it then (AI-only mode). */
+  live?: { done: boolean; lastLineT: number; heldT?: number };
   /** What the initiator wanted (amount, purpose, business, loan...). */
   agenda: Record<string, ConvValue>;
   /** Engine-computed negotiation terms and limits (AI output is validated against them). */
@@ -1022,6 +1022,12 @@ export interface AIState {
   callsToday: number;
   maxCallsPerDay: number;
   log: AILogEntry[];
+  /**
+   * Only the AI speaks: a conversation starts only if the AI will speak it, a
+   * line it gets wrong is asked for again (never replaced by a built-in one),
+   * and if the AI stops answering, a conversation simply ends where it is.
+   */
+  aiOnly?: boolean;
 }
 
 export interface WorldState {

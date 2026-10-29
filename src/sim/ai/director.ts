@@ -5,7 +5,7 @@ import { updateNeeds } from "../systems/needs";
 import { setReflectionHook } from "../mind/reflection";
 import { placeName } from "../places";
 import { endLive, isPublic, sayLive, setConversationAIHook } from "../social/conversation";
-import { builtInTurn, modelRequest, planTurn, readModelTurn, whoseTurn, type Directive } from "../dialogue";
+import { builtInTurn, isDeal, modelRequest, planTurn, readModelTurn, whoseTurn, type Directive } from "../dialogue";
 import { builtInGroupTurn, groupRequest, readGroupTurn, type GroupPlan } from "../dialogue/group";
 import { nextGroupPlan, sayGroup } from "../social/group";
 import { applyModelDecision, decide, rulesDecide, setDecisionHook } from "../society/tick";
@@ -58,10 +58,21 @@ export interface SpendLedger {
 }
 
 export interface DirectorOptions {
+  /** Requests out at once. */
   maxConcurrent: number;
+  /** Gap between calls (ms). */
   minIntervalMs: number;
   timeoutMs: number;
+  /**
+   * How many conversations the AI voices at once, any conversation at all
+   * (unset: a couple at a time, and with Claude only the ones worth paying
+   * for). Set it high and every conversation in town is spoken by the AI.
+   */
+  liveChats?: number;
 }
+
+/** The limits the player can change while it runs. */
+export type DirectorLimits = Pick<DirectorOptions, "maxConcurrent" | "minIntervalMs" | "liveChats">;
 
 interface Pending {
   id: number;
@@ -109,13 +120,57 @@ interface Live {
   /** A request is out for the next line. */
   waiting: boolean;
   /** The turn being written: who, what they mean to do, and what they were given to go on. */
-  turn: { speaker: string; d?: Directive; given: string; plan?: GroupPlan } | null;
+  turn: LiveTurn | null;
   failures: number;
   watched: boolean;
   /** Lines the AI wrote, and lines the built-in voice had to say instead. */
   byModel: number;
   byBuiltIn: number;
   at: number;
+}
+
+/** The line being written for a live chat: who, what they mean to do, what they were given, and (AI-only) how many tries so far and why the last was turned down. */
+interface LiveTurn {
+  speaker: string;
+  d?: Directive;
+  given: string;
+  plan?: GroupPlan;
+  req?: { system: string; user: string; schema: Record<string, unknown>; small?: SmallPrompt };
+  attempts?: number;
+  why?: string;
+}
+
+/** AI-only: tries at one line before the conversation ends there. */
+const AI_ONLY_ATTEMPTS = 4;
+
+/** What to tell the model when its line was turned down, so the next try is different. */
+function retryNote(why: string): string {
+  if (/repeats/.test(why)) return "That was too close to something already said: say something new.";
+  const who = why.match(/^mentions (\w+)/);
+  if (who) return `You don't know anyone called ${who[1]}, so don't mention them.`;
+  if (/^made up £/.test(why)) return "Don't make up sums of money.";
+  if (/assistant/.test(why)) return "Talk like a real person, not an assistant.";
+  if (/not speech|empty/.test(why)) return "Reply with only the words you say out loud.";
+  if (/^deal: /.test(why)) return `That move isn't possible (${why.slice(6)}).`;
+  if (/no decision about the deal/.test(why)) return 'Say what you do about the deal, in "deal".';
+  if (/not a goodbye/.test(why)) return "You're saying goodbye: keep it to that.";
+  return "";
+}
+
+/** A prompt with a note on the end (for another try at a line). */
+function withNote(req: NonNullable<LiveTurn["req"]>, note: string): NonNullable<LiveTurn["req"]> {
+  if (!note) return req;
+  const extra = `\n(Your last try was turned down. ${note})`;
+  const small = req.small
+    ? {
+        ...req.small,
+        user: `${req.small.user}${extra}`,
+        ...(req.small.messages
+          ? { messages: req.small.messages.map((m, i, all) => (i === all.length - 1 && m.role === "user" ? { ...m, content: `${m.content}${extra}` } : m)).concat(req.small.messages[req.small.messages.length - 1]?.role === "user" ? [] : [{ role: "user" as const, content: extra.trim() }]) }
+          : {}),
+      }
+    : undefined;
+  return { ...req, user: `${req.user}${extra}`, small };
 }
 
 /** Activities the next move can be planned during (not walking, talking or between things). */
@@ -127,7 +182,6 @@ const ACCEPT_MARGIN = 2.2;
 /** A live chat whose AI keeps failing is finished by the built-in voices after this many failures in a row. */
 const LIVE_FAILURES = 3;
 
-const CONVERSATION_TOPICS = new Set(["ask_loan", "pitch_investment", "ask_job", "offer_job", "demand_repayment", "ask_help", "share_tip", "argue", "sell_stock"]);
 
 export class AIDirector {
   private inFlight = new Map<number, Pending>();
@@ -173,6 +227,36 @@ export class AIDirector {
 
   get available(): boolean {
     return !!this.client && !this.disabledReason;
+  }
+
+  /** The player is watching someone in this conversation (or on their way over to it). */
+  private watching(conv: Conversation): boolean {
+    const f = this.focus;
+    return !!f && (conv.a === f || conv.b === f || !!conv.group?.present.includes(f) || !!conv.group?.arriving.some((x) => x.who === f));
+  }
+
+  /** How many conversations it speaks at once: what the player set, or what this model can keep up with. */
+  private liveLimit(conv?: Conversation): number {
+    if (this.opts.liveChats !== undefined) return this.opts.liveChats;
+    const base = this.small ? ((this.client?.parallel?.() ?? 1) >= 4 ? 3 : 1) : 2;
+    // (A deal or a favour gets a slot of its own.)
+    return base + (conv && conv.topic !== "chat" && !this.small ? 1 : 0);
+  }
+
+  /** How many requests at once, the gap between calls, and how many conversations it voices at once. */
+  get limits(): DirectorLimits {
+    return { maxConcurrent: this.opts.maxConcurrent, minIntervalMs: this.opts.minIntervalMs, liveChats: this.opts.liveChats };
+  }
+
+  /** Change the limits (a model of your own can take far more than a free public one). */
+  setLimits(l: Partial<Omit<DirectorLimits, "liveChats">> & { liveChats?: number | null }): void {
+    const n = (v: number | undefined, lo: number, hi: number) => (v === undefined || !Number.isFinite(v) ? undefined : Math.max(lo, Math.min(hi, Math.round(v))));
+    this.opts = {
+      ...this.opts,
+      ...(n(l.maxConcurrent, 1, 32) !== undefined ? { maxConcurrent: n(l.maxConcurrent, 1, 32)! } : {}),
+      ...(n(l.minIntervalMs, 0, 60_000) !== undefined ? { minIntervalMs: n(l.minIntervalMs, 0, 60_000)! } : {}),
+      ...("liveChats" in l ? { liveChats: n(l.liveChats ?? undefined, 0, 50) } : {}),
+    };
   }
 
   get model(): string {
@@ -315,10 +399,16 @@ export class AIDirector {
   // --------------------------------------------------- conversations
 
   private conversationHook(world: WorldState, conv: Conversation, _brief: string, _outcomeSchema: Record<string, unknown>, stakes: number): boolean | "live" {
-    if (conv.topic !== "chat" && !CONVERSATION_TOPICS.has(conv.topic)) return false;
-    const watched = conv.a === this.focus || conv.b === this.focus || !!(this.focus && (conv.group?.present.includes(this.focus) || conv.group?.arriving.some((x) => x.who === this.focus)));
+    // (Any conversation the town has: chats, rows, and every kind of deal, all negotiated turn by turn.)
+    if (conv.topic !== "chat" && conv.topic !== "argue" && !isDeal(conv.topic)) return false;
+    const watched = this.watching(conv);
     const lives = [...this.live.values()].filter((l) => l.world === world).length;
-    if (this.free) {
+    // Set by the player (a number of chats at once, or only the AI speaks): whatever they're about.
+    if (this.opts.liveChats !== undefined || world.ai.aiOnly) {
+      if (this.client?.slow?.() && !watched) return false;
+      if (!this.canCall(world, true) || (!this.free && this.ledger.total() >= world.ai.budgetUsd)) return false;
+      if (!watched && lives >= this.liveLimit(conv)) return false;
+    } else if (this.free) {
       // Free: speak for as many conversations as it can keep up with (the watched one always).
       // A slow in-page model only does the ones the player is watching (nobody waits long).
       if (this.client?.slow?.() && !watched) return false;
@@ -393,6 +483,8 @@ export class AIDirector {
       if (l.world !== world) continue;
       if (!conv || conv.status !== "live" || conv.live?.done) this.live.delete(id);
     }
+    // Only the AI speaks: a conversation nobody's speaking for (after loading a save) is picked up again.
+    if (world.ai.aiOnly) this.adoptLiveChats(world);
     for (let tries = 0; tries < 3; tries++) {
       // (A group stays at most a line ahead of what's been shown: who speaks next depends on what was just said.)
       const groupReady = (l: Live) => {
@@ -410,6 +502,17 @@ export class AIDirector {
       const l = ready.sort((x, y) => waited(y) - waited(x) || x.at - y.at)[0];
       if (!l) return false;
       const conv = world.conversations.find((x) => x.id === l.convId)!;
+      // Another go at a line the AI got wrong (only the AI speaks), if it's still theirs to say.
+      if (l.turn?.req) {
+        const still = conv.group ? conv.lines.length === l.turn.plan?.at : whoseTurn(conv) === l.turn.speaker;
+        if (still) {
+          const req = withNote(l.turn.req, l.turn.why ? retryNote(l.turn.why) : "");
+          l.waiting = true;
+          this.send(world, { kind: "conversation", citizenId: l.turn.speaker, convId: conv.id, turn: { speaker: l.turn.speaker } }, req.system, req.user, req.schema, req.small);
+          return true;
+        }
+        l.turn = null;
+      }
       if (conv.group) {
         // A group: the scheduler says who speaks, to whom, and what they mean to do.
         const plan = nextGroupPlan(world, conv);
@@ -418,7 +521,7 @@ export class AIDirector {
           continue;
         }
         const req = groupRequest(world, conv, plan, this.small);
-        l.turn = { speaker: plan.speaker, d: plan.d, given: req.given, plan };
+        l.turn = { speaker: plan.speaker, d: plan.d, given: req.given, plan, req: { system: req.system, user: req.user, schema: req.schema, small: req.small }, attempts: 0 };
         l.waiting = true;
         this.send(world, { kind: "conversation", citizenId: plan.speaker, convId: conv.id, turn: { speaker: plan.speaker } }, req.system, req.user, req.schema, req.small);
         return true;
@@ -432,7 +535,7 @@ export class AIDirector {
         continue;
       }
       const req = modelRequest(world, conv, speaker, d, this.small);
-      l.turn = { speaker, d, given: req.given };
+      l.turn = { speaker, d, given: req.given, req: { system: req.system, user: req.user, schema: req.schema, small: req.small }, attempts: 0 };
       l.waiting = true;
       this.send(world, { kind: "conversation", citizenId: speaker, convId: conv.id, turn: { speaker } }, req.system, req.user, req.schema, req.small);
       return true;
@@ -440,7 +543,21 @@ export class AIDirector {
     return false;
   }
 
-  /** A live chat is over (`wrap`: the built-in voices carry it to its end). */
+  /** Only the AI speaks: take on any live conversation nobody's speaking for (as many as it can). */
+  private adoptLiveChats(world: WorldState): void {
+    if (!this.available || world.ai.mode !== "llm") return;
+    for (const conv of world.conversations) {
+      if (conv.status !== "live" || !conv.live || conv.live.done || this.live.has(conv.id)) continue;
+      const watched = this.watching(conv);
+      if (this.client?.slow?.() && !watched) continue;
+      const lives = [...this.live.values()].filter((l) => l.world === world).length;
+      if (!watched && lives >= this.liveLimit(conv)) continue;
+      if (conv.group) conv.group.driver = "ai";
+      this.live.set(conv.id, { world, convId: conv.id, waiting: false, turn: null, failures: 0, watched, byModel: 0, byBuiltIn: 0, at: Date.now() });
+    }
+  }
+
+  /** A live chat is over (`wrap`: the built-in voices carry it to its end; never when only the AI speaks). */
   private endLiveChat(world: WorldState, convId: number, l: Live, wrap: boolean): void {
     endLive(world, convId, wrap);
     this.live.delete(convId);
@@ -459,12 +576,16 @@ export class AIDirector {
     const t = l.turn;
     l.turn = null;
     if (t?.plan && conv.group) {
-      this.applyGroupTurn(world, d, conv, l, t.plan, t.given);
+      this.applyGroupTurn(world, d, conv, l, t);
       return;
     }
     if (!t || !t.d || whoseTurn(conv) !== t.speaker) return;
     const name = world.citizens[t.speaker]?.name ?? "someone";
     const res = d.json ? readModelTurn(world, conv, t.speaker, t.d, d.json, t.given) : { error: d.error ?? "no reply" };
+    if ("error" in res && world.ai.aiOnly) {
+      this.retryLine(world, d, conv, l, t, res.error, name);
+      return;
+    }
     if ("error" in res) {
       // Turned down (or no reply): this turn in their own built-in voice, so they don't stand there in silence.
       l.failures++;
@@ -482,11 +603,16 @@ export class AIDirector {
   }
 
   /** A line for a group came back: check it and say it (or the built-in line instead). */
-  private applyGroupTurn(world: WorldState, d: Done, conv: Conversation, l: Live, plan: GroupPlan, given: string): void {
+  private applyGroupTurn(world: WorldState, d: Done, conv: Conversation, l: Live, t: LiveTurn): void {
+    const plan = t.plan!;
     // Things have moved on (the built-in voices took over, or someone else spoke): drop it.
     if (conv.group!.driver !== "ai" || conv.lines.length !== plan.at) return;
     const name = world.citizens[plan.speaker]?.name ?? "someone";
-    const res = d.json ? readGroupTurn(world, conv, plan, d.json, given) : { error: d.error ?? "no reply" };
+    const res = d.json ? readGroupTurn(world, conv, plan, d.json, t.given) : { error: d.error ?? "no reply" };
+    if ("error" in res && world.ai.aiOnly) {
+      this.retryLine(world, d, conv, l, t, res.error, name);
+      return;
+    }
     if ("error" in res) {
       l.failures++;
       this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), `${d.error ? `error: ${d.error}` : `turned down (${res.error})`}: ${name}'s built-in line instead`);
@@ -502,16 +628,42 @@ export class AIDirector {
     this.log(world, d, "ok", JSON.stringify(d.json), `${name} said it in the group (${plan.move}${plan.d?.topic ? `: ${plan.d.topic.label}` : ""}; ${plan.why})`);
   }
 
-  /** Claude, or the AI's out of calls: live chats it can't carry on are finished by the built-in voices. */
+  /**
+   * Only the AI speaks, and it got this line wrong (or no reply came): ask
+   * again, telling it why, rather than putting words in their mouth. After a
+   * few tries the conversation ends where it is.
+   */
+  private retryLine(world: WorldState, d: Done, conv: Conversation, l: Live, t: LiveTurn, why: string, name: string): void {
+    const attempts = (t.attempts ?? 0) + 1;
+    l.failures++;
+    const giveUp = attempts >= AI_ONLY_ATTEMPTS;
+    this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), `${d.error ? `error: ${d.error}` : `turned down (${why})`}: ${giveUp ? `${name} couldn't find the words, so the conversation ends there` : `asking for ${name}'s line again (${attempts + 1} of ${AI_ONLY_ATTEMPTS})`}`);
+    if (giveUp) {
+      this.endLiveChat(world, conv.id, l, false);
+      return;
+    }
+    l.turn = { ...t, attempts, why: d.error ? "" : why };
+  }
+
+  /**
+   * Claude, or the AI's out of calls: live chats it can't carry on are
+   * finished by the built-in voices. Only the AI speaks: they wait while it's
+   * busy (and it says it's still on it), and end where they are if it's gone.
+   */
   private tendLiveChats(world: WorldState): void {
-    const out = !this.canCall(world, true) || (!this.free && this.ledger.total() >= world.ai.budgetUsd);
+    const aiOnly = !!world.ai.aiOnly;
+    const out = aiOnly
+      ? !this.available || world.ai.mode !== "llm" || (!!this.client?.ready && !this.client.ready()) || world.ai.callsToday >= world.ai.maxCallsPerDay || (!this.free && this.ledger.total() >= world.ai.budgetUsd)
+      : !this.canCall(world, true) || (!this.free && this.ledger.total() >= world.ai.budgetUsd);
     for (const l of [...this.live.values()]) {
-      if (l.world !== world || l.waiting) continue;
+      if (l.world !== world) continue;
       const conv = world.conversations.find((x) => x.id === l.convId);
       if (!conv || conv.status !== "live" || conv.live?.done) {
         this.live.delete(l.convId);
         continue;
       }
+      if (aiOnly && !out && conv.live) conv.live.heldT = world.time;
+      if (l.waiting) continue;
       if (out) this.endLiveChat(world, conv.id, l, true);
     }
   }
@@ -622,6 +774,8 @@ export class AIDirector {
   private scheduleOne(world: WorldState): boolean {
     // Whoever the player is looking at comes first: what they say, what they decide, what they do next.
     if (this.maybeReact(world) || this.maybeLiveTurn(world, true) || this.maybeDecide(world, true) || this.maybeNext(world, true) || this.maybeDayPlan(world, true) || this.maybeThink(world, true)) return true;
+    // Speaking for the whole town: people standing in a conversation come before everything else.
+    if ((this.opts.liveChats !== undefined || world.ai.aiOnly) && this.maybeLiveTurn(world)) return true;
     const turns: [Pending["kind"], () => boolean][] = [
       // Live chats (people are standing there waiting for the next line) take turns with everything else.
       ["conversation", () => this.maybeLiveTurn(world)],

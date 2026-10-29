@@ -64,6 +64,12 @@ const FREE = AI_PROVIDER === "free";
 const AI_MODEL = FREE ? (process.env.AI_MODEL && !/^claude/.test(process.env.AI_MODEL) ? process.env.AI_MODEL : "openai") : process.env.AI_MODEL || "claude-opus-5-5";
 const AI_BUDGET_USD = Number(process.env.AI_BUDGET_USD ?? 2);
 const AI_MAX_CALLS_PER_DAY = Number(process.env.AI_MAX_CALLS_PER_DAY ?? (FREE ? 5000 : 12));
+// How hard the AI works: requests at once, and how many conversations it voices at once
+// (unset: a couple at a time; set it to 20 and every conversation in town is the AI's).
+const AI_CONCURRENCY = process.env.AI_CONCURRENCY ? Number(process.env.AI_CONCURRENCY) : undefined;
+const AI_LIVE_CHATS = process.env.AI_LIVE_CHATS ? Number(process.env.AI_LIVE_CHATS) : undefined;
+// AI_ONLY=1: only the AI speaks, with no built-in lines at all (conversations happen when the AI can speak them).
+const AI_ONLY = process.env.AI_ONLY === undefined ? undefined : /^(1|true|yes|on)$/i.test(process.env.AI_ONLY);
 const DATA_DIR = process.env.DATA_DIR ?? path.join(root, "data");
 const AUTOSAVE_MS = Number(process.env.AUTOSAVE_SECONDS ?? 30) * 1000;
 
@@ -82,17 +88,19 @@ const director =
     ? new AIDirector(null, ledger)
     : FREE
       ? new AIDirector(createFreeAIClient({ model: AI_MODEL, url: process.env.FREE_AI_URL || undefined, key: process.env.FREE_AI_KEY || undefined }), ledger, {
-          maxConcurrent: 2,
+          maxConcurrent: AI_CONCURRENCY ?? 2,
           minIntervalMs: Number(process.env.FREE_AI_INTERVAL_MS ?? 2500),
           timeoutMs: 45_000,
+          liveChats: AI_LIVE_CHATS,
         })
-      : new AIDirector(createClaudeClient(AI_MODEL), ledger);
+      : new AIDirector(createClaudeClient(AI_MODEL), ledger, { maxConcurrent: AI_CONCURRENCY ?? 2, minIntervalMs: Number(process.env.AI_INTERVAL_MS ?? 2500), timeoutMs: 25_000, liveChats: AI_LIVE_CHATS });
 director.attach();
 
 /** The player's own free-AI endpoint (set from the AI panel; lasts until restart). */
 let customEndpoint: { url: string; model?: string; key?: string } | null = null;
 
 function configureAI(world: WorldState): void {
+  if (AI_ONLY !== undefined) world.ai.aiOnly = AI_ONLY;
   world.ai.model = director.model;
   world.ai.budgetUsd = AI_BUDGET_USD;
   world.ai.maxCallsPerDay = AI_MAX_CALLS_PER_DAY;
@@ -126,6 +134,8 @@ function aiStatus(world: WorldState): AIStatusDTO {
     free: director.free,
     connection: director.freeStatus(),
     endpoint: customEndpoint ? { url: customEndpoint.url, model: customEndpoint.model } : null,
+    limits: { ...director.limits, liveChats: director.limits.liveChats ?? null },
+    aiOnly: !!world.ai.aiOnly,
   };
 }
 
@@ -215,6 +225,12 @@ function handle(client: Client, msg: ClientMsg): void {
       break;
     }
     case "ai": {
+      if (msg.limits || msg.aiOnly !== undefined) {
+        if (msg.limits) director.setLimits(msg.limits);
+        if (msg.aiOnly !== undefined) world.ai.aiOnly = msg.aiOnly;
+        broadcastState();
+        break;
+      }
       if (msg.endpoint !== undefined) {
         customEndpoint = msg.endpoint && msg.endpoint.url ? { url: msg.endpoint.url.trim(), model: msg.endpoint.model?.trim() || undefined, key: msg.endpoint.key?.trim() || undefined } : null;
         director.setCustomEndpoint(customEndpoint);

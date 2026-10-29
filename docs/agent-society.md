@@ -86,16 +86,29 @@ agent inspector.
 
 In the UI, 🧠 marks anything from the model and ⚙️ anything from the rules: decisions in the Agent tab, lines in transcripts (AI lines also have a gold edge), the AI log.
 
+### Only the AI speaks
+
+With **Only the AI speaks** on (`world.ai.aiOnly`; `AI_ONLY=1` on the server, a switch in the 🧠 AI panel), every word spoken in town is the model's:
+
+- A conversation only starts if the director takes it on. It's asked before anyone stops what they're doing, so when it can't, nothing happens and they try again later. No built-in draft is even prepared.
+- A line the checks turn down (or a timeout, or no reply) is sent back with the reason ("too close to something already said", "you don't know anyone called X") and asked for again, up to 4 tries. Then the conversation ends where it is.
+- While the model is busy or asks the game to slow down, people wait. If it's switched off, out of calls or gone, conversations end where they are. One where nobody got a word out never happened. None goes on longer than 6 game hours.
+- Groups never switch to the built-in voice. A save loaded mid-conversation is picked up again by the AI, or ends where it is if no AI is connected.
+- The rules still do what they always did: decide whose turn it is and suggest what they might do with it (the model may ignore the suggestion), check every line, and apply what was agreed. The model only ever writes the words.
+
+`tests/aionly.test.ts` checks that every line is the model's (with a good model and a flaky one), that a dead model leaves a quiet town with nobody stuck mid-conversation, that every kind of conversation can be spoken, and that a reloaded save carries on with the AI.
+
 ## Tuning
 
 - `src/sim/society/config.ts` (`SOCIETY`): roster size, how often agents think, how long an intention lasts, log sizes, the most an agent may give away at once.
 - `src/sim/dialogue/group.ts` (`GROUP`): group size, length, how long people stay, when someone else takes the floor.
 - `src/sim/ai/director.ts`: one shared model for everyone, with `maxConcurrent` requests in flight (2 by default; the in-page brain on a graphics card takes 4 at once), `minIntervalMs` between calls, `timeoutMs`, calls per game day (`AI_MAX_CALLS_PER_DAY`), budget (Claude), back-off on 429s. Whoever the player is watching comes first, live conversations take turns with decisions and plans, nobody's conversation is left waiting long, and deals get a slot of their own.
+- `AI_LIVE_CHATS` / `AI_CONCURRENCY` / `FREE_AI_INTERVAL_MS` (and the same in the 🧠 AI panel's Agents box): how many conversations the model speaks at once (any conversation, not only the ones that matter), how many requests go out at once, and the gap between calls. With either this or Only the AI speaks set, conversation lines come before everything else the model is asked for.
 - In the game: the 🧠 AI panel's Agents box sets how many people the AI runs; the Agent tab puts one person on or off the roster.
 
 ## Tests
 
-`npm test` (109 tests) includes, for this work:
+`npm test` (115 tests) includes, for this work:
 
 - `tests/society.test.ts`: a diverse roster of ten; private knowledge kept out of other agents' prompts; proposals checked and turned down with reasons (the built-in judgement stepping in); a model's decision carried out and settled; a week of ten agents with money conserved, every decision settled and logs bounded; different seeds turning out differently; save/load of agent state; lies found out; break-ups; a connected model making the roster's decisions, a broken model handing back to the rules, and requests staying within the concurrency cap.
 - `tests/group.test.ts`: newcomers say hello first, each pair alternates, questions are answered, goodbyes get replies, no gossip about someone present, nobody left stuck; the same start gives the same group; everyone present hears the news; groups form on their own over days with people joining, chipping in and leaving, and fewer than 1 problem per 100 chats; a group saved mid-conversation carries on after loading.
