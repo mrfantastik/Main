@@ -285,5 +285,7 @@ export function activityOptions(world: WorldState, c: Citizen): ActivityOption[]
   for (const p of workProviders.get(c.occupation) ?? []) out.push(...p(world, c, s));
   for (const p of extraProviders) out.push(...p(world, c, s));
   tiltActivities(world, c, out);
+  // Something they've decided to do (go job hunting) makes those options count for more.
+  if (c.society?.intents.some((x) => x.topic === "activity:job_hunt" && x.until >= world.time)) for (const o of out) if (o.payload.type === "APPLY_FOR_JOB") o.factors.decided = 1.6;
   return out;
 }

@@ -104,12 +104,11 @@ function relevantMemories(world: WorldState, me: Citizen, them: Citizen, topic: 
 }
 
 /** Everything one speaker needs for one turn, from their side only. */
-export function contextFor(world: WorldState, conv: Conversation, st: DialogueState, me: Citizen, them: Citizen, d: Directive): Context {
+/** Who they are, how they talk, what matters to them (their character card and talk profile), in the second person. */
+export function identityOf(world: WorldState, me: Citizen): string[] {
   const p = profileOf(me);
   const card = botCard(me);
-  const rel: RelView = d.rel;
-  const retrieved: string[] = [];
-  const identity = [
+  return [
     `You are ${me.name} ${me.surname}, ${me.age}. You ${job(world, me)} in Hustle City, a small British town.`,
     card.bio,
     `How you talk: ${card.custom && card.voice ? card.voice : p.habitText.length ? `${p.habitText.join(". ")}.` : "Plainly."}`,
@@ -121,6 +120,13 @@ export function contextFor(world: WorldState, conv: Conversation, st: DialogueSt
     card.secret ? `Something you keep to yourself (unless you really trust someone): ${card.secret}` : "",
     card.instructions ? `Also: ${card.instructions}` : "",
   ].filter(Boolean);
+}
+
+export function contextFor(world: WorldState, conv: Conversation, st: DialogueState, me: Citizen, them: Citizen, d: Directive): Context {
+  const card = botCard(me);
+  const rel: RelView = d.rel;
+  const retrieved: string[] = [];
+  const identity = identityOf(world, me);
 
   const relationship = relGuide(world, me, them, rel);
   const memories: string[] = [];

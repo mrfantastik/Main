@@ -20,6 +20,8 @@ import { clamp, inDays, money, newId, pct, pushRing, round2 } from "../util";
 import { hotNews, knows } from "../town/happenings";
 import { applyNotes } from "./notes";
 import { OFFER_HANDLERS } from "./offers";
+import { modelRuns } from "../society/tick";
+import { settleDecision } from "../society/state";
 import { adoptLines, beginDialogue, builtInTurn, dealOutcome, endDialogue, isDeal, planTurn, recordLine, revealMinutes, scriptConversation, whoseTurn, type Directive } from "../dialogue";
 import type { TurnMeta } from "../dialogue/types";
 import { rememberChat } from "../mind/bot";
@@ -77,6 +79,13 @@ function known(c: Citizen, o: Citizen): boolean {
 export function agendasFor(world: WorldState, c: Citizen): Agenda[] {
   const s = situation(world, c);
   const out: Agenda[] = [];
+  // What they've decided to do with someone (the model's decisions, or the built-in judgement's) comes first.
+  for (const it of c.society?.intents ?? []) {
+    if (world.time > it.until || !world.citizens[it.target] || it.topic.startsWith("activity:")) continue;
+    out.push({ topic: it.topic as ConversationTopic, targetId: it.target, urgency: it.urgency, params: { ...it.params, decision: it.decision }, reason: it.reason });
+  }
+  // An agent the model runs makes its own moves: the built-in habits below stand back.
+  if (modelRuns(world, c)) return out.sort((x, y) => y.urgency - x.urgency);
   const others = world.citizenOrder.filter((id) => id !== c.id).map((id) => world.citizens[id]);
   // Net worth is costly; nothing changes while we plan, so work it out once per person.
   const worthCache = new Map<string, number>();
@@ -576,6 +585,7 @@ const handlers: Record<ConversationTopic, TopicHandler> = {
     },
     validate: () => ({}),
     apply(world, conv, a, b) {
+      a.cooldowns[`argue:${b.id}`] = b.cooldowns[`argue:${a.id}`] = world.time;
       adjustRel(world, a, b.id, { affinity: -7 });
       adjustRel(world, b, a.id, { affinity: -9 });
       remember(world, b, { text: `${a.name} picked a fight with me.`, kind: "social", importance: 4, valence: -0.6, people: [a.id], key: `argue:${a.id}` });
@@ -716,7 +726,14 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
   } finally {
     talkIn(was, world.time);
   }
-  if (!prepared) return null;
+  if (!prepared) {
+    // Whatever they'd decided to come to them about can't be done any more (the job's gone, the money's spent).
+    if (typeof agenda.decision === "number" && a.society) {
+      a.society.intents = a.society.intents.filter((x) => x.decision !== agenda.decision);
+      settleDecision(a, agenda.decision, "failed", "When it came to it, it couldn't be done.");
+    }
+    return null;
+  }
   // Deals are negotiated a turn at a time: nothing is settled until one of them accepts.
   // (This is the built-in voices' version; if an AI speaks for them, they negotiate afresh.)
   const negotiated = isDeal(topic);
@@ -733,6 +750,9 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
   conv.lines = [];
   conv.terms = prepared.terms;
   conv.fallback = { lines: prepared.lines, outcome: negotiated ? prepared.outcome : handlers[topic].validate(conv, prepared.outcome), dlg: conv.dlg ? JSON.parse(JSON.stringify(conv.dlg)) : undefined };
+  // Acting on a decision: it's happening now (and settled when they've talked).
+  const decision = typeof agenda.decision === "number" ? agenda.decision : null;
+  if (decision !== null && a.society) a.society.intents = a.society.intents.filter((x) => x.decision !== decision);
   // Register first: interrupting their current activities must not start
   // another conversation (e.g. finishing a "go and find X" errand).
   world.conversations.push(conv);
@@ -872,6 +892,8 @@ function finish(world: WorldState, conv: Conversation): void {
       x.needs.social = clamp(x.needs.social + 10, 0, 100);
     }
   }
+  // What came of a decision to talk to them: the agent learns what actually happened.
+  if (a && typeof conv.agenda.decision === "number") settleDecision(a, conv.agenda.decision, "done", conv.summary || `Talked with ${b?.name ?? "them"}.`);
   for (const c of [a, b]) {
     if (!c) continue;
     if (c.activity.kind === "talk") c.activity.endsAt = world.time;

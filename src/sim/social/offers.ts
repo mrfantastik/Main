@@ -201,15 +201,17 @@ export const OFFER_HANDLERS: Record<"offer_loan" | "offer_help" | "make_peace" |
       const pr = a.society?.projects.find((p) => p.id === num(conv.terms.projectId));
       a.cooldowns[`recruit:${b.id}`] = world.time;
       const amount = num(conv.outcome!.amount);
-      if (bool(conv.outcome!.agreed) && pr && amount > 0 && ensureCash(b, amount) && transfer(world, citizenAcc(b.id), citizenAcc(a.id), amount, "investment", `Putting money into ${a.name}'s plan`)) {
+      if (bool(conv.outcome!.agreed) && pr && amount > 0) {
+        // A promise: they pay it in when the plan comes off (if they still have it then).
         pr.partners = [...new Set([...pr.partners, b.id])];
-        pr.raised += amount;
+        pr.pledges = [...(pr.pledges ?? []).filter((x) => x.who !== b.id), { who: b.id, amount }];
+        pr.raised = pr.pledges.reduce((s, x) => s + x.amount, 0);
         pr.log.push({ t: world.time, text: `${b.name} is in, with ${money(amount)}.`, good: true });
         remember(world, a, { text: `${b.name} is putting ${money(amount)} into my plan to ${String(conv.terms.plan)}.`, kind: "deal", importance: 7, valence: 0.8, people: [b.id] });
         remember(world, b, { text: `I put ${money(amount)} into ${a.name}'s plan to ${String(conv.terms.plan)}.`, kind: "deal", importance: 6, valence: 0.4, people: [a.id] });
         adjustRel(world, a, b.id, { affinity: 8, trust: 6 });
         adjustRel(world, b, a.id, { trust: 4 });
-        conv.summary = `${b.name} is putting ${money(amount)} into ${a.name}'s plan to ${String(conv.terms.plan)}.`;
+        conv.summary = `${b.name} promised ${money(amount)} for ${a.name}'s plan to ${String(conv.terms.plan)}.`;
         return news(`🤝 ${b.name} is backing ${a.name}'s plan to ${String(conv.terms.plan)} with ${money(amount)}.`, "business", 3);
       }
       if (pr) {

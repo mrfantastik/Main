@@ -126,7 +126,7 @@ export function checkChat(world: WorldState, conv: Conversation): Issue[] {
     if (/(lottery|celebrity|festival|party)/i.test(l.text) && next && next.speaker !== l.speaker && /^(Bad luck, that|Rotten timing|It's a shame, really)/.test(bare(next.text))) flag("wrong opinion", i + 1);
     if (/ Anyway!$|^(Right, so: |I'm worried, (?!to be honest))/.test(l.text) || (/^Sorry, /.test(l.text) && !/^Sorry, (I|I'm|about|to)\b/.test(l.text) && !/\b(need|short|could|can I|would you|lend|borrow|sorry|was I)\b/i.test(l.text.slice(7)))) flag("voice tic", i);
     // Things only a template (or a confused model) says.
-    if (/\b(undefined|null|NaN)\b|\{\w+\}|\.\.[^.]|,\s*[.!?]/.test(l.text)) flag("broken text", i);
+    if (/\b(undefined|null|NaN)\b|\{\w+\}|(?<!\.)\.\.(?!\.)|,\s*[.!?]/.test(l.text)) flag("broken text", i);
   }
   // A goodbye with no reply.
   const last = lines.length - 1;

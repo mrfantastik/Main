@@ -36,6 +36,7 @@ export interface FactInput {
   cues?: string[];
   hops?: number;
   chain?: CitizenId[];
+  rumour?: number;
 }
 
 /** How much a fact is worth keeping (the least are forgotten first when there are too many). */
@@ -87,6 +88,7 @@ export function learn(world: WorldState, c: Citizen, input: FactInput): Fact {
     ...(input.happening !== undefined ? { happening: input.happening } : {}),
     ...(input.memory !== undefined ? { memory: input.memory } : {}),
     ...(input.chain?.length ? { chain: input.chain.slice(-4) } : {}),
+    ...(input.rumour !== undefined ? { rumour: input.rumour } : {}),
   };
   t.facts.push(f);
   if (t.facts.length > TALK.maxFacts) {
@@ -143,6 +145,12 @@ export function retold(text: string, hops: number, seed: number): string {
  * little less certain and a little more simplified the further it's
  * travelled. Returns the listener's fact.
  */
+/** Called when someone hears a rumour that was started on purpose (see society/). */
+let rumourHook: ((world: WorldState, listener: Citizen, f: Fact) => void) | null = null;
+export function setRumourHook(fn: typeof rumourHook): void {
+  rumourHook = fn;
+}
+
 export function tell(world: WorldState, teller: Citizen, listener: Citizen, f: Fact): Fact {
   if (!f.told.includes(listener.id)) f.told.push(listener.id);
   const firstHand = f.about === teller.id;
@@ -150,7 +158,8 @@ export function tell(world: WorldState, teller: Citizen, listener: Citizen, f: F
   const trust = listener.relationships[teller.id]?.trust ?? 0;
   const seed = hashSeed(`${f.key}:${teller.id}:${listener.id}`);
   const certainty = firstHand ? 0.95 : clamp(f.certainty * (0.82 + trust / 1000) - (f.source === "rumour" ? 0.1 : 0), 0.15, 0.95);
-  return learn(world, listener, {
+  const heardBefore = talkOf(listener).facts.some((x) => x.key === f.key);
+  const got = learn(world, listener, {
     about: f.about,
     pred: f.pred,
     key: f.key,
@@ -169,7 +178,10 @@ export function tell(world: WorldState, teller: Citizen, listener: Citizen, f: F
     cues: f.cues,
     hops,
     chain: [...(f.chain ?? []), teller.id],
+    ...(f.rumour !== undefined ? { rumour: f.rumour } : {}),
   });
+  if (f.rumour !== undefined && !heardBefore) rumourHook?.(world, listener, got);
+  return got;
 }
 
 /** Would they pass this on to this listener? (Discreet people keep confidences; gossips often don't.) */

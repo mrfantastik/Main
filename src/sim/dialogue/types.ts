@@ -118,6 +118,8 @@ export interface Fact {
   memory?: number;
   /** Who passed it along, in order (the first is who the person it's about told). */
   chain?: CitizenId[];
+  /** A rumour someone started on purpose (its id in the world's register, which knows whether it's true). */
+  rumour?: number;
 }
 
 /** Something a person means to bring up with someone next time. */

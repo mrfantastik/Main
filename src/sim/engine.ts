@@ -1,4 +1,5 @@
 import { dialogueDaily } from "./dialogue";
+import { societyDaily, societyTick } from "./society/tick";
 import { happeningsHourly } from "./town/happenings";
 import { beginAction, finishActivity, makeAction, startActivity, tickActivity } from "./ai/actions";
 import { updateBeliefsDaily } from "./ai/beliefs";
@@ -77,7 +78,11 @@ export function step(world: WorldState): void {
       if (c.activity.kind === "idle") think(world, c);
     }
   }
-  if (t % 10 === 0) startOpportunisticConversations(world);
+  if (t % 10 === 0) {
+    // Agents decide what to do about people and plans; then whoever's together may talk.
+    societyTick(world);
+    startOpportunisticConversations(world);
+  }
 
   if (t % 60 === 0) hourly(world);
   if (t % MIN_PER_DAY === 0) daily(world);
@@ -158,6 +163,7 @@ function daily(world: WorldState): void {
   }
   updateBeliefsDaily(world);
   dialogueDaily(world);
+  societyDaily(world);
   world.ai.callsToday = 0;
   statsDaily(world);
 }

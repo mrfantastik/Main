@@ -6,6 +6,9 @@ import { setReflectionHook } from "../mind/reflection";
 import { placeName } from "../places";
 import { endLive, isPublic, sayLive, setConversationAIHook } from "../social/conversation";
 import { builtInTurn, modelRequest, planTurn, readModelTurn, whoseTurn, type Directive } from "../dialogue";
+import { applyModelDecision, decide, rulesDecide, setDecisionHook } from "../society/tick";
+import { decisionPrompt, smallDecisionPrompt } from "../society/prompt";
+import type { AgentAction } from "../society/types";
 import { dayOf } from "../time";
 import type { AgentPlanItem, AILogEntry, Citizen, Conversation, Reflection, WorldState } from "../types";
 import { newId, pushRing, round2 } from "../util";
@@ -60,7 +63,7 @@ export interface DirectorOptions {
 
 interface Pending {
   id: number;
-  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary" | "chat";
+  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary" | "chat" | "decide";
   world: WorldState;
   citizenId: string;
   convId?: number;
@@ -147,6 +150,10 @@ export class AIDirector {
   private nextFocusThoughtAt = 0;
   /** Next moves asked for (by citizen). */
   private plans = new Map<string, Plan>();
+  /** Agents on the roster waiting to have a decision thought through (by citizen), and why. */
+  private wantDecide = new Map<string, { world: WorldState; why: string; at: number }>();
+  /** For a small model's choice: the actions it was offered (by request id). */
+  private decideOptions = new Map<number, AgentAction[]>();
   /** Live chats the town's brain is speaking for, line by line (by conversation id). */
   private live = new Map<number, Live>();
   /** What was asked for last (conversations and choices take turns). */
@@ -154,7 +161,7 @@ export class AIDirector {
   /** Messages for the player (the server shows them as toasts). */
   readonly notices: { text: string; level: "info" | "error" }[] = [];
   /** What the AI has done so far: choices people acted on, conversations it wrote, thoughts. */
-  readonly tally = { plan: 0, conversation: 0, thought: 0, dayplan: 0, followed: 0, diary: 0 };
+  readonly tally = { plan: 0, conversation: 0, thought: 0, dayplan: 0, followed: 0, diary: 0, decide: 0 };
 
   constructor(
     private client: LLMClient | null,
@@ -240,6 +247,7 @@ export class AIDirector {
       reflection: `Putting ${name}'s lessons into words`,
       invent: "Making up something that happens",
       chat: `${name} is answering you`,
+      decide: `Thinking as ${name}: what to do about people and plans`,
     };
     return what[p.kind] + waiting;
   }
@@ -254,6 +262,10 @@ export class AIDirector {
     setConversationAIHook((world, conv, brief, schema, stakes) => this.conversationHook(world, conv, brief, schema, stakes));
     setReflectionHook((world, c, learned) => this.reflectionHook(world, c, learned));
     setActivityHook((world, c, options, utility) => this.activityHook(world, c, options, utility));
+    setDecisionHook(
+      (world, c, why) => this.decisionHook(world, c, why),
+      (world) => this.available && world.ai.mode === "llm" && !this.client?.slow?.(),
+    );
   }
 
   /** Whether a call can go now (`later`: whether one could once the calls in flight are done). */
@@ -450,6 +462,87 @@ export class AIDirector {
     }
   }
 
+  // ------------------------------------------------ agents' decisions
+
+  /** An agent on the roster stops to think: queue it for the model (false: the model can't take it on). */
+  private decisionHook(world: WorldState, c: Citizen, why: string): boolean {
+    if (!this.available || world.ai.mode !== "llm" || this.client?.slow?.()) return false;
+    if (!this.canCall(world, true)) return false;
+    if ([...this.inFlight.values()].some((p) => p.kind === "decide" && p.citizenId === c.id)) return true;
+    this.wantDecide.set(c.id, { world, why, at: world.time });
+    return true;
+  }
+
+  /** Decisions waiting too long (the model's busy): the built-in judgement decides instead. */
+  private tendDecisions(world: WorldState): void {
+    for (const [id, w] of this.wantDecide) {
+      if (w.world !== world) {
+        this.wantDecide.delete(id);
+        continue;
+      }
+      if (world.time - w.at > 90 || !this.canCall(world, true)) {
+        this.wantDecide.delete(id);
+        const c = world.citizens[id];
+        if (c) rulesDecide(world, c, `${w.why}; the AI was busy, so the built-in judgement decided`);
+      }
+    }
+  }
+
+  /** Send the decision that most needs making (the watched agent's first). */
+  private maybeDecide(world: WorldState, watchedOnly = false): boolean {
+    const waiting = [...this.wantDecide.entries()].filter(([id, w]) => w.world === world && (!watchedOnly || id === this.focus));
+    if (!waiting.length) return false;
+    const [id, w] = waiting.find(([x]) => x === this.focus) ?? waiting.sort((x, y) => x[1].at - y[1].at)[0];
+    this.wantDecide.delete(id);
+    const c = world.citizens[id];
+    if (!c || c.activity.kind === "talk") return false;
+    if (this.small) {
+      const { small, options } = smallDecisionPrompt(world, c);
+      const reqId = this.send(world, { kind: "decide", citizenId: c.id }, small.system, small.user, {}, small);
+      this.decideOptions.set(reqId, options);
+      return true;
+    }
+    const p = decisionPrompt(world, c, w.why);
+    this.send(world, { kind: "decide", citizenId: c.id }, p.system, p.user, p.schema);
+    return true;
+  }
+
+  /** A decision came back: the world checks it and carries it out (or the built-in judgement steps in). */
+  private applyDecideResult(world: WorldState, d: Done): void {
+    const c = world.citizens[d.pending.citizenId];
+    const options = this.decideOptions.get(d.pending.id);
+    this.decideOptions.delete(d.pending.id);
+    if (!c) return;
+    if (!d.json) {
+      const fb = rulesDecide(world, c, `the AI didn't answer (${d.error ?? "no reply"})`);
+      this.log(world, d, "error", JSON.stringify(d.error ?? null), `error: ${d.error ?? "no reply"}; built-in judgement: ${fb.result ?? fb.action.type}`);
+      return;
+    }
+    if (options) {
+      // A small model chose one of the sensible options.
+      const j = d.json as { choice?: unknown; thought?: unknown };
+      const a = typeof j.choice === "string" ? options[Number(j.choice)] : undefined;
+      if (!a) {
+        const fb = rulesDecide(world, c, "the AI's choice couldn't be read");
+        this.log(world, d, "rejected", JSON.stringify(d.json), `unreadable choice; built-in judgement: ${fb.result ?? fb.action.type}`);
+        return;
+      }
+      const thought = typeof j.thought === "string" && j.thought ? j.thought.slice(0, 200) : a.reason;
+      const dec = decide(world, c, { ...a, reason: thought }, "llm", "chosen by the town's brain from the sensible options");
+      if (dec.status !== "rejected") setThought(world, c, thought, 3, "llm");
+      this.log(world, d, dec.status === "rejected" ? "rejected" : "ok", JSON.stringify(d.json), `${c.name}: ${dec.result ?? dec.error ?? dec.action.type}`);
+      if (dec.status === "rejected") rulesDecide(world, c, `the AI's choice wasn't possible (${dec.error})`);
+      else this.tally.decide++;
+      return;
+    }
+    const { decision, fallback } = applyModelDecision(world, c, d.json);
+    if (decision.status !== "rejected") {
+      setThought(world, c, decision.action.reason, 3, "llm");
+      this.tally.decide++;
+    }
+    this.log(world, d, decision.status === "rejected" ? "rejected" : "ok", JSON.stringify(d.json), `${c.name}: ${decision.action.type}${decision.action.target ? ` → ${world.citizens[decision.action.target]?.name}` : ""}: ${decision.result ?? decision.error ?? ""}${fallback ? ` (turned down; built-in judgement: ${fallback.result ?? fallback.action.type})` : ""}`);
+  }
+
   // ------------------------------------------------ what's next (free AI)
 
   /**
@@ -461,9 +554,10 @@ export class AIDirector {
    */
   private schedule(world: WorldState): void {
     this.tendLiveChats(world);
-    // Claude: only the live chats' next lines are scheduled here (everything else is asked for as it comes up).
+    this.tendDecisions(world);
+    // Claude: live chats' next lines and agents' decisions are scheduled here (everything else is asked for as it comes up).
     if (!this.free) {
-      for (let n = 0; n < 2 && this.canCall(world); n++) if (!this.maybeLiveTurn(world)) break;
+      for (let n = 0; n < 2 && this.canCall(world); n++) if (!this.maybeLiveTurn(world) && !this.maybeDecide(world)) break;
       return;
     }
     // As many as it can take at once (several for the town's brain on a graphics card).
@@ -472,10 +566,12 @@ export class AIDirector {
 
   /** Send the most useful request there is; false when there's nothing to ask. */
   private scheduleOne(world: WorldState): boolean {
-    if (this.maybeReact(world) || this.maybeLiveTurn(world, true) || this.maybeNext(world, true) || this.maybeDayPlan(world, true) || this.maybeThink(world, true)) return true;
+    // Whoever the player is looking at comes first: what they say, what they decide, what they do next.
+    if (this.maybeReact(world) || this.maybeLiveTurn(world, true) || this.maybeDecide(world, true) || this.maybeNext(world, true) || this.maybeDayPlan(world, true) || this.maybeThink(world, true)) return true;
     const turns: [Pending["kind"], () => boolean][] = [
       // Live chats (people are standing there waiting for the next line) take turns with everything else.
       ["conversation", () => this.maybeLiveTurn(world)],
+      ["decide", () => this.maybeDecide(world)],
       ["plan", () => this.maybeNext(world, false)],
       ["dayplan", () => this.maybeDayPlan(world, false)],
     ];
@@ -966,6 +1062,7 @@ export class AIDirector {
       else if (d.pending.kind === "dayplan") this.applyDayPlanResult(world, d);
       else if (d.pending.kind === "diary") this.applyDiaryResult(world, d);
       else if (d.pending.kind === "chat") this.applyChatResult(world, d);
+      else if (d.pending.kind === "decide") this.applyDecideResult(world, d);
       else if (d.pending.turn) this.applyTurnResult(world, d);
     }
     // Replies first, so the next request goes out as soon as the last one is in.

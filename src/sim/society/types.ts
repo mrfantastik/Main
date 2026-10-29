@@ -89,9 +89,13 @@ export interface Project {
   /** People brought in, and people who said no. */
   partners: CitizenId[];
   refused: CitizenId[];
-  /** Money it needs, and money found so far. */
+  /** Money it needs, and money promised by others so far (paid in when it happens). */
   need: number;
   raised: number;
+  /** Who has promised what (they pay it in when the plan comes off; they may not have it by then). */
+  pledges: { who: CitizenId; amount: number }[];
+  /** For a business: what kind, selling what. */
+  plan?: { kind: string; products: string[] };
   /** Who it's about (the rival, the friend to win over). */
   who?: CitizenId;
   /** Business it's for, once there is one. */

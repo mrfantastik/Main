@@ -82,12 +82,12 @@ function greetLine(x: Ctx): string {
   let pool: string[];
   if (d.opener === "cold") pool = [`${nm}.`, "Oh. It's you.", "Right.", `${nm}.`];
   else if (k === "stranger") pool = ["Hello.", "Hi.", "Alright?", ...timely];
-  else if (k === "boss") pool = [`Morning, ${nm}.`.replace("Morning", cap(part === "night" ? "evening" : part)), `Hi, ${nm}.`, `Alright, ${nm}?`];
+  else if (k === "boss") pool = [`Morning, ${nm}.`.replace("Morning", cap(part === "night" ? "evening" : part)), `Hi, ${nm}.`, `Hello, ${nm}.`];
   else if (k === "rival" || k === "dislikes" || k === "enemy") pool = [`${nm}.`, "Oh. Hello.", `Well, well. ${nm}.`];
   else if (k === "couple") pool = ["Hey, you.", "There you are.", `Hello, gorgeous.`, `${nm}!`, "Missed you."];
   else if (k === "close friend" || k === "family") pool = ["Look who it is.", `Oi, ${nm}.`, "There they are.", `${nm}!`, "Oh, it's you.", "Hey you."];
-  else if (k === "friend" || k === "friendly coworker") pool = [`${nm}!`, `Alright, ${nm}?`, "Hey.", "There they are.", `Hiya, ${nm}.`];
-  else pool = [`Alright, ${nm}?`, "Hiya.", `Hi, ${nm}.`, ...timely.map((t) => t.replace(".", `, ${nm}.`))];
+  else if (k === "friend" || k === "friendly coworker") pool = [`${nm}!`, "Alright, mate?", "Hey.", "There they are.", `Hiya, ${nm}.`, `Hey, ${nm}.`];
+  else pool = [`Alright, ${nm}?`, "Hiya.", `Hi, ${nm}.`, `Hello, ${nm}.`, `Hey, ${nm}.`, "Oh, hello.", ...timely.map((t) => t.replace(".", `, ${nm}.`))];
   // When they last saw each other changes the hello: twice in a day, or not for ages.
   const b = peekBond(me, them.id);
   const since = b?.lastT ? world.time - b.lastT : null;
