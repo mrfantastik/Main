@@ -162,6 +162,16 @@ test("with the free AI, each person speaks for themselves a turn at a time; deal
   assert.ok(voiced.length >= 10, `only ${voiced.length} of ${all.length} conversations voiced`);
   assert.ok(voiced.some((c) => c.topic !== "chat"), "deals and favours get voiced too");
   for (const c of voiced) {
+    if (c.group) {
+      // A group: the scheduler's record of every line, each pair taking turns, and the model's lines cleaned up.
+      const g = c.group;
+      assert.equal(g.turns.length, c.lines.length, "every line is a group turn");
+      for (const p of g.pairs) p.lines.forEach((l, i) => i && assert.notEqual(l.speaker, p.lines[i - 1].speaker, "each pair takes turns"));
+      c.lines.forEach((l, i) => {
+        if (g.turns[i].by === "llm") assert.match(l.text, /^Turn \d+: [^*()]+\.$/, `cleaned: "${l.text}"`);
+      });
+      continue;
+    }
     const turns = c.dlg!.turns;
     assert.equal(turns.length, c.lines.length, "every line is a turn");
     c.lines.forEach((l, i) => {

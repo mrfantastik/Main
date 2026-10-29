@@ -601,7 +601,7 @@ export function dealLine(world: WorldState, conv: Conversation, st: DialogueStat
       if (a === "accept") return say("yes", ["Alright. Water under the bridge.", "Fine. Thank you for saying it.", "Yeah. Me too."]);
       return say("no", ["Bit late for that.", "Sorry doesn't cut it.", "I'm not ready to let it go."]);
     case "ask_out":
-      if (a === "propose") return say("ask", [`I was wondering, would you fancy a drink sometime? Just us?`, `${nm}, would you go out with me?`, "This is going to sound daft, but would you have dinner with me sometime?", "Can I take you out some time? Properly, I mean.", `I like you, ${nm}. Would you want to go for a drink?`]);
+      if (a === "propose") return say("ask", [`I was wondering, would you fancy a drink sometime? Just us?`, `${nm}, would you go out with me?`, "This is going to sound daft, but would you go out with me sometime?", "Can I take you out some time? Properly, I mean.", `I like you, ${nm}. Would you want to go for a drink?`]);
       if (a === "accept") return say("yes", ["I'd love that.", "Yes. Yes, I would.", "Took you long enough. Yes."]);
       return say("no", [`Oh. ${nm}, I'm flattered, but no.`, "I don't think of you like that. Sorry.", "I'd rather we stayed friends."]);
     default:

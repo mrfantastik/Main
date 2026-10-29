@@ -68,7 +68,7 @@ function firstPerson(text: string, name: string): string {
 
 /** Money mentioned in a line ("£34"), if any. */
 function amountIn(text: string | undefined): string | null {
-  return text?.match(/£[\d,.]+/)?.[0] ?? null;
+  return text?.match(/£\d[\d,]*(?:\.\d+)?/)?.[0].replace(/,$/, "") ?? null;
 }
 
 // ------------------------------------------------------------ openings
@@ -249,6 +249,8 @@ function gossipLine(x: Ctx): { text: string; told: number[]; asks: boolean } {
   const named = !!who && (!!pre || lead.includes(who.name));
   const said = named && who
     ? gist
+        // "Leo's made up their mind" is "Leo has", "Leo's going" is "Leo is"; "Leo's stall" is theirs.
+        .replace(new RegExp(`\\b${who.name}'s (\\w+)`, "g"), (_, w: string) => (/^(made|got|been|done|gone|had|decided|found|lost|won|left|started|opened|closed|bought|sold|taken|given|told|seen|\w+ed)$/.test(w) ? `they've ${w}` : /^(going|not|always|never|just|off|back|still|really|so|very|\w+ing)$/.test(w) ? `they're ${w}` : `their ${w}`))
         .replace(new RegExp(`\\b${who.name}'s\\b`, "g"), "their")
         .replace(new RegExp(`^${who.name} (is|was|has)\\b`), (_, v: string) => `they${v === "is" ? "'re" : v === "was" ? " were" : "'ve"}`)
         .replace(new RegExp(`\\b${who.name} (\\w+)`, "g"), (_, w: string) => (/^(is|was|has|had|lent|owes|owed|won|lost|got|paid|opened|closed|said|told|did|does|went|will|can|could|would|might|wants|needs|borrowed|bought|sold)$/.test(w) || /ed$/.test(w) ? `they ${w}` : `them ${w}`))

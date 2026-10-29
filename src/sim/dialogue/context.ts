@@ -162,7 +162,9 @@ export function contextFor(world: WorldState, conv: Conversation, st: DialogueSt
   scene.push(`You're at ${placeName(world, conv.buildingId)}, ${h < 5 ? "in the middle of the night" : h < 12 ? "in the morning" : h < 17 ? "in the afternoon" : h < 22 ? "in the evening" : "late at night"}. You were ${me.activity.kind === "talk" ? "about your business" : me.activity.label.charAt(0).toLowerCase() + me.activity.label.slice(1)}.`);
   const weather = world.happenings.find((x) => !x.ended && world.time >= x.t && world.time < x.until && (x.kind === "storm" || x.kind === "power_cut" || x.kind === "festival"));
   if (weather) scene.push(weather.kind === "storm" ? "It's pouring down outside." : weather.kind === "power_cut" ? "The power's off across town." : "The festival's on in the park.");
-  const near = st.nearby.map((id) => world.citizens[id]?.name).filter(Boolean);
+  const group = (conv.group?.present ?? []).filter((id) => id !== me.id);
+  if (group.length > 1) scene.push(`You're in a group: ${group.map((id) => world.citizens[id]?.name).join(", ")}. Everyone hears what you say, so nothing private, and nothing about anyone standing here. Right now you're talking to ${them.name}.`);
+  const near = st.nearby.filter((id) => !group.includes(id)).map((id) => world.citizens[id]?.name).filter(Boolean);
   if (near.length) scene.push(`Also here, within earshot: ${near.slice(0, 4).join(", ")}. You wouldn't say anything private or about them in front of them.`);
   for (const k of me.news.slice(-2)) {
     const hap = happeningById(world, k.id);

@@ -6,6 +6,8 @@ import { setReflectionHook } from "../mind/reflection";
 import { placeName } from "../places";
 import { endLive, isPublic, sayLive, setConversationAIHook } from "../social/conversation";
 import { builtInTurn, modelRequest, planTurn, readModelTurn, whoseTurn, type Directive } from "../dialogue";
+import { builtInGroupTurn, groupRequest, readGroupTurn, type GroupPlan } from "../dialogue/group";
+import { nextGroupPlan, sayGroup } from "../social/group";
 import { applyModelDecision, decide, rulesDecide, setDecisionHook } from "../society/tick";
 import { decisionPrompt, smallDecisionPrompt } from "../society/prompt";
 import type { AgentAction } from "../society/types";
@@ -107,7 +109,7 @@ interface Live {
   /** A request is out for the next line. */
   waiting: boolean;
   /** The turn being written: who, what they mean to do, and what they were given to go on. */
-  turn: { speaker: string; d: Directive; given: string } | null;
+  turn: { speaker: string; d?: Directive; given: string; plan?: GroupPlan } | null;
   failures: number;
   watched: boolean;
   /** Lines the AI wrote, and lines the built-in voice had to say instead. */
@@ -313,7 +315,7 @@ export class AIDirector {
 
   private conversationHook(world: WorldState, conv: Conversation, _brief: string, _outcomeSchema: Record<string, unknown>, stakes: number): boolean | "live" {
     if (conv.topic !== "chat" && !CONVERSATION_TOPICS.has(conv.topic)) return false;
-    const watched = conv.a === this.focus || conv.b === this.focus;
+    const watched = conv.a === this.focus || conv.b === this.focus || !!(this.focus && (conv.group?.present.includes(this.focus) || conv.group?.arriving.some((x) => x.who === this.focus)));
     const lives = [...this.live.values()].filter((l) => l.world === world).length;
     if (this.free) {
       // Free: speak for as many conversations as it can keep up with (the watched one always).
@@ -390,10 +392,35 @@ export class AIDirector {
       if (!conv || conv.status !== "live" || conv.live?.done) this.live.delete(id);
     }
     for (let tries = 0; tries < 3; tries++) {
-      const ready = [...this.live.values()].filter((l) => l.world === world && !l.waiting && (!watchedOnly || l.watched));
-      const l = ready.find((x) => x.watched) ?? ready.sort((x, y) => x.at - y.at)[0];
+      // (A group stays at most a line ahead of what's been shown: who speaks next depends on what was just said.)
+      const groupReady = (l: Live) => {
+        const c = world.conversations.find((x) => x.id === l.convId);
+        return !c?.group || (c.group.driver === "ai" && c.revealed >= c.lines.length - 1);
+      };
+      // The one being watched comes first, but nobody's left standing in silence for long.
+      const waited = (x: Live) => {
+        const c = world.conversations.find((v) => v.id === x.convId);
+        return world.time - (c?.live?.lastLineT ?? world.time) + (x.watched ? 30 : 0);
+      };
+      const all = [...this.live.values()].filter((l) => l.world === world && !l.waiting && groupReady(l));
+      if (watchedOnly && all.some((x) => !x.watched && waited(x) > 40)) return false;
+      const ready = all.filter((l) => !watchedOnly || l.watched);
+      const l = ready.sort((x, y) => waited(y) - waited(x) || x.at - y.at)[0];
       if (!l) return false;
       const conv = world.conversations.find((x) => x.id === l.convId)!;
+      if (conv.group) {
+        // A group: the scheduler says who speaks, to whom, and what they mean to do.
+        const plan = nextGroupPlan(world, conv);
+        if (!plan) {
+          this.endLiveChat(world, conv.id, l, false);
+          continue;
+        }
+        const req = groupRequest(world, conv, plan, this.small);
+        l.turn = { speaker: plan.speaker, d: plan.d, given: req.given, plan };
+        l.waiting = true;
+        this.send(world, { kind: "conversation", citizenId: plan.speaker, convId: conv.id, turn: { speaker: plan.speaker } }, req.system, req.user, req.schema, req.small);
+        return true;
+      }
       const speaker = whoseTurn(conv);
       // The dialogue engine decides what they mean to do, from what they know.
       const d = planTurn(world, conv, speaker);
@@ -429,7 +456,11 @@ export class AIDirector {
     l.waiting = false;
     const t = l.turn;
     l.turn = null;
-    if (!t || whoseTurn(conv) !== t.speaker) return;
+    if (t?.plan && conv.group) {
+      this.applyGroupTurn(world, d, conv, l, t.plan, t.given);
+      return;
+    }
+    if (!t || !t.d || whoseTurn(conv) !== t.speaker) return;
     const name = world.citizens[t.speaker]?.name ?? "someone";
     const res = d.json ? readModelTurn(world, conv, t.speaker, t.d, d.json, t.given) : { error: d.error ?? "no reply" };
     if ("error" in res) {
@@ -446,6 +477,27 @@ export class AIDirector {
     sayLive(world, conv.id, t.speaker, t.d, res.text, res.meta, res.extras);
     l.byModel++;
     this.log(world, d, "ok", JSON.stringify(d.json), `${name} said it (${t.d.move}${t.d.topic ? `: ${t.d.topic.label}` : ""})`);
+  }
+
+  /** A line for a group came back: check it and say it (or the built-in line instead). */
+  private applyGroupTurn(world: WorldState, d: Done, conv: Conversation, l: Live, plan: GroupPlan, given: string): void {
+    // Things have moved on (the built-in voices took over, or someone else spoke): drop it.
+    if (conv.group!.driver !== "ai" || conv.lines.length !== plan.at) return;
+    const name = world.citizens[plan.speaker]?.name ?? "someone";
+    const res = d.json ? readGroupTurn(world, conv, plan, d.json, given) : { error: d.error ?? "no reply" };
+    if ("error" in res) {
+      l.failures++;
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), `${d.error ? `error: ${d.error}` : `turned down (${res.error})`}: ${name}'s built-in line instead`);
+      const b = builtInGroupTurn(world, conv, plan);
+      sayGroup(world, conv, plan, b.text, "built-in", b.meta ? { ...b.meta, by: "built-in" } : undefined, b.extras);
+      l.byBuiltIn++;
+      if (l.failures >= LIVE_FAILURES) this.endLiveChat(world, conv.id, l, true);
+      return;
+    }
+    l.failures = 0;
+    sayGroup(world, conv, plan, res.text, "llm", res.meta ? { ...res.meta, by: "llm" } : undefined, res.extras);
+    l.byModel++;
+    this.log(world, d, "ok", JSON.stringify(d.json), `${name} said it in the group (${plan.move}${plan.d?.topic ? `: ${plan.d.topic.label}` : ""}; ${plan.why})`);
   }
 
   /** Claude, or the AI's out of calls: live chats it can't carry on are finished by the built-in voices. */

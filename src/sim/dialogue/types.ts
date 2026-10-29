@@ -1,4 +1,4 @@
-import type { CitizenId } from "../types";
+import type { CitizenId, ConversationLine } from "../types";
 
 // Data for the conversation system: who each citizen is as a talker, what
 // they privately know, what they remember about each person they talk to,
@@ -341,6 +341,8 @@ export interface DialogueState {
   said?: string[];
   /** A deal being negotiated, turn by turn. */
   deal?: DealState;
+  /** Two people talking within a group: they've already said hello to everyone, so no greetings. */
+  inGroup?: boolean;
   /** What each was given to work from (debug view only). */
   debug: { retrieved: Record<CitizenId, string[]>; candidates: Record<CitizenId, string[]> };
 }
@@ -376,4 +378,100 @@ export interface DealState {
   /** Who walked away or said no, and why (in their own head). */
   declinedBy?: CitizenId;
   why?: string;
+}
+
+// ------------------------------------------------------------- groups
+
+/**
+ * Two of the people in a group conversation, talking to each other. The
+ * two-person engine plans their exchange (agendas, questions and answers,
+ * topics, goodbyes) as it would for any chat; the group keeps one of these
+ * for each pair that's had words.
+ */
+export interface GroupPair {
+  key: string;
+  a: CitizenId;
+  b: CitizenId;
+  /** Their own lines to each other (the group's transcript has everyone's). */
+  lines: ConversationLine[];
+  dlg: DialogueState;
+  done: boolean;
+}
+
+/** What a line does in a group: part of a pair's exchange, or a group move. */
+export type GroupMove = "pair" | "join" | "chime" | "leave" | "farewell";
+
+/** One line of a group conversation: who said it, to whom, and what it did. */
+export interface GroupTurn {
+  speaker: CitizenId;
+  /** Who it was said to (null: everyone). */
+  to: CitizenId | null;
+  move: GroupMove;
+  /** The pair it belongs to, and its index in that pair's turns. */
+  pair?: string;
+  at?: number;
+  by: "llm" | "built-in";
+  asks: boolean;
+  /** Everyone there when it was said (they all heard it). */
+  heard: CitizenId[];
+  /** What it was about, in a few words. */
+  about?: string;
+  /** Why the scheduler gave them the floor (debug view). */
+  why: string;
+}
+
+/** The last thing said that the others might have something to say about. */
+export interface GroupTable {
+  by: CitizenId;
+  to: CitizenId | null;
+  line: number;
+  kind: TopicKind;
+  key: string;
+  about: CitizenId | null;
+  valence: number;
+  label: string;
+  happening?: number;
+  fact?: number;
+  /** Who's had their say on it. */
+  chimed: CitizenId[];
+}
+
+/**
+ * A conversation between three to five people (it can start with two, and
+ * people join, chip in and leave). A scheduler decides whose turn it is:
+ * whoever was asked something answers; bystanders chip in on what's just
+ * been said when they have a stake in it; whoever has the most to say takes
+ * the floor when an exchange runs out; people drift off when they've had
+ * enough. All plain data, so it saves with the world.
+ */
+export interface GroupState {
+  v: 1;
+  /** Everyone who's been in it, in the order they joined. */
+  members: CitizenId[];
+  /** Who's still there. */
+  present: CitizenId[];
+  /** When each of them joined (game time). */
+  joinedT: Record<CitizenId, number>;
+  /** It's over: everyone's gone their way. */
+  ended?: boolean;
+  pairs: GroupPair[];
+  /** One for each line of the conversation. */
+  turns: GroupTurn[];
+  /** The pair that has the floor. */
+  floor: string | null;
+  table: GroupTable | null;
+  /** On their way over: they say hello once `after` lines have been said. */
+  arriving: { who: CitizenId; after: number }[];
+  /** Someone's said goodbye: once one of the others answers, they're gone (`all`: the whole group's breaking up). */
+  leaving: { who: CitizenId; all: boolean } | null;
+  left: { who: CitizenId; line: number; why: string }[];
+  maxLines: number;
+  /** Who's putting it into words: the AI, a line at a time, or the built-in voices. */
+  driver: "ai" | "built-in";
+  /** Topics already raised in front of everyone (not told again to the next person). */
+  covered: string[];
+  /** Built-in wordings used (not said twice). */
+  said: string[];
+  /** Sides taken in front of everyone, applied when it ends. */
+  notes: { who: CitizenId; about: CitizenId; affinity: number; trust: number; why: string }[];
 }

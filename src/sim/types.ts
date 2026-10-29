@@ -5,7 +5,7 @@
 // That makes saving/loading trivial and lets the same world run in the
 // browser, on a server, or in a headless test.
 
-import type { DialogueState, TalkState } from "./dialogue/types";
+import type { DialogueState, GroupState, TalkState } from "./dialogue/types";
 import type { SocietyState, SocietyWorld } from "./society/types";
 
 export type CitizenId = string;
@@ -820,6 +820,8 @@ export type ConversationTopic =
 export interface ConversationLine {
   speaker: CitizenId;
   text: string;
+  /** In a group: who it was said to (null: everyone there). */
+  to?: CitizenId | null;
 }
 
 export type ConvValue = number | string | boolean | null;
@@ -856,6 +858,10 @@ export interface Conversation {
   topics?: string[];
   /** The conversation system's state: topic, tone, intents, what each brought, what each line did (see dialogue/). */
   dlg?: DialogueState;
+  /** A group conversation (3 to 5 people): who's in it, who's talking to whom, and each pair's exchange (see dialogue/group.ts). */
+  group?: GroupState;
+  /** Set on the per-pair view of a group conversation that the two-person engine works on (keeps each pair's choices its own). */
+  pairKey?: string;
 }
 
 /** One consequence of an improvised conversation, applied when it ends. */

@@ -26,6 +26,7 @@ import { adoptLines, beginDialogue, builtInTurn, dealOutcome, endDialogue, isDea
 import type { TurnMeta } from "../dialogue/types";
 import { rememberChat } from "../mind/bot";
 import { talkIn } from "./talk";
+import { finishGroup, groupTick, joinersFor, maybeJoinGroups, mightBeJoined, startGroupChat } from "./group";
 import { helpDialogue, investDialogue, jobDialogue, loanDialogue, repaymentDialogue, tipDialogue } from "./dialogue";
 import { compatibility } from "./encounters";
 import { helpTerms, investmentTerms, jobTerms, loanTerms, lookWealthy as lookWealthyRaw, MAX_STAFF, settleLoan } from "./negotiation";
@@ -40,7 +41,7 @@ import { adjustRel, getRel, peekRel } from "./relationships";
 // knowledge, history with the other and way of talking, a turn at a time,
 // with a language model writing the words when one is awake.
 
-const CONVERSATION_LOG_LIMIT = 80;
+export const CONVERSATION_LOG_LIMIT = 80;
 
 export interface Agenda {
   topic: ConversationTopic;
@@ -52,11 +53,12 @@ export interface Agenda {
 
 // -------------------------------------------------------------- helpers
 
-export function canTalk(world: WorldState, c: Citizen): boolean {
+/** Free to talk (`joining`: the group they're on their way over to doesn't count). */
+export function canTalk(world: WorldState, c: Citizen, joining?: Conversation): boolean {
   if (!c.insideId || c.path.length > 0) return false;
   const k = c.activity.kind;
   if (k === "sleep" || k === "talk" || k === "travel") return false;
-  return !world.conversations.some((x) => x.a === c.id || x.b === c.id);
+  return !world.conversations.some((x) => x.a === c.id || x.b === c.id || x.group?.present.includes(c.id) || (x !== joining && x.group?.arriving.some((a) => a.who === c.id)));
 }
 
 export function isPublic(world: WorldState, buildingId: string | null): boolean {
@@ -682,7 +684,12 @@ export function setConversationAIHook(h: ConversationAIHook | null): void {
   aiHook = h;
 }
 
-function lockIntoTalk(world: WorldState, c: Citizen, other: Citizen, convId: number): void {
+/** Ask the AI whether it'll speak for the people in this (group) chat, a line at a time. */
+export function voiceWithAI(world: WorldState, conv: Conversation): boolean | "live" {
+  return aiHook ? aiHook(world, conv, "a group chat", {}, 0) : false;
+}
+
+export function lockIntoTalk(world: WorldState, c: Citizen, other: Citizen, convId: number): void {
   interruptActivity(world, c);
   c.pending = null;
   c.activity = {
@@ -815,7 +822,7 @@ export function resolveConversationAI(world: WorldState, convId: number, ai: { l
  */
 export function sayLive(world: WorldState, convId: number, speaker: string, d: Directive, text: string, meta: TurnMeta, extras: Parameters<typeof recordLine>[6] = {}): boolean {
   const conv = world.conversations.find((c) => c.id === convId);
-  if (!conv || conv.status !== "live" || !conv.live || conv.live.done || !conv.dlg) return false;
+  if (!conv || conv.status !== "live" || !conv.live || conv.live.done || !conv.dlg || conv.group) return false;
   if (speaker !== conv.a && speaker !== conv.b) return false;
   recordLine(world, conv, speaker, d, text, meta, extras);
   conv.live.lastLineT = world.time;
@@ -842,6 +849,12 @@ export function finishBuiltIn(world: WorldState, conv: Conversation, maxLines = 
 export function endLive(world: WorldState, convId: number, wrap: boolean): void {
   const conv = world.conversations.find((c) => c.id === convId);
   if (!conv || conv.status !== "live" || !conv.live || conv.live.done) return;
+  // A group: the built-in voices carry on from here (or it's over).
+  if (conv.group) {
+    if (wrap) conv.group.driver = "built-in";
+    else conv.live.done = true;
+    return;
+  }
   if (conv.lines.length < 2) {
     conv.live.done = true;
     conv.lines = (conv.fallback?.lines ?? []).slice();
@@ -855,6 +868,10 @@ export function endLive(world: WorldState, convId: number, wrap: boolean): void 
 }
 
 function finish(world: WorldState, conv: Conversation): void {
+  if (conv.group) {
+    finishGroup(world, conv);
+    return;
+  }
   const a = world.citizens[conv.a];
   const b = world.citizens[conv.b];
   conv.status = "done";
@@ -909,6 +926,10 @@ const LIVE_STALL = 90;
 /** Every minute: reveal lines, end finished conversations. */
 export function conversationsTick(world: WorldState): void {
   for (const conv of [...world.conversations]) {
+    if (conv.group) {
+      groupTick(world, conv, (c) => finish(world, c));
+      continue;
+    }
     if (conv.status === "live" && conv.live) {
       // Lines show as they're written; they stand talking while the next one comes.
       if (conv.revealed < conv.lines.length) {
@@ -941,8 +962,9 @@ export function conversationsTick(world: WorldState): void {
 const ARGUE_COOLDOWN = 2 * 1440;
 const TALKATIVE: Partial<Record<string, number>> = { socialize: 2, eat: 1.2, rest: 1, work: 0.5, manage: 0.6, browse: 0.8, shop: 0.6, trade: 0.5, research: 0.4 };
 
-/** Every 10 minutes: people in the same place may strike up a conversation. */
+/** Every 10 minutes: people in the same place may strike up a conversation (or join one). */
 export function startOpportunisticConversations(world: WorldState): void {
+  maybeJoinGroups(world);
   const byPlace = new Map<string, Citizen[]>();
   for (const id of world.citizenOrder) {
     const c = world.citizens[id];
@@ -999,6 +1021,9 @@ export function startOpportunisticConversations(world: WorldState): void {
       if (!chance(world, Math.min(0.75, 0.07 * ctx * (0.5 + c.traits.sociability + lonely) * (1 + keen * 3)))) continue;
       const pool = unaware.length ? unaware : present;
       const partner = [...pool].sort((x, y) => (c.relationships[y.id]?.affinity ?? 0) + (c.relationships[y.id]?.familiarity ?? 0) - ((c.relationships[x.id]?.affinity ?? 0) + (c.relationships[x.id]?.familiarity ?? 0)))[rand(world) < 0.7 ? 0 : pool.length - 1];
+      // Others here who know them may come over and make it a group.
+      const joiners = joinersFor(world, c, partner, present);
+      if ((joiners.length || (mightBeJoined(world, c, partner, present) && chance(world, 0.5))) && startGroupChat(world, c, partner, joiners)) continue;
       startConversation(world, c, partner, "chat", {});
     }
   }

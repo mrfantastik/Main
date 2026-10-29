@@ -135,6 +135,18 @@ test("with the brain awake, people think and talk through it; asleep, nothing is
   assert.ok(voiced.length >= 3, `only ${voiced.length} conversations spoken live`);
   for (const c of voiced) {
     const name = (id: string) => w.citizens[id].name;
+    if (c.group) {
+      // A group: each pair takes turns; the brain's lines in a pair's exchange are said to the other one.
+      const g = c.group;
+      assert.equal(g.turns.length, c.lines.length, "every line is a group turn");
+      for (const p of g.pairs) p.lines.forEach((l, i) => i && assert.notEqual(l.speaker, p.lines[i - 1].speaker, "each pair takes turns"));
+      c.lines.forEach((l, i) => {
+        const t = g.turns[i];
+        if (t.by === "llm" && t.move === "pair" && t.to) assert.ok(l.text.includes(name(t.to)), `said to the one they're talking to: "${l.text}"`);
+      });
+      assert.ok(g.turns.filter((t) => t.by === "llm").length >= c.lines.length - 3, "the brain wrote (nearly) all of it");
+      continue;
+    }
     assert.equal(c.lines[0].speaker, c.a, "whoever started it speaks first");
     assert.ok(c.lines.length >= 3, `a real exchange (${c.lines.length} lines)`);
     assert.equal(c.dlg!.turns.length, c.lines.length, "every line is a planned turn");

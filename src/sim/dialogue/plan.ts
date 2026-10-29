@@ -257,9 +257,9 @@ function opener(world: WorldState, conv: Conversation, st: DialogueState, me: Ci
     st.agenda[me.id] = agenda.slice(1);
     return { ...base, move: "raise", topic: first, intent: first.intent, opener: "followup", hint: hintForRaise(world, me, them, first, rel, "opener") };
   }
-  if (recently && first) {
+  if ((recently || st.inGroup) && first) {
     st.agenda[me.id] = agenda.slice(1);
-    return { ...base, move: "raise", topic: first, intent: first.intent, opener: "continue", hint: `You were talking to ${them.name} not long ago. Skip the hello and pick up: ${hintForRaise(world, me, them, first, rel, "raise")}` };
+    return { ...base, move: "raise", topic: first, intent: first.intent, opener: "continue", hint: st.inGroup ? `You're all standing together; turn to ${them.name}: ${hintForRaise(world, me, them, first, rel, "raise")}` : `You were talking to ${them.name} not long ago. Skip the hello and pick up: ${hintForRaise(world, me, them, first, rel, "raise")}` };
   }
   if (first && first.kind === "news" && x < 0.35 + p.gossip * 0.4) {
     st.agenda[me.id] = agenda.slice(1);
@@ -408,7 +408,9 @@ export function nextDirective(world: WorldState, conv: Conversation, st: Dialogu
       // What's actually getting to them: their worst recent trouble (not a pet hate).
       const it = lifeItems(world, me).filter((x) => x.valence < -0.25 && !x.key.startsWith("dislike:") && !st.covered.includes(x.label) && !x.first.includes(them.name)).sort((a, b) => a.valence * a.importance - b.valence * b.importance)[0];
       const worry = it ? lifeTopic(me, it, 1, rel) : undefined;
-      const tells = worry && rand(r) < 0.35 + p.openness * 0.4 + rel.closeness * 0.4 - worry.sensitive * 0.4;
+      // (Not in front of a crowd.)
+      const crowd = (conv.group?.present.length ?? 2) > 2 ? worry?.sensitive ?? 0 : 0;
+      const tells = worry && rand(r) < 0.35 + p.openness * 0.4 + rel.closeness * 0.4 - worry.sensitive * 0.4 - crowd * 0.8;
       if (worry && tells) return { ...base, move: "raise", topic: worry, intent: rel.closeness > 0.5 ? "get advice" : "vent", opener: "continue", transition: null, length: len("raise"), hint: `${them.name} asked what's wrong. Tell them: ${hintForRaise(world, me, them, worry, rel, "raise").replace(/^Tell \S+ what's going on with you: /, "")}` };
       return { ...base, move: "deflect", topic, intent: "keep it short", length: "short", hint: `${them.name} asked what's wrong. You don't want to get into it: brush it off.` };
     }

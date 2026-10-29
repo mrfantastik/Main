@@ -68,6 +68,11 @@ function migrate(raw: unknown): WorldState | null {
   // a live chat that was cut off by saving is finished by the built-in voices
   // (or, from an older save, ends there with a goodbye).
   for (const conv of w.conversations) {
+    // A group chat carries on in the built-in voices (the AI picks up new ones).
+    if (conv.group) {
+      conv.group.driver = "built-in";
+      continue;
+    }
     if (conv.status === "awaiting_ai" && conv.fallback) {
       conv.status = "talking";
       conv.lines = conv.fallback.lines;

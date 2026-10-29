@@ -220,7 +220,10 @@ export function candidates(x: TopicContext): Topic[] {
   }
   if (rel.ease > 0.45 && p.teasing > 0.4) add({ key: `tease:${dayOf(world.time)}`, kind: "tease", score: 0.1 + p.teasing * 0.3, label: "a bit of teasing", intent: "joke around", sensitive: 0, valence: 0.2, about: them.id });
 
-  return out.map((tp) => ({ ...tp, score: Math.round(clamp(tp.score, 0, 2) * 1000) / 1000 }));
+  // In a group: nothing already said in front of everyone, and nothing about anyone standing there.
+  const g = conv.group;
+  const fine = (tp: Topic) => !g || (!g.covered.includes(tp.key) && !((tp.kind === "gossip" || tp.key.startsWith("nearby:")) && tp.about && g.present.includes(tp.about)));
+  return out.filter(fine).map((tp) => ({ ...tp, score: Math.round(clamp(tp.score, 0, 2) * 1000) / 1000 }));
 }
 
 /**
@@ -248,5 +251,5 @@ export function drawAgenda(cands: Topic[], n: number, r: RngHolder): Topic[] {
 
 /** A seeded RNG for one person's choices in one conversation. */
 export function rngFor(world: WorldState, conv: Conversation, who: string, salt: string): RngHolder {
-  return { rng: hashSeed(`${world.seed}:${conv.id}:${who}:${salt}`) };
+  return { rng: hashSeed(`${world.seed}:${conv.id}${conv.pairKey ? `/${conv.pairKey}` : ""}:${who}:${salt}`) };
 }

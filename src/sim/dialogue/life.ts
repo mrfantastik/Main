@@ -73,6 +73,8 @@ function sensitivityOf(m: Memory): number {
   if (/\b(stole|stolen|broke into|burgled|robbed)\b/i.test(m.text)) return 0.25;
   if (m.valence < -0.4 && (m.kind === "financial" || m.kind === "loan")) return 0.7;
   if (m.kind === "betrayal") return 0.5;
+  // Plans about a particular person (winning them over, getting one over on them) are kept quiet.
+  if (m.kind === "insight" && m.people.length) return 0.7;
   if (m.valence < -0.3 && m.kind === "job") return 0.45;
   if (m.kind === "social" && m.valence < 0) return 0.55;
   if (m.valence > 0.4) return 0.12;

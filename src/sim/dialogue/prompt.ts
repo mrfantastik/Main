@@ -68,8 +68,18 @@ export const TURN_SCHEMA = {
 };
 
 function transcript(world: WorldState, conv: Conversation, me: Citizen): string[] {
-  return conv.lines.slice(-TALK.promptTurns).map((l) => `${l.speaker === me.id ? "You" : (world.citizens[l.speaker]?.name ?? "Them")}: ${l.text}`);
+  // In a group, who each line was said to.
+  const to = (id: string | null | undefined) => (!conv.group || !id ? "" : id === me.id ? " (to you)" : ` (to ${world.citizens[id]?.name ?? "them"})`);
+  return conv.lines.slice(-TALK.promptTurns).map((l) => `${l.speaker === me.id ? "You" : (world.citizens[l.speaker]?.name ?? "Them")}${to(l.to)}: ${l.text}`);
 }
+
+/** In a group: who else is standing there. */
+function company(world: WorldState, conv: Conversation, me: Citizen): string[] {
+  const ids = (conv.group?.present ?? []).filter((id) => id !== me.id);
+  return ids.map((id) => world.citizens[id]?.name).filter(Boolean) as string[];
+}
+
+const list = (xs: string[]) => (xs.length <= 1 ? (xs[0] ?? "") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
 /** For a big model (Claude, a free web AI): the layers as a system prompt, the conversation and this turn as the message, JSON back. */
 export function bigPrompt(world: WorldState, conv: Conversation, st: DialogueState, me: Citizen, them: Citizen, ctx0: Context): { system: string; user: string; schema: Record<string, unknown> } {
@@ -96,7 +106,9 @@ export function bigPrompt(world: WorldState, conv: Conversation, st: DialogueSta
   const lines = transcript(world, conv, me);
   // A deal: your own position (never theirs), what's on the table, and the move is yours to make.
   const deal = dealContext(world, conv, me);
+  const others = company(world, conv, me);
   const user = [
+    others.length > 1 ? `You're standing talking with ${list(others)}.` : "",
     lines.length ? `The conversation so far:\n${lines.join("\n")}` : `You've just run into ${them.name}.`,
     st.topicLabel ? `(Talking about: ${st.topicLabel}. The mood: ${st.tone}.)` : "",
     ...(deal.length ? ["THE DEAL (only you know your side of it)", ...deal] : []),
@@ -119,8 +131,10 @@ export function smallTurn(world: WorldState, conv: Conversation, st: DialogueSta
   // How much they say: their nature, or what the player set on their card.
   const chat = card.custom ? card.chattiness : p.verbosity;
   const say = chat < 0.35 ? "a few words" : chat > 0.72 ? "up to three sentences" : "one or two short sentences";
+  const others = company(world, conv, me);
+  const withWho = others.length > 1 ? list(others) : them.name;
   const system = [
-    `You are ${me.name}, talking with ${them.name} in Hustle City, a small British town. Talk like a real person, never like an assistant. Only say what ${me.name} would know. Don't explain your feelings; let them show. Reply with only what you say out loud: ${say}. No name, no quotes, no actions.`,
+    `You are ${me.name}, talking with ${withWho} in Hustle City, a small British town. Talk like a real person, never like an assistant. Only say what ${me.name} would know. Don't explain your feelings; let them show. Reply with only what you say out loud: ${say}. No name, no quotes, no actions.`,
     // Who they are (and whatever the player told them to be).
     ...ctx.identity.slice(0, 4).filter((x) => !x.startsWith("Also: ")),
     ...ctx.identity.filter((x) => x.startsWith("Also: ")),
@@ -133,11 +147,11 @@ export function smallTurn(world: WorldState, conv: Conversation, st: DialogueSta
   ]
     .filter(Boolean)
     .join("\n");
-  const messages: { role: "user" | "assistant"; content: string }[] = [{ role: "user", content: `(You've run into ${them.name}.)` }];
+  const messages: { role: "user" | "assistant"; content: string }[] = [{ role: "user", content: `(You've run into ${withWho}.)` }];
   for (const l of conv.lines.slice(-TALK.promptTurns)) {
     const mine = l.speaker === me.id;
     const role = mine ? "assistant" : "user";
-    const content = mine ? l.text : `${them.name}: ${l.text}`;
+    const content = mine ? l.text : `${conv.group ? (world.citizens[l.speaker]?.name ?? them.name) : them.name}: ${l.text}`;
     const last = messages[messages.length - 1];
     if (last.role === role) last.content += `\n${content}`;
     else messages.push({ role, content });

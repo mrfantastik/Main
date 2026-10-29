@@ -79,6 +79,7 @@ function vocativeOnly(text: string, name: string): boolean {
 
 /** Check one finished conversation. */
 export function checkChat(world: WorldState, conv: Conversation): Issue[] {
+  if (conv.group) return checkGroup(world, conv);
   // (Leaving out wordings that are also ordinary replies elsewhere, like "Could be worse.")
   howAnswers ??= HOW.flatMap((m) => wordingsOf(m)).filter((h) => !["gripeShrug", "dismissive", "workBad", "sameHere"].some((m) => wordingsOf(m).includes(h)));
   bigReactions ??= new Set(BIG_REACTIONS.flatMap((m) => wordingsOf(m)));
@@ -161,4 +162,26 @@ export class ChatAudit {
   total(): number {
     return [...this.counts.values()].reduce((a, b) => a + b, 0);
   }
+}
+
+/**
+ * A group conversation: each pair's exchange is checked as a conversation in
+ * its own right (line numbers are the group's), then the group's own moves:
+ * nobody left hanging after saying goodbye, no broken text.
+ */
+function checkGroup(world: WorldState, conv: Conversation): Issue[] {
+  const g = conv.group!;
+  const out: Issue[] = [];
+  for (const p of g.pairs) {
+    if (p.lines.length < 2) continue;
+    const at = g.turns.map((t, i) => (t.pair === p.key ? i : -1)).filter((i) => i >= 0);
+    const view: Conversation = { ...conv, group: undefined, a: p.a, b: p.b, lines: p.lines, dlg: p.dlg };
+    for (const is of checkChat(world, view)) out.push({ ...is, line: at[is.line] ?? is.line, text: conv.lines[at[is.line] ?? is.line]?.text ?? is.text });
+  }
+  g.turns.forEach((t, i) => {
+    const text = conv.lines[i]?.text ?? "";
+    if (t.move === "leave" && !g.turns.slice(i + 1).some((x) => x.move === "farewell")) out.push({ kind: "unanswered goodbye", line: i, text });
+    if (t.move !== "pair" && (/\b(undefined|null|NaN)\b|\{\w+\}|(?<!\.)\.\.(?!\.)|,\s*[.!?]/.test(text) || !text.trim())) out.push({ kind: "broken text", line: i, text });
+  });
+  return out;
 }

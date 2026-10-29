@@ -260,7 +260,9 @@ function maybeHelp(world: WorldState, c: Citizen, h: Happening): void {
   const amount = Math.min(60, Math.round((20 + c.traits.generosity * 30 + close * 10) / 5) * 5);
   if (!transfer(world, citizenAcc(c.id), citizenAcc(victim.id), amount, "gift", `Helping ${victim.name} after ${h.about}`)) return;
   h.gifts = (h.gifts ?? 0) + 1;
-  remember(world, victim, { text: `${c.name} gave me ${money(amount)} to help after ${h.about}.`, kind: "favor", importance: 7, valence: 0.9, people: [c.id] });
+  // (In their own words it's "my place", not "Ethan's place".)
+  const mine = h.about.replace(new RegExp(`\\b${victim.name}'s\\b`), "my");
+  remember(world, victim, { text: `${c.name} gave me ${money(amount)} to help after ${mine}.`, kind: "favor", importance: 7, valence: 0.9, people: [c.id] });
   remember(world, c, { text: `I gave ${victim.name} ${money(amount)} after ${h.about}.`, kind: "social", importance: 4, valence: 0.5, people: [victim.id], feel: { joy: 4, pride: 3 } });
   adjustRel(world, victim, c.id, { affinity: 8, trust: 6 });
   logEvent(world, "town", `🎁 ${c.name} gave ${victim.name} ${money(amount)} to help after ${h.about}.`, 3, [c.id, victim.id]);
