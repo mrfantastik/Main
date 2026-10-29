@@ -205,8 +205,10 @@ export function checkAction(world: WorldState, c: Citizen, a: AgentAction): stri
       if (!theirs) return `${t!.name} hasn't got a business`;
       if (!mine.products.some((p) => theirs.products.includes(p))) return `${theirs.name} doesn't sell what they sell`;
       if (world.time - (mine.lastPriceChangeT ?? -1e9) < 12 * 60) return "they changed their prices only just now";
-      // Only if there's room to go cheaper without selling at a loss.
-      const room = mine.products.filter((p) => theirs.products.includes(p)).some((p) => Math.min(mine.prices[p] ?? 0, (theirs.prices[p] ?? 0) * 0.93) > priceFloor(world, mine, c, p) + 0.01);
+      // Only if there's room to go cheaper than them without selling at a loss.
+      const shared = mine.products.filter((p) => theirs.products.includes(p));
+      if (shared.every((p) => (mine.prices[p] ?? 0) <= (theirs.prices[p] ?? 0) * 0.93 + 0.01)) return `they're already cheaper than ${theirs.name}`;
+      const room = shared.some((p) => Math.max(priceFloor(world, mine, c, p), Math.min(mine.prices[p] ?? 0, (theirs.prices[p] ?? 0) * 0.93)) < (mine.prices[p] ?? 0) - 0.01);
       return room ? null : "they can't go any cheaper without losing money";
     }
     case "confront":

@@ -196,7 +196,8 @@ export class AIDirector {
 
   /** The free AI's connection report (null for Claude or no AI). */
   freeStatus(): FreeAIStatus | null {
-    return this.free && !this.small ? (this.client as FreeAIClient).status() : null;
+    const c = this.client as FreeAIClient | null;
+    return this.free && !this.small && typeof c?.status === "function" ? c.status() : null;
   }
 
   /** Free AI: try every service now (the "Test connection" button). */
@@ -323,7 +324,8 @@ export class AIDirector {
       if (this.client?.slow?.() && !watched) return false;
       if (!this.canCall(world, true)) return false;
       const limit = this.small ? ((this.client?.parallel?.() ?? 1) >= 4 ? 3 : 1) : 2;
-      if (!watched && lives >= limit) return false;
+      // (A deal or a favour gets a slot of its own: chats, groups especially, can wait.)
+      if (!watched && lives >= limit + (conv.topic !== "chat" ? 1 : 0)) return false;
     } else {
       // Claude: the conversations worth paying for (money, jobs, debts, rows, news chats,
       // and whatever the player is watching), a few at a time, within the budget.

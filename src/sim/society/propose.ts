@@ -6,6 +6,7 @@ import { hashSeed, rand, type RngHolder } from "../rng";
 import type { Citizen, CitizenId, WorldState } from "../types";
 import { checkAction } from "./actions";
 import { nextStep } from "./projects";
+import { alliesOf } from "./reputation";
 import { activeGoals, societyOf } from "./state";
 import type { AgentAction, ProjectKind } from "./types";
 
@@ -52,7 +53,7 @@ export function proposeByRules(world: WorldState, c: Citizen): { action: AgentAc
   const b5 = c.personality.big5;
   const sit = situation(world, c);
   const r = rng(world, c);
-  const out: Candidate[] = [{ action: { type: "carry_on", reason: "Nothing needs doing about anyone right now." }, score: 0.32 }];
+  const out: Candidate[] = [{ action: { type: "carry_on", reason: "Nothing needs doing about anyone right now." }, score: 0.27 }];
   const add = (action: AgentAction, score: number) => {
     if (score <= 0.05 || checkAction(world, c, action)) return;
     out.push({ action, score });
@@ -119,6 +120,14 @@ export function proposeByRules(world: WorldState, c: Citizen): { action: AgentAc
     }
   }
 
+  // Friends who can't stand the same person: talk it over (and close ranks).
+  for (const { ally, against } of alliesOf(world, c).slice(0, 2)) {
+    const o = world.citizens[ally];
+    const foe = world.citizens[against];
+    if (!o || !foe) continue;
+    add({ type: "talk", target: o.id, about: foe.id, text: foe.name, reason: `${o.name} knows what ${foe.name}'s like.` }, 0.12 + p.gossip * 0.2 + (feelingsToward(c, foe.id).anger ?? 0) / 300);
+  }
+
   // Business: rivals.
   const mine = openBizOf(world, c);
   if (mine && c.traits.competitiveness > 0.5) {
@@ -140,6 +149,12 @@ export function proposeByRules(world: WorldState, c: Citizen): { action: AgentAc
     const friend = others.filter((o) => (rel(o)?.affinity ?? 0) > 25).sort((x, y) => (rel(x)?.lastT ?? 0) - (rel(y)?.lastT ?? 0))[0];
     if (friend) add({ type: "talk", target: friend.id, reason: `I haven't seen ${friend.name} in a while.` }, 0.2 + c.emotions.loneliness / 150);
   }
+
+  // A friend (or family) they haven't seen for a while: the sociable keep in touch.
+  const missed = others
+    .filter((o) => ((rel(o)?.affinity ?? 0) > 30 || c.family.includes(o.id)) && world.time - (rel(o)?.lastT ?? -1e9) > 2 * 1440)
+    .sort((x, y) => (rel(y)?.affinity ?? 0) - (rel(x)?.affinity ?? 0))[0];
+  if (missed) add({ type: "talk", target: missed.id, reason: `I haven't caught up with ${missed.name} in days.` }, 0.1 + b5.extraversion * 0.2 + p.warmth * 0.12 + (c.family.includes(missed.id) && goals.some((g) => g.kind === "help_family") ? 0.15 : 0));
 
   // Out of work and no plan for it.
   if (c.occupation === "unemployed" && !s.projects.some((x) => x.status === "active" && x.kind === "get_job")) add({ type: "seek_work", reason: "I need a job." }, 0.4 + sit.pressure * 0.4);

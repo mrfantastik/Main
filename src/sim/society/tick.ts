@@ -5,6 +5,7 @@ import { adjustRel } from "../social/relationships";
 import { SOCIETY } from "./config";
 import { checkAction, carryOut, readAction } from "./actions";
 import { projectsDaily } from "./projects";
+import { heardAboutMe, reputationDaily } from "./reputation";
 import { proposeByRules } from "./propose";
 import { activeGoals, fillRoster, logDecision, onRoster, settleDecision, societyOf, societyWorld } from "./state";
 import type { AgentAction, AgentDecision } from "./types";
@@ -105,6 +106,7 @@ export function societyTick(world: WorldState): void {
 /** Every night: plans checked against the real town, goals ticked off, a line about the day. */
 export function societyDaily(world: WorldState): void {
   const day = dayOf(world.time) - 1;
+  reputationDaily(world);
   for (const id of world.citizenOrder) {
     const c = world.citizens[id];
     const s = societyOf(world, c);
@@ -133,7 +135,12 @@ export function societyDaily(world: WorldState): void {
 
 // Believing a rumour about someone changes what you think of them (unless you know them too well to buy it).
 setRumourHook((world, listener, f) => {
-  if (!f.about || f.about === listener.id) return;
+  if (!f.about) return;
+  // A story about themselves: hurt, and angry with whoever's telling it.
+  if (f.about === listener.id) {
+    heardAboutMe(world, listener, f.from ?? undefined);
+    return;
+  }
   const r = listener.relationships[f.about];
   const loyal = (r?.affinity ?? 0) > 55 || listener.family.includes(f.about);
   const credulity = (1 - listener.personality.big5.conscientiousness * 0.5) * f.certainty;

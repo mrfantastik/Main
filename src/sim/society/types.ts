@@ -163,6 +163,10 @@ export interface Rumour {
   truth: boolean | null;
   /** How many people have heard it. */
   heard: number;
+  /** Who's seen through it (a made-up story). */
+  exposed?: CitizenId[];
+  /** It's got about that it was made up. */
+  outed?: boolean;
 }
 
 /** World-level agent state. */

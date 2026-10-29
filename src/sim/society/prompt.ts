@@ -11,6 +11,7 @@ import { money } from "../util";
 import { ACTION_HELP, ACTION_TYPES, DEAL_KINDS } from "./actions";
 import { nextStep, PROJECT_KINDS } from "./projects";
 import { proposeByRules } from "./propose";
+import { alliesOf, reputationOf, TAG_WORDS } from "./reputation";
 import { activeGoals, GOAL_KINDS, societyOf } from "./state";
 import type { AgentAction } from "./types";
 
@@ -48,15 +49,19 @@ function people(world: WorldState, c: Citizen): string[] {
     .filter((o) => o.id !== c.id && ((c.relationships[o.id]?.familiarity ?? 0) > 6 || c.family.includes(o.id)))
     .sort((x, y) => Math.abs(c.relationships[y.id]?.affinity ?? 0) + (c.relationships[y.id]?.familiarity ?? 0) / 2 - (Math.abs(c.relationships[x.id]?.affinity ?? 0) + (c.relationships[x.id]?.familiarity ?? 0) / 2))
     .slice(0, 9);
+  const allies = alliesOf(world, c);
   for (const o of others) {
     const v = relView(world, c, o);
+    const side = allies.filter((x) => x.ally === o.id).map((x) => world.citizens[x.against]?.name).filter(Boolean);
+    // What the town says about them (as far as this person would have picked up).
+    const said = reputationOf(world, o).tags.filter((t) => t !== "well liked" || (c.relationships[o.id]?.affinity ?? 0) < 20);
     const f = feelingsToward(c, o.id);
     const strong = Object.entries(f).filter(([k, x]) => (x ?? 0) > 25 && FEEL[k]).map(([k]) => FEEL[k]);
     const facts = (c.talk?.facts ?? []).filter((x) => x.about === o.id).sort((a, b) => b.learnedAt - a.learnedAt).slice(0, 2);
     const heard = facts.map((x) => `${x.text}${x.source === "rumour" || x.certainty < 0.5 ? " (a rumour, not sure)" : x.from && x.from !== o.id ? ` (${world.citizens[x.from]?.name ?? "someone"} told you)` : ""}`);
     const biz = o.businessIds.map((id) => world.businesses[id]).find((b) => b?.open);
     const owe = v.owed ? (v.owed.amount > 0 ? `owes you ${money(v.owed.amount)}${v.owed.overdue ? " (overdue)" : ""}` : `you owe them ${money(-v.owed.amount)}`) : "";
-    out.push(`${o.name}: ${v.kind}${strong.length ? `; you're ${strong.join(" and ")} them` : ""}${biz ? `; runs ${biz.name}${biz.hiringWage > 0 ? " (hiring)" : ""}` : ""}${owe ? `; ${owe}` : ""}${heard.length ? `. You've heard: ${heard.join("; ")}` : ""}.`);
+    out.push(`${o.name}: ${v.kind}${strong.length ? `; you're ${strong.join(" and ")} them` : ""}${biz ? `; runs ${biz.name}${biz.hiringWage > 0 ? " (hiring)" : ""}` : ""}${owe ? `; ${owe}` : ""}${side.length ? `; on your side against ${side.join(" and ")}` : ""}${said.length ? `; people say they're ${said.map((t) => TAG_WORDS[t] ?? t).join(", ")}` : ""}${heard.length ? `. You've heard: ${heard.join("; ")}` : ""}.`);
   }
   return out;
 }
@@ -71,6 +76,14 @@ function circumstances(world: WorldState, c: Citizen): string[] {
   if (biz) out.push(`You run ${biz.name}: about ${money(Math.round(biz.avgProfit))} a day profit, ${money(Math.round(biz.cash))} in the till, ${biz.employees.length} staff.`);
   else out.push(c.occupation === "unemployed" ? "You're out of work." : c.occupation === "employee" ? `You work at ${c.employerId === "corp" ? "CityCorp" : (world.businesses[c.employerId ?? ""]?.name ?? "a local business")} for ${money(c.wage)} a day.` : `You work as a ${c.occupation}.`);
   return out;
+}
+
+/** What the town thinks of them, as they'd sense it. */
+function reputationLine(world: WorldState, c: Citizen): string {
+  const r = reputationOf(world, c);
+  if (r.knownBy < 2) return "Not many people in town know you yet.";
+  const mood = r.standing >= 35 ? "People round here like you." : r.standing >= 10 ? "People round here get on with you, mostly." : r.standing > -15 ? "People round here are lukewarm about you." : "A lot of people round here don't like you.";
+  return `${mood}${r.tags.filter((t) => t !== "well liked" && t !== "not well liked").length ? ` You're known as someone who ${r.tags.filter((t) => t !== "well liked" && t !== "not well liked").map((t) => (t === "owes money" ? "owes money" : t === "generous" ? "helps people out" : t === "caught telling lies" ? "has been caught telling lies" : t === "stirs things up" ? "stirs things up" : t === "has a rival" ? "has a rival" : t === "doing well" ? "is doing well" : t)).join(", ")}.` : ""}`;
 }
 
 /** The prompt for a big model (JSON back). */
@@ -89,6 +102,7 @@ export function decisionPrompt(world: WorldState, c: Citizen, why: string): { sy
     "RIGHT NOW",
     ...stateInWords(world, c).slice(0, 4),
     ...circumstances(world, c),
+    reputationLine(world, c),
     "",
     "WHAT YOU WANT",
     ...(goals.length ? goals.map((g) => `- ${g.text}${g.who ? ` (${world.citizens[g.who]?.name ?? ""})` : ""}: ${g.why}`) : ["- Nothing in particular."]),
