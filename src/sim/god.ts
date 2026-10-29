@@ -6,9 +6,12 @@ import { citizenAcc, externalAcc, transfer } from "./economy/ledger";
 import { addListing, refPrice } from "./economy/market";
 import { logEvent } from "./events";
 import { remember } from "./memory/memory";
+import { setThought } from "./ai/decision";
+import { reactToClosure, reactToLoss, reactToMarket, reactToNewBusiness, reactToNewJob, reactToWindfall } from "./mind/react";
+import { createHappening, HAPPENING_KINDS } from "./town/happenings";
 import { randInt, randRange } from "./rng";
 import type { GodCommand } from "../shared/protocol";
-import type { BusinessKind, Occupation, WorldState } from "./types";
+import type { BusinessKind, Citizen, Occupation, WorldState } from "./types";
 import { OCCUPATIONS } from "./types";
 import { clamp, money, newId, round2 } from "./util";
 
@@ -35,9 +38,10 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       const c = world.citizens[cmd.citizenId];
       if (!c) throw new GodError("No such citizen");
       const amount = validAmount(cmd.amount);
+      const before = c.money + c.savings;
       transfer(world, externalAcc("god"), citizenAcc(c.id), amount, "god", "A gift from the heavens");
       logEvent(world, "god", `⚡ A mysterious benefactor gave ${c.name} ${money(amount)}!`, 5, [c.id]);
-      remember(world, c, { text: `${money(amount)} appeared in my account out of nowhere!`, kind: "financial", importance: 9, valence: 1, people: [] });
+      reactToWindfall(world, c, amount, before);
       c.reviewRequested = "windfall";
       c.lastReviewT = -1e9;
       return `Gave ${c.name} ${money(amount)}.`;
@@ -46,6 +50,7 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       const c = world.citizens[cmd.citizenId];
       if (!c) throw new GodError("No such citizen");
       const want = validAmount(cmd.amount);
+      const before = c.money + c.savings;
       const fromSavings = Math.min(c.savings, Math.max(0, want - c.money));
       c.savings = round2(c.savings - fromSavings);
       c.money = round2(c.money + fromSavings);
@@ -53,7 +58,7 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       if (amount <= 0) throw new GodError(`${c.name} has no money to take`);
       transfer(world, citizenAcc(c.id), externalAcc("god"), amount, "god", "Taken by unseen forces");
       logEvent(world, "god", `⚡ ${money(amount)} vanished from ${c.name}'s pockets.`, 5, [c.id]);
-      remember(world, c, { text: `${money(amount)} just disappeared from my account. I'm ruined.`, kind: "financial", importance: 9, valence: -1, people: [] });
+      reactToLoss(world, c, amount, before);
       c.reviewRequested = "lost money";
       c.lastReviewT = -1e9;
       return `Took ${money(amount)} from ${c.name}.`;
@@ -66,6 +71,7 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       m.depotStock = Math.min(m.depotStock, Math.round(p.externalDemand * 0.4));
       m.wholesale = round2(m.wholesale * 1.35);
       logEvent(world, "god", `⚡ SHORTAGE: ${p.emoji} ${p.name} are suddenly hard to get. Wholesale prices are spiking.`, 5);
+      for (const c of dealersIn(world, p.id)) reactToMarket(world, c, p.name.toLowerCase(), c.inventory[p.id]?.qty > 0, `${p.name} are suddenly hard to get.`);
       return `Created a shortage of ${p.name}.`;
     }
     case "surplus": {
@@ -77,6 +83,7 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       m.wholesale = round2(m.wholesale * 0.7);
       for (let i = 0; i < 6; i++) addListing(world, "external", p.id, randInt(world, 2, 5), round2(refPrice(world, p.id) * randRange(world, 0.35, 0.6)), 0);
       logEvent(world, "god", `⚡ SURPLUS: the market is flooded with cheap ${p.emoji} ${p.name}. Bargains everywhere.`, 5);
+      for (const c of dealersIn(world, p.id)) reactToMarket(world, c, p.name.toLowerCase(), false, `The market's flooded with cheap ${p.name.toLowerCase()}.`);
       return `Created a surplus of ${p.name}.`;
     }
     case "set_price": {
@@ -91,7 +98,22 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       m.wholesale = price;
       m.tape.push(price);
       logEvent(world, "god", `⚡ The wholesale price of ${p.emoji} ${p.name} is now ${money(price)}.`, 4);
+      if (Math.abs(ratio - 1) > 0.15)
+        for (const c of dealersIn(world, p.id))
+          reactToMarket(world, c, p.name.toLowerCase(), ratio > 1 ? c.inventory[p.id]?.qty > 0 : !(c.inventory[p.id]?.qty > 0), `${p.name} cost ${money(price)} wholesale now, ${ratio > 1 ? "up" : "down"} from ${money(price / ratio)}.`);
       return `${p.name} now cost ${money(price)} wholesale.`;
+    }
+    case "happening": {
+      if (!HAPPENING_KINDS.includes(cmd.kind)) throw new GodError("Unknown kind of happening");
+      const h = createHappening(world, cmd.kind, { source: "god", subject: cmd.citizenId || null, businessId: cmd.businessId || null });
+      if (typeof h === "string") throw new GodError(h);
+      // Whoever it happened to has something new to react to (the happening itself sets how they feel).
+      const hit = h.subject ? world.citizens[h.subject] : h.businessId ? world.citizens[world.businesses[h.businessId]?.ownerId ?? ""] : undefined;
+      if (hit) {
+        hit.shock = { t: world.time, text: h.title };
+        if (hit.agent?.plan) hit.agent.plan = null;
+      }
+      return `${h.title}.`;
     }
     case "hype": {
       const p = world.products[cmd.productId];
@@ -99,6 +121,7 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       world.shocks = world.shocks.filter((s) => s.productId !== p.id);
       world.shocks.push({ id: newId(world), productId: p.id, kind: "hype", startT: world.time, magnitude: 2.3, durationDays: 3, started: true });
       logEvent(world, "god", `⚡ ${p.emoji} ${p.name} are suddenly EVERYWHERE on social media. Demand is exploding.`, 5);
+      for (const c of dealersIn(world, p.id)) reactToMarket(world, c, p.name.toLowerCase(), true, `Everyone wants ${p.name.toLowerCase()} all of a sudden.`);
       return `Started a craze for ${p.name}.`;
     }
     case "set_job": {
@@ -106,6 +129,7 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       if (!c) throw new GodError("No such citizen");
       const occ = cmd.occupation as Occupation;
       if (!OCCUPATIONS.includes(occ)) throw new GodError("Unknown occupation");
+      const was = c.occupation;
       if (occ === "employee") {
         if (world.corpEmployees.length >= world.economy.corpOpenings) world.economy.corpOpenings++;
         hireAtCorp(world, c);
@@ -117,6 +141,7 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       }
       c.lastCareerChangeT = world.time;
       logEvent(world, "god", `⚡ ${c.name} woke up as ${occ === "employee" ? "a CityCorp employee" : `a ${occ}`}.`, 4, [c.id]);
+      if (was !== occ) reactToNewJob(world, c, jobName(was), jobName(occ), was === "unemployed" || (occ === "employee" && was !== "entrepreneur" && was !== "shopkeeper"));
       return `${c.name} is now ${occ}.`;
     }
     case "spawn_business":
@@ -126,6 +151,7 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       if (!b || !b.open) throw new GodError("That business isn't open");
       closeBusiness(world, b, "shut down by divine intervention", false);
       logEvent(world, "god", `⚡ ${b.name} was shut down by forces beyond anyone's control.`, 5, [b.ownerId], b.id);
+      if (world.citizens[b.ownerId]) reactToClosure(world, world.citizens[b.ownerId], b.name);
       return `Closed ${b.name}.`;
     }
     case "boom": {
@@ -135,7 +161,10 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       logEvent(world, "god", "⚡ 📈 ECONOMIC BOOM! Visitors flood into town, clients want more work, CityCorp is hiring.", 5);
       for (const id of world.citizenOrder) {
         const c = world.citizens[id];
-        remember(world, c, { text: "The economy is booming. Now's the time to make money.", kind: "world", importance: 6, valence: 0.7, people: [], key: "macro" });
+        remember(world, c, { text: "The economy is booming. Now's the time to make money.", kind: "world", importance: 6, valence: 0.7, people: [], key: "macro", feel: { joy: 8 + c.traits.ambition * 10 } });
+        setThought(world, c, c.traits.ambition > 0.6 ? "Business is booming. Time to make the most of it." : "Everyone's saying times are good. About time.", 3);
+        c.shock = { t: world.time, text: "The economy is booming." };
+        if (c.agent?.plan) c.agent.plan = null;
         c.reviewRequested = "boom";
       }
       return "The economy is booming.";
@@ -148,12 +177,29 @@ export function applyGodCommand(world: WorldState, cmd: GodCommand): string {
       logEvent(world, "god", "⚡ 📉 MARKET CRASH! Customers vanish, clients cancel contracts, CityCorp announces layoffs.", 5);
       for (const id of world.citizenOrder) {
         const c = world.citizens[id];
-        remember(world, c, { text: "The economy crashed. Everyone's scared.", kind: "world", importance: 7, valence: -0.8, people: [], key: "macro" });
+        const exposed = c.money + c.savings < 150 || c.occupation === "entrepreneur" || c.occupation === "shopkeeper";
+        remember(world, c, { text: "The economy crashed. Everyone's scared.", kind: "world", importance: 7, valence: -0.8, people: [], key: "macro", feel: { fear: exposed ? 25 : 12, sadness: 6 } });
+        setThought(world, c, exposed ? "The economy's crashed. If customers dry up, I'm in real trouble." : "The economy's crashed. Time to keep my head down and save.", 3);
+        c.shock = { t: world.time, text: "The economy crashed." };
+        if (c.agent?.plan) c.agent.plan = null;
         c.reviewRequested = "crash";
       }
       return "The economy has crashed.";
     }
   }
+}
+
+/** "a CityCorp employee", "out of work", "a reseller". */
+function jobName(occ: Occupation): string {
+  return occ === "employee" ? "a CityCorp employee" : occ === "unemployed" ? "out of work" : `${/^[aeiou]/.test(occ) ? "an" : "a"} ${occ}`;
+}
+
+/** Who deals in a product: owners of businesses that sell it, and anyone holding stock of it. */
+function dealersIn(world: WorldState, productId: string): Citizen[] {
+  const out = new Set<Citizen>();
+  for (const b of Object.values(world.businesses)) if (b.open && b.products.includes(productId) && world.citizens[b.ownerId]) out.add(world.citizens[b.ownerId]);
+  for (const id of world.citizenOrder) if ((world.citizens[id].inventory[productId]?.qty ?? 0) > 0) out.add(world.citizens[id]);
+  return [...out];
 }
 
 function bestProduct(world: WorldState): string {
@@ -174,6 +220,7 @@ function spawnBusiness(world: WorldState, citizenId: string, kind: BusinessKind,
   if (!b) throw new GodError("Couldn't open the business");
   restockBusiness(world, b, c);
   logEvent(world, "god", `⚡ ${c.name} was blessed with a brand-new business: ${b.name}.`, 5, [c.id], b.id);
+  reactToNewBusiness(world, c, b.name);
   remember(world, c, { text: `Out of nowhere I was handed ${b.name}. Don't waste it.`, kind: "business", importance: 9, valence: 0.9, people: [] });
   return `Opened ${b.name} for ${c.name}.`;
 }

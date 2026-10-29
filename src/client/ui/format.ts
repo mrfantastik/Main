@@ -1,4 +1,4 @@
-import type { Emotion } from "../../sim/types";
+import type { Emotion, HappeningKind } from "../../sim/types";
 
 export function gbp(v: number | null | undefined, digits?: number): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
@@ -78,3 +78,23 @@ export const VALUE_LABEL: Record<string, string> = {
   community: "🤝 Community",
   knowledge: "📚 Knowledge",
 };
+
+/** Town happenings God Mode can trigger (who or what they need). */
+export const HAPPENING_UI: { kind: HappeningKind; icon: string; label: string; target: "citizen" | "business" | null }[] = [
+  { kind: "festival", icon: "🎪", label: "Festival in the park", target: null },
+  { kind: "party", icon: "🎉", label: "Birthday party at the pub", target: "citizen" },
+  { kind: "lottery", icon: "🎟️", label: "Lottery win", target: "citizen" },
+  { kind: "celebrity", icon: "🌟", label: "Celebrity visit", target: "business" },
+  { kind: "storm", icon: "⛈️", label: "Storm", target: null },
+  { kind: "power_cut", icon: "🔌", label: "Power cut", target: null },
+  { kind: "fire", icon: "🔥", label: "Fire at a business", target: "business" },
+  { kind: "burglary", icon: "🚨", label: "Break-in", target: "citizen" },
+  { kind: "food_poisoning", icon: "🤢", label: "Food poisoning at a café", target: "business" },
+  { kind: "rent_rise", icon: "🏠", label: "Rent rise", target: null },
+  { kind: "sculpture", icon: "🏛️", label: "Mysterious column in the park", target: null },
+];
+
+/** The AI doing the thinking and talking, as labels show it ("Town brain", "Free AI" or "Claude"). */
+export function aiName(ai: { free?: boolean; brain?: unknown } | undefined): string {
+  return ai?.brain ? "Town brain" : ai?.free ? "Free AI" : "Claude";
+}

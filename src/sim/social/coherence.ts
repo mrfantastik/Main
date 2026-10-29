@@ -1,0 +1,187 @@
+import type { Conversation, WorldState } from "../types";
+import { fitsTime, wordingsOf } from "./talk";
+
+// Checks a finished conversation for the kinds of nonsense a player notices:
+// answering a question nobody asked, leaving a question hanging, a huge
+// reaction to a few pounds, "lunch" at nine at night, a goodbye nobody
+// answers, the same line twice, "Day 12" said out loud, "bad luck" about a
+// lottery win, and voice tics stuck on where they don't belong. Used by the
+// tests and by `npm run chatcheck`, which runs whole towns and counts them.
+
+export type IssueKind =
+  | "unasked answer"
+  | "unanswered question"
+  | "oversized reaction"
+  | "wrong time of day"
+  | "unanswered goodbye"
+  | "repeated line"
+  | "day number"
+  | "wrong opinion"
+  | "voice tic"
+  | "talks about self"
+  | "talks about listener"
+  | "broken text";
+
+export interface Issue {
+  kind: IssueKind;
+  line: number;
+  text: string;
+}
+
+const HOW = [
+  "howFine",
+  "howTired",
+  "howHungry",
+  "howWet",
+  "howGoodDay",
+  "howBadDay",
+  "howGoodSmall",
+  "howBadSmall",
+  "howSad",
+  "howAngry",
+  "howScared",
+  "howHappy",
+  "howLonely",
+  "howProud",
+  "howEnvy",
+  "howGrateful",
+  "howAshamed",
+];
+const BIG_REACTIONS = ["congrats", "elaborateGood", "sympathy", "elaborateBad", "comfort", "supportive"];
+const GOODBYES = ["bye", "byeClose"];
+
+let howAnswers: string[] | null = null;
+let bigReactions: Set<string> | null = null;
+let goodbyes: Set<string> | null = null;
+
+/** Lead-ins a speaker's voice may put in front of a line. */
+const LEAD = /^(Um, |Er, |Oh, um, |Oh! |Honestly, |You know what\? |Oh, and |Look, |Ha! |Sorry, |Um, sorry, |It's good to talk to someone\. )+/;
+let NAME_LEAD: RegExp | null = null;
+
+function bare(text: string): string {
+  let t = text.replace(LEAD, "");
+  if (NAME_LEAD) t = t.replace(NAME_LEAD, "").replace(LEAD, "");
+  t = t[0] ? t[0].toUpperCase() + t.slice(1) : t;
+  return t.replace(/(, love|, pet|, mate)\.$/, ".").replace(/\.\.\.$/, ".");
+}
+
+/** Questions that are only a lead-in to what the speaker says next, or not really questions. */
+const RHETORICAL = /(can i be honest with you|can i tell you something|did i tell you|can i have a moan|guess what|can i tell you what i('m| am) up to|alright|is that right|really|can you believe it|between us|seriously, how|have you heard|did you know|can't you tell|shouldn't you|isn't it|wasn't it|eh)\?$/i;
+
+/** Did they say this person's name as a vocative ("Alright, Sofia?", "Sofia!") rather than about them? */
+function vocativeOnly(text: string, name: string): boolean {
+  const stripped = text
+    .replace(new RegExp(`(^|[.!?] )${name}[,.!?]`, "g"), "$1")
+    .replace(new RegExp(`, ${name}[.!?,]`, "g"), "")
+    .replace(new RegExp(`(Hi|Hiya|Hello|Morning|Evening|Oi|Alright|Night|Well, well)\\.? ${name}\\b`, "g"), "");
+  return !new RegExp(`\\b${name}\\b`).test(stripped);
+}
+
+/** Check one finished conversation. */
+export function checkChat(world: WorldState, conv: Conversation): Issue[] {
+  if (conv.group) return checkGroup(world, conv);
+  // (Leaving out wordings that are also ordinary replies elsewhere, like "Could be worse.")
+  howAnswers ??= HOW.flatMap((m) => wordingsOf(m)).filter((h) => !["gripeShrug", "dismissive", "workBad", "sameHere"].some((m) => wordingsOf(m).includes(h)));
+  bigReactions ??= new Set(BIG_REACTIONS.flatMap((m) => wordingsOf(m)));
+  goodbyes ??= new Set(GOODBYES.flatMap((m) => wordingsOf(m)).filter((g) => !wordingsOf("byeBack").includes(g)));
+  NAME_LEAD ??= new RegExp(`^(${world.citizenOrder.map((id) => world.citizens[id].name).join("|")}), `);
+  const issues: Issue[] = [];
+  const lines = conv.lines;
+  const flag = (kind: IssueKind, i: number) => issues.push({ kind, line: i, text: lines[i].text });
+  const t = conv.startedT ?? world.time;
+  const seen = new Set<string>();
+  // The dialogue engine's record of each turn (what it was doing), when there is one.
+  const turns = conv.dlg && conv.dlg.mode !== "deal" && conv.dlg.turns.length === lines.length ? conv.dlg.turns : null;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const prev = lines[i - 1];
+    const next = lines[i + 1];
+    const text = bare(l.text);
+    if (turns) {
+      const m = turns[i];
+      const pm = turns[i - 1];
+      // An answer to a question nobody asked.
+      if (m.move === "answer" && (!pm || pm.speaker === m.speaker || !pm.asks)) flag("unasked answer", i);
+      // A question, then the same person carries on as if it wasn't asked.
+      if (m.asks && m.q !== "agree" && next && next.speaker === l.speaker) flag("unanswered question", i);
+      // Their own name, or the listener's, said as if about someone else.
+      const me = world.citizens[l.speaker];
+      const them = world.citizens[l.speaker === conv.a ? conv.b : conv.a];
+      if (me && new RegExp(`\\b${me.name}('s)?\\b`).test(l.text) && !new RegExp(`\\b${me.name}'s (Café|Grocer|Kicks|Stall|Shop|Bakery|Books|Bar)`).test(l.text)) flag("talks about self", i);
+      if (them && !vocativeOnly(l.text, them.name) && !new RegExp(`\\b${them.name}'s (Café|Grocer|Kicks|Stall|Shop|Bakery|Books|Bar)`).test(l.text)) flag("talks about listener", i);
+    } else {
+      // Answering "how are you?" when nobody asked.
+      if (howAnswers.some((h) => text === h || (h.split(" ").length > 1 && text.startsWith(h))) && prev && (prev.speaker === l.speaker || !/\?/.test(prev.text))) flag("unasked answer", i);
+      // A real question, then the same person carries on as if it wasn't asked.
+      if (/\?$/.test(l.text) && next && next.speaker === l.speaker && !RHETORICAL.test(l.text)) flag("unanswered question", i);
+    }
+    // Raptures or commiserations over a few pounds.
+    const amt = /£([\d,]+(?:\.\d+)?)/.exec(l.text);
+    if (amt && Number(amt[1].replace(/,/g, "")) < 20 && !/\?/.test(l.text)) {
+      for (const j of [i + 1, i + 2]) if (lines[j] && lines[j].speaker !== l.speaker && bigReactions.has(bare(lines[j].text))) flag("oversized reaction", j);
+    }
+    if (!fitsTime(l.text.replace(/\b(this|in the|every) morning\b/gi, ""), t)) flag("wrong time of day", i);
+    if (seen.has(l.text) && l.text.split(/\s+/).length > 2) flag("repeated line", i);
+    seen.add(l.text);
+    if (/\bDay \d+\b/.test(l.text)) flag("day number", i);
+    if (/(lottery|celebrity|festival|party)/i.test(l.text) && next && next.speaker !== l.speaker && /^(Bad luck, that|Rotten timing|It's a shame, really)/.test(bare(next.text))) flag("wrong opinion", i + 1);
+    if (/ Anyway!$|^(Right, so: |I'm worried, (?!to be honest))/.test(l.text) || (/^Sorry, /.test(l.text) && !/^Sorry, (I|I'm|about|to)\b/.test(l.text) && !/\b(need|short|could|can I|would you|lend|borrow|sorry|was I)\b/i.test(l.text.slice(7)))) flag("voice tic", i);
+    // Things only a template (or a confused model) says.
+    if (/\b(undefined|null|NaN)\b|\{\w+\}|(?<!\.)\.\.(?!\.)|,\s*[.!?]/.test(l.text)) flag("broken text", i);
+  }
+  // A goodbye with no reply.
+  const last = lines.length - 1;
+  if (conv.topic === "chat" && last >= 1) {
+    if (turns ? turns[last].move === "close" : goodbyes.has(bare(lines[last].text))) flag("unanswered goodbye", last);
+  }
+  return issues;
+}
+
+/** Tally of issues over many conversations, with a few examples of each. */
+export class ChatAudit {
+  chats = 0;
+  lines = 0;
+  counts = new Map<IssueKind, number>();
+  examples = new Map<IssueKind, string[]>();
+
+  add(world: WorldState, conv: Conversation): void {
+    if (!conv.lines.length) return;
+    this.chats++;
+    this.lines += conv.lines.length;
+    for (const is of checkChat(world, conv)) {
+      this.counts.set(is.kind, (this.counts.get(is.kind) ?? 0) + 1);
+      const ex = this.examples.get(is.kind) ?? [];
+      if (ex.length < 4) {
+        const name = (id: string) => world.citizens[id]?.name ?? id;
+        ex.push(conv.lines.map((l, i) => `${i === is.line ? ">>" : "  "} ${name(l.speaker)}: ${l.text}`).join("\n"));
+        this.examples.set(is.kind, ex);
+      }
+    }
+  }
+
+  total(): number {
+    return [...this.counts.values()].reduce((a, b) => a + b, 0);
+  }
+}
+
+/**
+ * A group conversation: each pair's exchange is checked as a conversation in
+ * its own right (line numbers are the group's), then the group's own moves:
+ * nobody left hanging after saying goodbye, no broken text.
+ */
+function checkGroup(world: WorldState, conv: Conversation): Issue[] {
+  const g = conv.group!;
+  const out: Issue[] = [];
+  for (const p of g.pairs) {
+    if (p.lines.length < 2) continue;
+    const at = g.turns.map((t, i) => (t.pair === p.key ? i : -1)).filter((i) => i >= 0);
+    const view: Conversation = { ...conv, group: undefined, a: p.a, b: p.b, lines: p.lines, dlg: p.dlg };
+    for (const is of checkChat(world, view)) out.push({ ...is, line: at[is.line] ?? is.line, text: conv.lines[at[is.line] ?? is.line]?.text ?? is.text });
+  }
+  g.turns.forEach((t, i) => {
+    const text = conv.lines[i]?.text ?? "";
+    if (t.move === "leave" && !g.turns.slice(i + 1).some((x) => x.move === "farewell")) out.push({ kind: "unanswered goodbye", line: i, text });
+    if (t.move !== "pair" && (/\b(undefined|null|NaN)\b|\{\w+\}|(?<!\.)\.\.(?!\.)|,\s*[.!?]/.test(text) || !text.trim())) out.push({ kind: "broken text", line: i, text });
+  });
+  return out;
+}

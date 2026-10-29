@@ -8,6 +8,9 @@ import { citizenAcc, externalAcc, transfer } from "./ledger";
 import { remember } from "../memory/memory";
 import { buyFromBusiness } from "./business";
 
+/** How much a meal fills someone up (hunger is 0 starving .. 100 full). */
+export const MEAL_FILLS = 62;
+
 // Everyday life: eating, sleeping, resting, going out.
 
 function withdrawForSpending(c: Citizen, amount: number): void {
@@ -60,7 +63,7 @@ export function registerLivingActions(): void {
       }
       if (!ate && eatAtHome(c)) ate = true;
       if (ate) {
-        c.needs.hunger = clamp(c.needs.hunger + 62, 0, 100);
+        c.needs.hunger = clamp(c.needs.hunger + MEAL_FILLS, 0, 100);
         c.needs.fun = clamp(c.needs.fun + 4, 0, 100);
       }
     },

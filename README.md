@@ -6,6 +6,76 @@ Nothing is scripted. Every story comes from the systems: needs, money, personali
 
 ---
 
+## The town as a society of agents
+
+Every citizen is an agent with their own personality, memories, private knowledge (who told them what, how sure they are, whether it's only a rumour), relationships, goals, plans that take days, intentions, and a log of every decision they made and what came of it.
+
+**Ten of them** (picked to be as different from each other as possible; you can change the number, or choose who) are run by a **language model**. Every few hours, or straight away when something big happens to them, the model is shown *only that person's* world: who they are, how they feel, their money, what they want, their plans and how they're going, what they've tried lately and how it went, the people in their life as they see them, and what the town says about them. It proposes **one action**, as JSON:
+
+> talk to someone · look for work or ask someone for a job · propose a deal (a loan, an investment, a partnership, a job offer, a sale) · lend · give someone money · spread a story about someone (true or not) · undercut a rival · have it out with someone · make up · ask someone out · start a plan · change what they're aiming for · carry on
+
+The **town checks every proposal** against the real world: do they have the money, do they know this person, does that business exist and is it hiring, did they only just try this. Then it either carries the action out or turns it down with the reason. Either way it goes into the agent's log and comes back in their next prompt. **Nothing the model says changes the world directly.** Whatever the model can't answer for (no model connected, a timeout, an impossible proposal) is decided by the **built-in judgement**, which weighs the same things by personality. The 🎯 Agent tab marks every decision 🧠 AI or ⚙️ rules.
+
+- **Conversations are turn by turn, and each person speaks for themselves.** Each line is one person's turn, written from that person's context only: they never see the other's private thoughts, agenda or limits. It's checked, then recorded. People answer what was said, change the subject, disagree, and wind it up.
+- **Deals are negotiated, not decided in advance.** A loan, an investment, a job or a sale starts with nothing on the table. Each side has private limits that only they see (what they can spare, the rate they'd accept, whether they trust the other). They propose, counter, accept or walk away, turn by turn, and the outcome is whatever they agree. The town only refuses moves that are impossible, such as offering money they haven't got.
+- **Group conversations of 3 to 5 people.** Friends wander over and join a chat, and a scheduler decides who speaks:
+  - whoever was asked something answers;
+  - bystanders chip in when what's just been said touches them: news they already knew or are the subject of, gossip about someone they love or can't stand, a brag from someone they envy, a friend's troubles (impulsive people butt in);
+  - whoever has most to say takes the floor;
+  - people leave when they're tired, hungry or have had enough.
+
+  Everyone hears everything that's said, so nobody gossips about someone standing right there, and news isn't told twice.
+- **Plans that take days.** Open a business (find the money and recruit people who pledge to pay in at launch, or don't), find a backer, get a job, win someone over, beat a rival, clear a debt, save up. Plans stall, shrink to something cheaper, or fail, and people react to that.
+- **A social life nobody scripted.** Friendships, grudges, rivalries and price wars, couples (and break-ups), alliances against a shared enemy, and reputations (in debt, generous, a stirrer, caught lying). Rumours too: some true, some made up on purpose, retold with drift, believed or not. People who know the subject well can see through a lie, and word gets round about who made it up.
+
+**How to watch it:**
+- Click anyone and open **🎯 Agent**: their goals; their plans (progress, partners, setbacks, next step); every decision, with who made it, whether the town allowed it and what happened; their days; what the town thinks of them; and what they believe about others ("show the truth" reveals whether a story is true).
+- Transcripts mark every line 🧠 (written by the AI, gold edge) or ⚙️ (the built-in voice), and in groups, who each line was said to.
+- The **🧠 AI** panel has an **Agents** box: how many people the AI runs and who, decisions by the AI against the built-in judgement, how many the town turned down, and the stories going round. Below it is the full log of every prompt and reply.
+
+**From the terminal:** `npm run agents -- --seed 42 --days 7` runs a town for a week with nobody touching it and reports what happened to each of the ten agents (with the built-in judgement standing in for the model). Try other seeds to see towns turn out differently. Exactly what's run by the model and what by rules is in [docs/agent-society.md](docs/agent-society.md).
+
+---
+
+## Only the AIs talk: the best way to run it
+
+Turn on **Only the AI speaks** and no built-in line is ever said. A conversation happens only if the AI will speak it. A line it gets wrong (a repeat, a name the speaker couldn't know, a made-up sum, assistant-speak) is sent back with the reason and asked for again, never replaced. If the AI stops answering, the conversation just ends where it is. Every line in the transcripts is then marked 🧠.
+
+How much the town talks then depends on how fast your model is. A town says about **570 lines a game day** across ~55 conversations (up to 5 at once), plus ~100 agent decisions: roughly **700 requests a game day**. Each prompt is under ~1,200 tokens and each reply a few dozen. At 1× a game day is 6 real minutes, so keeping up with everyone takes about **2 requests a second**. If the model is slower, nothing breaks: conversations take longer (people stand chatting longer) and fewer happen at once.
+
+**The best setup is the server version with a local model, through Ollama, on a graphics card.** It's free, private, has no rate limits, and keeps up with the whole town.
+
+1. Install [Ollama](https://ollama.com) and get a model:
+   - `ollama pull qwen2.5:7b`: needs ~6 GB of graphics memory; reliable, and follows the reply format well.
+   - `ollama pull qwen2.5:14b`: 10–12 GB; noticeably better conversations.
+   - `mistral-nemo` (12B) or `gemma2:9b`: livelier writing, if you have the memory.
+
+   Avoid "thinking" (reasoning) models: they're slow and wrap their replies in reasoning.
+2. Let it answer four at once: `OLLAMA_NUM_PARALLEL=4 ollama serve`.
+3. Run the town against it, with only the AI speaking:
+
+   ```bash
+   AI_PROVIDER=free FREE_AI_URL=http://localhost:11434/v1/chat/completions AI_MODEL=qwen2.5:7b \
+   FREE_AI_INTERVAL_MS=0 AI_CONCURRENCY=4 AI_LIVE_CHATS=20 AI_ONLY=1 npm start
+   ```
+
+4. Open http://localhost:3000 and play at **1×**. At higher speeds the model can't keep up, and conversations are cut short (cleanly, with nothing filled in).
+
+**Other ways, and what they give you:**
+
+| | Conversations | Notes |
+|---|---|---|
+| **Local model, server** (above) | the whole town | the recommended setup |
+| **Local model, browser game** | the whole town | Start Ollama with `OLLAMA_ORIGINS=*` (so the page may call it), open `ai-hustle-city.html?freeai=http://localhost:11434/v1/chat/completions&model=qwen2.5:7b`, then press **🗣️ The AI speaks for everyone** in the 🧠 AI panel's Agents box. |
+| **LM Studio, vLLM, any OpenAI-compatible server** | the whole town | the same, with its `/v1/chat/completions` URL and model name |
+| **A hosted model (Claude, or an OpenAI-compatible service)** | the whole town | Claude writes the best conversations, but every line is a paid call: about 700 calls a game day, around 6 million input tokens an hour at 1×. Fine for a session with a budget, expensive to leave running. Use `AI_PROVIDER=claude AI_ONLY=1 AI_LIVE_CHATS=20 AI_CONCURRENCY=4 AI_MAX_CALLS_PER_DAY=5000`, and raise `AI_BUDGET_USD`. |
+| **The town's brain** (in-page, no install) | a few at once | Small models (up to 1.5B): on a graphics card up to 3 conversations at once; on a processor only the one you're watching, so with only the AI speaking the rest of the town stays quiet. |
+| **The free public AI** (the default) | a couple at once | Rate-limited (two at a time, a call every few seconds): it can't speak for a whole town. |
+
+The same settings are in the game: the 🧠 AI panel's **Agents** box has the **Only the AI speaks** switch, how many conversations the AI speaks at once, how many requests it sends at once, and the gap between calls. **🗣️ The AI speaks for everyone** sets all of them for a model of your own.
+
+---
+
 ## Quick start
 
 You need [Node.js](https://nodejs.org) 22 or newer (20 works too, without the SQLite database).
@@ -27,15 +97,85 @@ npm run build:standalone
 
 A ready-made copy is published here: **https://claude.ai/artifact/ApFS3fgxqugFg2Pz6RKtwU** (private to the owner until shared).
 
-This makes `dist/ai-hustle-city.html`, a single file that runs the whole city inside your browser (no server, nothing to install for whoever opens it). It saves itself in that browser. It uses the built-in utility AI only, because Claude needs the API key on a server.
+This makes the game in **three files**, in `dist/three/`. Keep them together in one folder and open the page:
 
-### Turning on Claude (optional)
+| File | What it is |
+|---|---|
+| `ai-hustle-city.html` | **The town**: the whole city, its people and economy, running in your browser (no server, nothing to install). Open this one. |
+| `hustle-brain.js` | **The AI engine**: the town's brain (a worker that runs a language model) and the onnxruntime WebAssembly runtime it runs on, about 9 MB. Without it the town runs on its built-in AI. |
+| `hustle-model.bin` | **The model**: an open-source language model and its tokenizer in one file. Swap it for a bigger one and the town gets smarter. |
 
-Without an API key the citizens run on the built-in **utility AI** (free, and fully reproducible).
-With a key, Claude voices the *big moments*: tough career/business dilemmas and conversations about money, jobs and debts.
+You don't need to find a model: in the 🧠 AI panel, choose one (SmolLM2 360M, Qwen2.5 0.5B or Qwen2.5 1.5B, all free under Apache 2.0) and the game downloads it from Hugging Face once, saves it as `hustle-model.bin` in your downloads, and keeps it in your browser, so from then on the brain wakes by itself. Put that file next to the other two; next time, or on another computer, click **📂 Load hustle-model.bin**. If the page can't reach Hugging Face (opened in an app's preview, or on claude.ai), each model has links to its four files: download them in your browser, pick all four with the same button, and the game puts them together as `hustle-model.bin`. If you serve the folder from a website, a `hustle-model.bin` next to the page is picked up by itself. `npm run fetch-brain -- --model onnx-community/Qwen2.5-1.5B-Instruct --name "Qwen2.5 1.5B Instruct"` before building puts the model file in `dist/three/` for you. (The format: `HUSTLEMODEL1`, a little-endian 32-bit header length, a JSON header naming each file's offset and length, then the files; see `src/client/brain/pack.ts`.)
+
+The same build also makes `dist/ai-hustle-city.html`, the older **single-file** game (the town and the engine in one page; it fetches the runtime from a CDN and takes the same model file). Both save the town in that browser.
+
+### Who does the thinking and talking
+
+Citizens run on the built-in **utility AI** (needs, money, personality, memories, relationships). On top of that, in the browser game, **the town's brain**, a small open-source language model running **on your own computer**, runs the people all the time, with nothing to click:
+
+Every citizen is an AI agent, and the brain is its mind:
+
+- **a plan for the day**: overnight (or when they first need one), it writes each person's plan for the day from the things they could do (work, meals, shopping, the pub, meeting up with a friend), as they would plan it, with a reason for each. They follow it through the day, and their panel shows it ticked off as they go;
+- **what they do next**: while someone is busy, the brain is asked what they'll do after, choosing from the things that make sense for them once they're done (eat, work, go to the pub, go and see a friend who's out and about...), from who they are, how they feel and what's on their mind. They act on it, and their reason becomes what they're thinking. If things change before they're done (they got hungrier, the shop shut), a pick that no longer makes sense is dropped;
+- **a diary**: last thing at night it writes a line or two in their diary about the day, and reads it back when planning the next day and in their conversations and thoughts;
+- **their tough calls**: jobs, money, starting or closing a business;
+- **what they say**: every citizen is **its own chatbot**, with a character card (see below). When two people talk, the brain speaks for **each of them in turn**, one line at a time, like two chatbots meeting in the street: the other person's lines come in as messages, and each answers from its own card. Each line is written as that person: their card, their way of talking, how they feel, what's on their mind (money, news, last night's diary), what they remember about the other person (including how their last conversation went), where they are, and everything said so far. They answer what was just said, and either of them can wind it up with a goodbye. Deals (loans, investments, jobs, sales) are negotiated the same way: each side knows only their own limits, makes their own moves (propose, counter, accept, walk away), and the outcome is whatever they agree; the town only refuses moves that are impossible. In a group, each person's line is written from their own side, with everyone's lines so far. Lines appear as they're written, with "✍️ … is speaking" in between. News only passes on in a chat if it actually came up;
+- **what they're thinking**, in between.
+
+**Every citizen is a fully customisable chatbot.** Open someone and pick the **🤖 Chatbot** tab:
+
+- **Talk to them.** Type anything (or tap a starter); they answer in character, from their card, how they feel today and what's been happening to them, and remember the conversation.
+- **Rewrite their character card**: who they are (their story), how they talk, lines they'd say (these teach the model their voice best), what they care about (values, loves, hates, fears, dreams, habits), a secret they keep unless they trust someone, and your own instructions ("flirts with everyone", "always brings it back to football", "is secretly a spy"). Two sliders set how adventurous (steady to wild) and how talkative (few words to chatterbox) they are. Save, and they talk like that from then on, with everyone; "Back to how they were" restores the card made from their personality.
+
+Each card starts out generated from the person's personality and story, so all twenty are different before you touch anything.
+
+**When you meddle, they react.** Take money from someone and they feel it in proportion: £5 from someone with thousands is a shrug; most of their savings is fury and fear. Their first thought is about it, and they stop what they're doing to take it in, then decide what to do (look for work, ask a friend for help...). It shows in the feed, and comes up when they talk. A suspicious sort may blame someone they already dislike, which can sour that friendship. Windfalls, a job they never applied for, a business shut down or handed to them, a crash or a boom, a shortage in what they sell: each lands the way it should. With the brain awake, it reacts first: it writes what goes through their mind, and a new plan for the rest of their day.
+
+Whoever you're looking at comes first; then whoever is about to decide something or wake up. On a graphics card the brain writes for up to four people at once (one step costs about the same for four as for one), so it can keep up with the whole town at normal speed; on a processor it does one at a time. The brain does one thing at a time, so it can't get to everything at once: whatever it misses, the built-in utility AI does, and a day plan keeps steering them even when the brain is busy. The 🧠 AI panel shows what it's doing right now and how much it has done, and a person's panel marks what the brain chose for them with 🧠. It's all free: the model runs on your computer, and nothing is sent anywhere.
+
+The brain is whichever model you choose: [SmolLM2 360M](https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct) (quick, runs anywhere), [Qwen2.5 0.5B](https://huggingface.co/onnx-community/Qwen2.5-0.5B-Instruct) or [Qwen2.5 1.5B](https://huggingface.co/onnx-community/Qwen2.5-1.5B-Instruct) (the smartest: livelier conversations and plans, needs a decent graphics card), all Apache 2.0, run with [onnxruntime-web](https://onnxruntime.ai): on your graphics card if your browser has WebGPU (Chrome, Edge), otherwise on your processor. Nothing is sent anywhere; it's free. Click **🧠 Wake the brain** in the top bar: the first time it takes you to the 🧠 AI panel to choose a model; after that it wakes by itself whenever you open the game. On a processor it's slower, so it only writes the conversations of whoever you're watching (it still picks people's moves and thinks for them).
+
+Without the brain (or before it's awake), conversations come from a phrasebook of hundreds of wordings, matched to who's talking (warm or cold, a friend or a stranger, at the pub or the market), what's happened to them, the news and their last chat together. Nobody repeats a line they've said lately, and the town avoids lines it's heard lately, so two chats rarely go the same way. Every reply answers the line before it: nobody answers a question that wasn't asked, reactions are sized to the news (a £17 dividend is "every little helps", not "I keep pinching myself"), only things that are still true get mentioned, and every goodbye gets one back. `npm run chatcheck` runs whole towns and counts the nonsense a player would notice (3 problems in 5,400 chats over 5 towns × 30 days).
+
+The town keeps the rules (it only offers choices a person can actually make, and decides who lends what, who gets the job, which news gets passed on), so a small model can't break the economy. Whatever it can't get to in time, or anything during a skip-ahead, the built-in AI improvises. AI-written lines have a gold border.
+
+**Where the model comes from:**
+- **The three-file game** (`dist/three/`, opened from disk): `hustle-model.bin`, which you load once (or the game downloads for you); after that it's kept in your browser.
+- **The single-file game** (`dist/ai-hustle-city.html`): the same model file.
+- **A published copy** (e.g. on claude.ai, where pages can't reach the internet): the model has to be published with the page. `npm run fetch-brain` downloads it into `models/brain`, and `npm run build:standalone` then splits it into parts under 15 MB in `dist/artifact/brain/` (with the onnxruntime WebAssembly binary and a manifest). A page published on claude.ai can carry about 256 MB, so the model has to fit in that.
+
+**The server version** (`npm start`) can't use the in-page brain. There, free web AI services write the conversations and make the agents' decisions instead: no account or key, with Pollinations and then LLM7 tried in turn, or any OpenAI-style endpoint you add in the 🧠 AI panel, such as Ollama on your machine. What gets sent there: the made-up townsfolk's names, personalities, feelings, memories and town news.
+
+**Your own model, local or remote.** Anything that speaks the OpenAI chat-completions API works, in either version. In the 🧠 AI panel's free-AI box, enter its URL (and the model name and key if it needs them). Or, on the server, set it in `.env` or on the command line:
+
+```bash
+# a local model with Ollama (ollama pull llama3.1, then ollama serve)
+AI_PROVIDER=free FREE_AI_URL=http://localhost:11434/v1/chat/completions AI_MODEL=llama3.1 npm start
+# LM Studio's local server
+AI_PROVIDER=free FREE_AI_URL=http://localhost:1234/v1/chat/completions AI_MODEL=<the model you loaded> npm start
+# a hosted OpenAI-compatible service
+AI_PROVIDER=free FREE_AI_URL=https://<provider>/v1/chat/completions AI_MODEL=<model> FREE_AI_KEY=<key> npm start
+```
+
+One model serves the whole town. Each request carries one person's own context and nothing else, a few go out at a time, and there's a minimum gap between calls, a timeout, a daily cap and back-off when the service says to slow down. Bigger models give livelier conversations and shrewder decisions, and anything the model doesn't answer, the built-in judgement covers.
+
+| Setting (server) | Default | What it does |
+|---|---|---|
+| `AI_PROVIDER` | `free` | `free`: the free web AI services, or your own endpoint (below). `claude`: Claude with an API key (below). `off`: built-in AI only. |
+| `FREE_AI_URL` | *(the built-in list)* | Use only this OpenAI-style chat endpoint (the full `/v1/chat/completions` URL): Ollama, LM Studio, vLLM, a hosted service. |
+| `AI_MODEL` | `openai` (free), `claude-opus-5-5` (Claude) | The model name the endpoint expects. |
+| `FREE_AI_KEY` | *(none)* | The endpoint's API key, if it needs one. |
+| `FREE_AI_INTERVAL_MS` | `2500` | Minimum gap between calls (set `0` for a model of your own). |
+| `AI_ONLY` | *(off)* | `1`: only the AI speaks, with no built-in lines at all (see above). |
+| `AI_LIVE_CHATS` | *(a couple)* | How many conversations the AI speaks at once, whatever they're about (`20`: everyone). |
+| `AI_CONCURRENCY` | `2` | Requests out at once (match it to your model server, e.g. `OLLAMA_NUM_PARALLEL`). |
+
+### Using Claude instead (optional)
+
+With `AI_PROVIDER=claude` and an API key, Claude voices the *big moments* instead: tough career/business dilemmas, the agents' decisions, and conversations about money, jobs and debts (negotiated turn by turn), within the budget below.
 
 1. Get an API key from [console.anthropic.com](https://console.anthropic.com) (API usage is billed separately from a Claude.ai subscription).
-2. Copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY=...`
+2. Copy `.env.example` to `.env` and set `AI_PROVIDER=claude` and `ANTHROPIC_API_KEY=...`
 3. `npm start`
 
 **Cost controls (all on by default):**
@@ -43,7 +183,7 @@ With a key, Claude voices the *big moments*: tough career/business dilemmas and 
 | Setting | Default | What it does |
 |---|---|---|
 | `AI_BUDGET_USD` | `2` | Hard cap on **lifetime** spend, stored in `data/hustle.db` (survives restarts and resets). When reached, citizens just carry on with the utility AI. |
-| `AI_MAX_CALLS_PER_DAY` | `12` | Max Claude calls per *game* day. |
+| `AI_MAX_CALLS_PER_DAY` | `12` (Claude), `5000` (free) | Max AI calls per *game* day. |
 | `AI_MODEL` | `claude-opus-5-5` | `claude-haiku-4-5` is ~4× cheaper per token if you want the budget to stretch further. |
 
 In practice the city makes **~2–3 Claude calls per game day** (≈ $0.03/day with Opus 5.5), because only genuine dilemmas and money talk qualify. Walking, working, buying, pricing, small talk etc. never touch the LLM. You can pause Claude, change the budget and read every prompt/response in the **🧠 AI** panel.
@@ -54,32 +194,35 @@ In practice the city makes **~2–3 Claude calls per game day** (≈ $0.03/day w
 
 | | |
 |---|---|
-| **3D / 2D** | Switch views top-right of the map (3D is the default; your choice is remembered) |
+| **3D / Retro / 2D** | Switch views top-right of the map. **3D** is the dreamscape: glossy jointed mannequins who walk, turn to face each other and talk with their hands, on a mirror-like hex floor among Ionic colonnades and ruins, under a purple cloud sky, with glowing windows and lamps at night. **Retro** is the warm low-poly town; **2D** the flat map. Your choice is remembered. On a slower computer the 3D effects step down by themselves to keep it smooth |
+| **👁 Ground** | (3D) drop to street level: behind whoever you've selected, or slowly looking round town |
 | **Pan / zoom / rotate** | Drag the map / mouse wheel or pinch (or WASD + `+`/`-`); in 3D, `Q`/`E` or ⟲ ⟳ turn the view 90° |
 | **🎬 Director** | (3D) the camera glides to deals, conversations, new businesses and big money moments on its own |
-| **Inspect a citizen** | Click them on the map or in the list. Tabs: Overview (who they are, backstory, how they feel), 🧠 Mind (why they did things, lessons learned), Social (relationships, memories and the feelings attached, conversations), Money. Strong feelings show as an emoji next to people on the map and in the list |
+| **Inspect a citizen** | Click them on the map or in the list. Tabs: Overview (who they are, backstory, how they feel), 🎯 Agent (goals, plans, every decision marked 🧠 AI or ⚙️ rules with what came of it, reputation, beliefs; put them on or off the AI roster), 🤖 Chatbot (talk to them; edit their character card), 🧠 Mind (why they did things, lessons learned), Social (relationships, memories and the feelings attached, conversations), Money. Strong feelings show as an emoji next to people on the map and in the list |
 | **Inspect a business** | Click a shop |
 | **Speed** | ⏸ 1× 5× 20× 50× (1× = one game hour every 15 s) |
-| **Skip ahead** | ⏩ +1h, +1d, +1w: jumps instantly (same result as watching it; Claude is paused during a skip so it costs nothing) |
+| **Skip ahead** | ⏩ +1h, +1d, +1w: jumps instantly (same result as watching it; the AI is paused during a skip) |
 | **📊 Dashboard** | Money supply, wealth, inequality, unemployment, businesses, prices, richest/poorest, top businesses… |
-| **⚡ God Mode** | Give/take money, shortages, surpluses, set prices, assign jobs, spawn/close businesses, booms and crashes, save/export, new world |
-| **🧠 AI** | Claude status, spend, call log, recent conversations |
+| **⚡ God Mode** | Give/take money, shortages, surpluses, set prices, assign jobs, spawn/close businesses, booms and crashes, save/export, new world. People react to whatever you do to them (see below) |
+| **🧠 AI** | Who's writing conversations, on/off, the Agents box (how many people the AI runs and who, decisions by the AI vs the built-in judgement, stories going round), call log (every prompt and reply), recent conversations |
+| **Town news** | Chips over the map for what's going on (a fire, a festival, a storm…); click one to see who or where |
 | **📰 Live events** | Everything happening, filterable; click names; "Read conversation" opens transcripts |
 
 ---
 
 ## What's simulated
 
-- **City**: houses, shops, marketplace, CityCorp offices, cowork hub, bank & exchange, pub, diner, park, research lab, wholesale depot. Day/night cycle. Citizens walk the roads. Shown as a retro low-poly 3D town (three.js, rendered at ~400 px tall and scaled up pixel-sharp) or as the original flat 2D map.
+- **City**: houses, shops, marketplace, CityCorp offices, cowork hub, bank & exchange, pub, diner, park, research lab, wholesale depot. Day/night cycle. Citizens walk the roads. Shown as a 3D dreamscape (three.js: reflective floor, cloud sky, mannequin citizens, a ground-level camera), the retro low-poly town, or the original flat 2D map.
 - **Citizens**: name, age, archetypes (ambitious, risk-taking, conservative, lazy, friendly, competitive, entrepreneurial, greedy, generous, frugal, curious), skills that improve with practice, needs (energy, hunger, social, fun), money, savings, credit score, inventory, home, goal, thoughts.
 - **Personality**: Big Five scores built from those archetypes, 2–3 core values (family, status, freedom, security, fairness, wealth, community, knowledge), quirks and habits, a speaking style (formal, blunt, chatty, sarcastic, warm, nervous), likes and dislikes, a fear, a dream and a short backstory. Generated from the seed, so the same city always has the same people.
 - **Feelings**: joy, sadness, anger, fear, pride, shame, envy, gratitude, loneliness and love (0–100). Events push them (getting paid, losing a deal, being helped or cheated, rent arrears, a rival's good day, a good or bad conversation); each drifts back towards a target set by personality and circumstances at its own speed (anger cools in hours, love lingers). Neurotic people take bad news harder; extraverts get more joy from company. Mood is worked out from the feelings. They nudge behaviour within limits: anger means tougher terms and arguments, fear means saving and avoiding risk, loneliness means going out, envy means competitive moves, gratitude means generous terms for whoever helped, sadness means getting less done.
 - **Emotional memory and reflection**: memories keep the feelings they caused, and meeting that person again brings them back (grudges, loyalty). Each night people sleep on their day and keep one or two lessons ("Ethan can't be trusted", "Selling groceries works for me") that shift trust and beliefs. With Claude on, at most one lesson per game day (from someone having a strongly emotional day) is reworded by Claude in that citizen's own voice, from the same budget and paused during skip-ahead.
+- **Town happenings**: fires, break-ins, lottery wins, celebrity visits, food poisoning, storms, power cuts, rent rises, festivals, birthday parties and mysterious columns in the park, every day or two. They have real effects (a fire shuts the shop and burns stock; a storm keeps shoppers home; a celebrity visit brings a queue; a burglary or lottery win moves real money), and they show on the map. News spreads the way it does in a small town: witnesses, the morning paper, and word of mouth. Each person takes it their own way (sorry, secretly glad, envious), and generous friends sometimes chip in to help.
 - **Jobs**: employee (CityCorp or citizen businesses), freelancer, shopkeeper, reseller, trader, entrepreneur, researcher, unemployed — each behaves differently.
 - **Economy** (all virtual £): wholesale market with volatility and demand shocks, a marketplace with listings and clearance lots, shops/stalls/cafés/agencies competing on price, reputation and staffing, rent, wages, owner draws, dividends, bank savings & loans, peer loans, equity investments, bankruptcies, evictions, inventions with royalties.
 - **Memory**: short-term and long-term memories, importance-weighted, merging repeats, fading over time, each carrying the feelings it caused.
 - **Relationships**: affinity, trust, familiarity and roles (family, friend, rival, employer, partner, creditor…). They change through encounters, deals, favours and betrayals — and they change decisions.
-- **Conversations**: loans, investment pitches, job requests/offers, debt collection, asking for help, sharing/selling research tips, arguments, gossip. The engine sets each side's real limits; templates or Claude write the words; outcomes move real money. Template lines are spoken in each citizen's style and current mood and bring up real shared history ("After what you did on Day 12? No chance."); Claude prompts include personality, feelings, values and lessons.
+- **Conversations**: loans, investment pitches, job requests/offers, debt collection, asking for help, sharing/selling research tips, arguments, and plenty of chat. The engine sets each side's real limits and outcomes move real money. Chats are planned from what's actually on their minds: news one of them hasn't heard, gossip about someone they both know, money worries, how they really feel, plans and dreams, a lesson learned the hard way, prices, shared interests, the weather. The listener answers from their own view and may be persuaded or not; news passed on, minds changed and friendships warmed or strained all take effect when the chat ends. The free AI writes the words when it can; otherwise the built-in AI improvises them in each citizen's style and mood, with real shared history ("After what you did on Day 12? No chance.").
 
 ---
 
@@ -88,12 +231,15 @@ In practice the city makes **~2–3 Claude calls per game day** (≈ $0.03/day w
 Every decision records the options considered, their scores and the factors behind them.
 
 - In the app: click a citizen → **🧠 Mind** tab → expand any decision.
-- From the terminal (same engine, Claude off, reproducible):
+- From the terminal (same engine, AI off, reproducible):
 
 ```bash
 npm run sim -- --days 10 --seed 42                 # run 10 days, print the story
 npm run sim -- --days 5 --seed 42 --explain Jake   # every decision Jake made, and why
 npm run diagnose -- --days 20 --seed 42            # money flows, businesses, earnings by job
+npm run agents -- --days 7 --seed 42               # the ten agents' week: plans, decisions, people, reputation
+npm run talkbench -- --seed 42                     # conversation quality: variety, memory, each voice
+npm run chatcheck                                  # thousands of chats checked for nonsense
 npm test                                           # determinism, money conservation, systems
 npm run soak -- --days 365 --seeds 42,7,2024       # play whole years, checking dozens of rules every game hour
 npm run soak -- --days 150 --god                   # …while randomly using God Mode
@@ -101,13 +247,13 @@ npm run soak -- --days 150 --god                   # …while randomly using God
 
 The soak test checks, every game hour: money only enters or leaves town through recorded flows; nobody has negative or NaN money; jobs, businesses, homes and loans agree with each other; nobody is stuck doing one thing. Every day it checks the whole world for NaN and builds every UI panel. Every 30 days it saves, reloads and checks both copies play out identically.
 
-The same seed always produces the same story (with Claude off), so bugs are reproducible. In the browser console, `hustle.store.s` holds everything the UI knows.
+The same seed always produces the same story (with the AI off), so bugs are reproducible. In the browser console, `hustle.store.s` holds everything the UI knows.
 
 ---
 
 ## Data
 
-- `data/hustle.db` — SQLite: world snapshots (last 5), full event and transaction history, Claude spend.
+- `data/hustle.db` — SQLite: world snapshots (last 5), full event and transaction history, Claude spend (if you use Claude).
 - **⚡ God Mode → 💾 Save now / ⬇️ Download world / 📂 Load a save** for manual saves, exports and imports (saves move between the server and browser versions). `GET /api/history?limit=100` returns older events.
 - To start fresh: God Mode → *Start over*, or delete the `data` folder.
 - `npm run serve` builds the client and runs in production mode.
@@ -124,24 +270,41 @@ src/
     types.ts           All state is plain JSON-serialisable data
     city/              Map generation, A* pathfinding
     ai/                Decision system: actions, activity & strategy options, utility
-                       scoring, beliefs, careers, thoughts, AI director, LLM prompts
+                       scoring, beliefs, careers, thoughts, AI director, LLM prompts,
+                       the free AI client (freeai.ts), small-model prompts (small.ts),
+                       invented events
     economy/           Ledger (all money moves here), market, businesses, bank,
                        jobs, services, trading, reselling, research, housing, shopping
     memory/            Memory system
-    mind/              Personality, emotions, nightly reflection, behaviour tilts, speaking voice
-    social/            Relationships, encounters, conversations, negotiation, dialogue
+    town/              Happenings (fires, festivals, storms…) and how news spreads
+    mind/              Personality, emotions, nightly reflection, behaviour tilts, speaking voice,
+                       chatbot character cards and chat memory (bot.ts)
+    social/            Relationships, encounters, conversations (lifecycle), deals' outcomes
+                       (offers.ts), group conversations in town (group.ts), the chat audit
+    dialogue/          The conversation engine: per-person context, turn planning, the
+                       built-in voice, model prompts and checks, negotiation (deal.ts),
+                       the group turn scheduler (group.ts), what each takes away
+    society/           The agents: goals, multi-day plans, decisions (proposals, checks,
+                       carrying out), the built-in judgement, model prompts, reputation,
+                       rumours, the inspector
     god.ts             God Mode commands + macro economy
     stats.ts           Economy statistics
     snapshot.ts        World → UI messages
   server/              Node server: runs the sim, WebSocket streaming, persistence
     persistence/       SQLite store (node:sqlite) with JSON-file fallback
-    anthropic.ts       Claude client (structured JSON output)
+    anthropic.ts       Claude client (structured JSON output, AI_PROVIDER=claude)
   client/              Browser: React panels + city views
     render/            2D canvas view, shared interpolation and overlay text
-    render3d/          Low-poly 3D view (merged static city, instanced citizens)
+    brain/             The town's brain: a small open-source model in a Web Worker
+                       (onnxruntime-web + tokenizer + generation loop), its page-side client,
+                       the model file format (pack.ts) and the models to choose from (models.ts)
+    render3d/          3D views (merged static city, instanced citizens): the dreamscape
+                       (dream/: sky, mirror floor, jointed mannequins, colonnades and ruins;
+                       bloom and tone mapping in Renderer3D) and the retro town; effects.ts
+                       draws happenings (flames, rain, festival lights…)
     net/local.ts       Standalone build: runs the sim in the browser (same messages as the server)
   shared/protocol.ts   Messages between server and browser
-scripts/               Headless runner, diagnostics, soak test, standalone packer
+scripts/               Headless runner, diagnostics, soak test, standalone and three-file packers
 tests/                 node:test suites
 ```
 

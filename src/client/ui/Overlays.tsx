@@ -36,12 +36,12 @@ function Help() {
           <b>Speed</b>: ⏸ 1× 5× 20× 50× in the top bar. <b>Skip ahead</b> an hour, a day or a week instantly with ⏩.
         </li>
         <li>
-          <b>📊 Dashboard</b>: the whole economy. <b>⚡ God Mode</b>: interfere. <b>🧠 AI</b>: Claude usage and decision log.
+          <b>📊 Dashboard</b>: the whole economy. <b>⚡ God Mode</b>: interfere. <b>🧠 AI</b>: who writes the conversations, and the AI log.
         </li>
       </ul>
       <p>
         <b>Reading the map:</b> citizen colours show their occupation (legend, bottom-left); the little icon shows what they're doing; speech
-        bubbles are live conversations (gold border = written by Claude); green "+£" shows money landing.
+        bubbles are live conversations (gold border = written by the AI); green "+£" shows money landing.
       </p>
       <p>
         <b>Persistence:</b>{" "}

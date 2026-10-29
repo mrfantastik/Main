@@ -58,6 +58,7 @@ export function relLabel(r: Relationship | undefined): string {
   if (!r) return "Stranger";
   const roles = r.roles;
   if (roles.includes("family")) return r.affinity < -40 ? "Estranged family" : "Family";
+  if (roles.includes("couple")) return r.affinity < 0 ? "On the rocks" : "Together";
   if (roles.includes("partner") || roles.includes("investor") || roles.includes("investee")) return "Business partner";
   if (roles.includes("employer")) return "Employer";
   if (roles.includes("employee")) return "Employee";

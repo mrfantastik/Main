@@ -1,6 +1,7 @@
 import type { Option } from "../ai/decision";
 import type { Citizen, PlannedAction, WorldState } from "../types";
 import { feelingsToward } from "./emotions";
+import { activeHappenings, knows } from "../town/happenings";
 import { lesson } from "./reflection";
 
 // How feelings, personality and lessons tilt everyday and big decisions.
@@ -16,12 +17,15 @@ function add(o: Option, name: string, v: number): void {
   if (Math.abs(v) >= 0.005) o.factors[name] = (o.factors[name] ?? 0) + v;
 }
 
-/** Tilt "what next?" options by how the citizen feels. */
-export function tiltActivities(c: Citizen, options: Option<PlannedAction>[]): void {
+/** Tilt "what next?" options by how the citizen feels, and by what's going on in town. */
+export function tiltActivities(world: WorldState, c: Citizen, options: Option<PlannedAction>[]): void {
   const e = c.emotions;
   const p = c.personality;
   const goOut = lesson(c, "social:out");
+  const town = townTilts(world, c);
   for (const o of options) {
+    const t = town[o.id];
+    if (t) add(o, t[0], t[1]);
     const type = o.payload?.type;
     if (!type) continue;
     if (SOCIAL.has(type)) {
@@ -41,6 +45,40 @@ export function tiltActivities(c: Citizen, options: Option<PlannedAction>[]): vo
       if (o.id === "rest_home" && p.likes.includes("quiet evenings")) add(o, "likes quiet evenings", 0.08);
     }
   }
+}
+
+/** What's on in town that they know about: festival, storm, a friend's party, the new column in the park. */
+function townTilts(world: WorldState, c: Citizen): Record<string, [string, number]> {
+  const out: Record<string, [string, number]> = {};
+  const p = c.personality;
+  for (const h of activeHappenings(world)) {
+    const k = knows(c, h.id);
+    if (!k && h.kind !== "storm") continue;
+    switch (h.kind) {
+      case "festival": {
+        const keen = 0.25 + p.big5.extraversion * 0.5 - (p.dislikes.includes("crowds") ? 0.4 : 0);
+        out.park_social = ["festival on", keen];
+        out.rest_park = ["festival on", keen * 0.5];
+        break;
+      }
+      case "storm":
+        out.park_social = ["storm outside", -0.6];
+        out.rest_park = ["storm outside", -0.6];
+        out.pub = ["storm outside", -0.15];
+        out.rest_home = ["storm: stay in", 0.3];
+        break;
+      case "party": {
+        const host = h.subject;
+        const invited = host === c.id || (host ? (c.relationships[host]?.affinity ?? 0) > 30 : false);
+        if (invited) out.pub = [host === c.id ? "my party" : `${world.citizens[host!]?.name ?? "a friend"}'s party`, 0.9];
+        break;
+      }
+      case "sculpture":
+        if (world.time - h.t < 36 * 60 && k) out.park_social = ["curious about the column", p.big5.openness * 0.3];
+        break;
+    }
+  }
+  return out;
 }
 
 const RISKY = ["career:trader", "career:entrepreneur", "career:shopkeeper", "career:reseller", "expand"];

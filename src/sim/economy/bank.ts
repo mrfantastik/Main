@@ -108,7 +108,7 @@ export function createPeerLoan(world: WorldState, lender: Citizen, borrower: Cit
   addRole(borrower, lender.id, "creditor");
   adjustRel(world, borrower, lender.id, { affinity: 10, trust: 6 });
   remember(world, borrower, {
-    text: `${lender.name} lent me ${money(amount)} for ${purpose}. I owe ${money(loan.totalDue)} by Day ${Math.floor(loan.dueT / 1440) + 1}.`,
+    text: `${lender.name} lent me ${money(amount)} to ${purpose}. I've got to pay back ${money(loan.totalDue)}.`,
     kind: "loan",
     importance: 7,
     valence: 0.5,
@@ -152,7 +152,7 @@ function settle(world: WorldState, l: Loan): void {
     adjustRel(world, lender, b.id, { affinity: 8, trust: 15 });
     adjustRel(world, b, lender.id, { affinity: 5 });
     // Being repaid is satisfying (and builds trust), but it isn't a favour they owe back.
-    remember(world, lender, { text: `${b.name} paid back the ${money(l.principal)} I lent them, with interest.`, kind: "favor", importance: 6, valence: 0.7, people: [b.id], key: `repaid:${b.id}`, feel: { joy: 8, pride: 4, fear: -3 } });
+    remember(world, lender, { text: `${b.name} paid me back the ${money(l.principal)} I lent, with interest.`, kind: "favor", importance: 6, valence: 0.7, people: [b.id], key: `repaid:${b.id}`, feel: { joy: 8, pride: 4, fear: -3 } });
     remember(world, b, { text: `I paid ${lender.name} back in full.`, kind: "deal", importance: 5, valence: 0.5, people: [lender.id], key: `loan:${l.id}` });
     logEvent(world, "finance", `🤝 ${b.name} paid back ${lender.name} (${money(l.totalDue)}).`, 2, [b.id, lender.id]);
   } else {
@@ -178,7 +178,7 @@ function defaultLoan(world: WorldState, l: Loan): void {
   adjustRel(world, lender, b.id, { affinity: -40, trust: -60 });
   adjustRel(world, b, lender.id, { affinity: -10 });
   logEvent(world, "social", `💔 ${b.name} never paid back ${lender.name}. ${money(owed)} lost — and a friendship.`, 4, [b.id, lender.id]);
-  remember(world, lender, { text: `${b.name} betrayed me: never paid back the ${money(l.principal)} I lent them.`, kind: "betrayal", importance: 9, valence: -1, people: [b.id], key: `betrayal:${b.id}` });
+  remember(world, lender, { text: `${b.name} betrayed me: never paid back the ${money(l.principal)} I lent.`, kind: "betrayal", importance: 9, valence: -1, people: [b.id], key: `betrayal:${b.id}` });
   remember(world, b, { text: `I couldn't (or didn't) pay ${lender.name} back.`, kind: "loan", importance: 6, valence: -0.5, people: [lender.id], key: `loan:${l.id}` });
 }
 

@@ -19,7 +19,31 @@ function part(w: number, h: number, d: number, y0: number): BoxGeometry {
   return g;
 }
 
-export class CitizenMeshes {
+/** How a figure is moving this frame (the mannequins act it out; block people ignore it). */
+export interface Pose {
+  /** Walk cycle phase (radians) and how much they're walking (0..1). */
+  phase: number;
+  walk: number;
+  /** In a conversation (0..1, eased) and whether it's their turn to speak. */
+  talk: number;
+  speaking: boolean;
+  /** Head turn relative to the body (radians), e.g. to look at who they're talking to. */
+  head: number;
+  /** Seconds, for idle movement; and a per-person number so no two move in step. */
+  t: number;
+  seed: number;
+}
+
+/** What the renderer needs from a crowd of figures (block people or mannequins). */
+export interface Figures {
+  readonly meshes: InstancedMesh[];
+  paint(i: number, seed: number, body: Color, hat: Color): void;
+  place(i: number, x: number, y: number, z: number, yaw: number, scale: number, stride?: number, pose?: Pose): void;
+  finish(count: number, colorsChanged: boolean): void;
+  dispose(): void;
+}
+
+export class CitizenMeshes implements Figures {
   readonly legs: InstancedMesh;
   readonly body: InstancedMesh;
   readonly head: InstancedMesh;

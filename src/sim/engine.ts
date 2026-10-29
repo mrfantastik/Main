@@ -1,3 +1,6 @@
+import { dialogueDaily } from "./dialogue";
+import { societyDaily, societyTick } from "./society/tick";
+import { happeningsHourly } from "./town/happenings";
 import { beginAction, finishActivity, makeAction, startActivity, tickActivity } from "./ai/actions";
 import { updateBeliefsDaily } from "./ai/beliefs";
 import { decideNext } from "./ai/brain";
@@ -75,7 +78,11 @@ export function step(world: WorldState): void {
       if (c.activity.kind === "idle") think(world, c);
     }
   }
-  if (t % 10 === 0) startOpportunisticConversations(world);
+  if (t % 10 === 0) {
+    // Agents decide what to do about people and plans; then whoever's together may talk.
+    societyTick(world);
+    startOpportunisticConversations(world);
+  }
 
   if (t % 60 === 0) hourly(world);
   if (t % MIN_PER_DAY === 0) daily(world);
@@ -116,6 +123,7 @@ function hourly(world: WorldState): void {
   const svc = servicesHourly(world);
   agencyHourly(world);
   encountersHourly(world);
+  happeningsHourly(world);
   world.economy.servicePool = round2(svc.pool);
   world.economy.serviceSupplied = round2(svc.supplied);
   for (const id of world.citizenOrder) updateMood(world, world.citizens[id]);
@@ -154,6 +162,8 @@ function daily(world: WorldState): void {
     decayRelationships(world, c);
   }
   updateBeliefsDaily(world);
+  dialogueDaily(world);
+  societyDaily(world);
   world.ai.callsToday = 0;
   statsDaily(world);
 }
