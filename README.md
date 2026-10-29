@@ -6,6 +6,37 @@ Nothing is scripted. Every story comes from the systems: needs, money, personali
 
 ---
 
+## The town as a society of agents
+
+Every citizen is an agent with their own personality, memories, private knowledge (who told them what, how sure they are, whether it's only a rumour), relationships, goals, plans that take days, intentions, and a log of every decision they made and what came of it.
+
+**Ten of them** (picked to be as different from each other as possible; you can change the number, or choose who) are run by a **language model**. Every few hours, or straight away when something big happens to them, the model is shown *only that person's* world: who they are, how they feel, their money, what they want, their plans and how they're going, what they've tried lately and how it went, the people in their life as they see them, and what the town says about them. It proposes **one action**, as JSON:
+
+> talk to someone · look for work or ask someone for a job · propose a deal (a loan, an investment, a partnership, a job offer, a sale) · lend · give someone money · spread a story about someone (true or not) · undercut a rival · have it out with someone · make up · ask someone out · start a plan · change what they're aiming for · carry on
+
+The **town checks every proposal** against the real world: do they have the money, do they know this person, does that business exist and is it hiring, did they only just try this. Then it either carries the action out or turns it down with the reason. Either way it goes into the agent's log and comes back in their next prompt. **Nothing the model says changes the world directly.** Whatever the model can't answer for (no model connected, a timeout, an impossible proposal) is decided by the **built-in judgement**, which weighs the same things by personality. The 🎯 Agent tab marks every decision 🧠 AI or ⚙️ rules.
+
+- **Conversations are turn by turn, and each person speaks for themselves.** Each line is one person's turn, written from that person's context only: they never see the other's private thoughts, agenda or limits. It's checked, then recorded. People answer what was said, change the subject, disagree, and wind it up.
+- **Deals are negotiated, not decided in advance.** A loan, an investment, a job or a sale starts with nothing on the table. Each side has private limits that only they see (what they can spare, the rate they'd accept, whether they trust the other). They propose, counter, accept or walk away, turn by turn, and the outcome is whatever they agree. The town only refuses moves that are impossible, such as offering money they haven't got.
+- **Group conversations of 3 to 5 people.** Friends wander over and join a chat, and a scheduler decides who speaks:
+  - whoever was asked something answers;
+  - bystanders chip in when what's just been said touches them: news they already knew or are the subject of, gossip about someone they love or can't stand, a brag from someone they envy, a friend's troubles (impulsive people butt in);
+  - whoever has most to say takes the floor;
+  - people leave when they're tired, hungry or have had enough.
+
+  Everyone hears everything that's said, so nobody gossips about someone standing right there, and news isn't told twice.
+- **Plans that take days.** Open a business (find the money and recruit people who pledge to pay in at launch, or don't), find a backer, get a job, win someone over, beat a rival, clear a debt, save up. Plans stall, shrink to something cheaper, or fail, and people react to that.
+- **A social life nobody scripted.** Friendships, grudges, rivalries and price wars, couples (and break-ups), alliances against a shared enemy, and reputations (in debt, generous, a stirrer, caught lying). Rumours too: some true, some made up on purpose, retold with drift, believed or not. People who know the subject well can see through a lie, and word gets round about who made it up.
+
+**How to watch it:**
+- Click anyone and open **🎯 Agent**: their goals; their plans (progress, partners, setbacks, next step); every decision, with who made it, whether the town allowed it and what happened; their days; what the town thinks of them; and what they believe about others ("show the truth" reveals whether a story is true).
+- Transcripts mark every line 🧠 (written by the AI, gold edge) or ⚙️ (the built-in voice), and in groups, who each line was said to.
+- The **🧠 AI** panel has an **Agents** box: how many people the AI runs and who, decisions by the AI against the built-in judgement, how many the town turned down, and the stories going round. Below it is the full log of every prompt and reply.
+
+**From the terminal:** `npm run agents -- --seed 42 --days 7` runs a town for a week with nobody touching it and reports what happened to each of the ten agents (with the built-in judgement standing in for the model). Try other seeds to see towns turn out differently. Exactly what's run by the model and what by rules is in [docs/agent-society.md](docs/agent-society.md).
+
+---
+
 ## Quick start
 
 You need [Node.js](https://nodejs.org) 22 or newer (20 works too, without the SQLite database).
@@ -49,7 +80,7 @@ Every citizen is an AI agent, and the brain is its mind:
 - **what they do next**: while someone is busy, the brain is asked what they'll do after, choosing from the things that make sense for them once they're done (eat, work, go to the pub, go and see a friend who's out and about...), from who they are, how they feel and what's on their mind. They act on it, and their reason becomes what they're thinking. If things change before they're done (they got hungrier, the shop shut), a pick that no longer makes sense is dropped;
 - **a diary**: last thing at night it writes a line or two in their diary about the day, and reads it back when planning the next day and in their conversations and thoughts;
 - **their tough calls**: jobs, money, starting or closing a business;
-- **what they say**: every citizen is **its own chatbot**, with a character card (see below). When two people talk, the brain speaks for **each of them in turn**, one line at a time, like two chatbots meeting in the street: the other person's lines come in as messages, and each answers from its own card. Each line is written as that person: their card, their way of talking, how they feel, what's on their mind (money, news, last night's diary), what they remember about the other person (including how their last conversation went), where they are, and everything said so far. They answer what was just said, and either of them can wind it up with a goodbye. For deals, favours and arguments, the town has already decided what happens (who lends what, who gets the job), and both of them are told, so the words can't break the economy. Lines appear as they're written, with "✍️ … is speaking" in between. News only passes on in a chat if it actually came up;
+- **what they say**: every citizen is **its own chatbot**, with a character card (see below). When two people talk, the brain speaks for **each of them in turn**, one line at a time, like two chatbots meeting in the street: the other person's lines come in as messages, and each answers from its own card. Each line is written as that person: their card, their way of talking, how they feel, what's on their mind (money, news, last night's diary), what they remember about the other person (including how their last conversation went), where they are, and everything said so far. They answer what was just said, and either of them can wind it up with a goodbye. Deals (loans, investments, jobs, sales) are negotiated the same way: each side knows only their own limits, makes their own moves (propose, counter, accept, walk away), and the outcome is whatever they agree; the town only refuses moves that are impossible. In a group, each person's line is written from their own side, with everyone's lines so far. Lines appear as they're written, with "✍️ … is speaking" in between. News only passes on in a chat if it actually came up;
 - **what they're thinking**, in between.
 
 **Every citizen is a fully customisable chatbot.** Open someone and pick the **🤖 Chatbot** tab:
@@ -74,17 +105,32 @@ The town keeps the rules (it only offers choices a person can actually make, and
 - **The single-file game** (`dist/ai-hustle-city.html`): the same model file.
 - **A published copy** (e.g. on claude.ai, where pages can't reach the internet): the model has to be published with the page. `npm run fetch-brain` downloads it into `models/brain`, and `npm run build:standalone` then splits it into parts under 15 MB in `dist/artifact/brain/` (with the onnxruntime WebAssembly binary and a manifest). A page published on claude.ai can carry about 256 MB, so the model has to fit in that.
 
-**The server version** (`npm start`) can't use the in-page brain; there, free web AI services write the conversations instead (no account or key: Pollinations, then LLM7, tried in turn; or any OpenAI-style endpoint you add in the 🧠 AI panel, such as Ollama on your machine). What gets sent there: the made-up townsfolk's names, personalities, feelings, memories and town news.
+**The server version** (`npm start`) can't use the in-page brain. There, free web AI services write the conversations and make the agents' decisions instead: no account or key, with Pollinations and then LLM7 tried in turn, or any OpenAI-style endpoint you add in the 🧠 AI panel, such as Ollama on your machine. What gets sent there: the made-up townsfolk's names, personalities, feelings, memories and town news.
+
+**Your own model, local or remote.** Anything that speaks the OpenAI chat-completions API works, in either version. In the 🧠 AI panel's free-AI box, enter its URL (and the model name and key if it needs them). Or, on the server, set it in `.env` or on the command line:
+
+```bash
+# a local model with Ollama (ollama pull llama3.1, then ollama serve)
+AI_PROVIDER=free FREE_AI_URL=http://localhost:11434/v1/chat/completions AI_MODEL=llama3.1 npm start
+# LM Studio's local server
+AI_PROVIDER=free FREE_AI_URL=http://localhost:1234/v1/chat/completions AI_MODEL=<the model you loaded> npm start
+# a hosted OpenAI-compatible service
+AI_PROVIDER=free FREE_AI_URL=https://<provider>/v1/chat/completions AI_MODEL=<model> FREE_AI_KEY=<key> npm start
+```
+
+One model serves the whole town. Each request carries one person's own context and nothing else, a few go out at a time, and there's a minimum gap between calls, a timeout, a daily cap and back-off when the service says to slow down. Bigger models give livelier conversations and shrewder decisions, and anything the model doesn't answer, the built-in judgement covers.
 
 | Setting (server) | Default | What it does |
 |---|---|---|
-| `AI_PROVIDER` | `free` | `free`: the free web AI services. `claude`: Claude with an API key (below). `off`: built-in AI only. |
-| `FREE_AI_URL` | *(the built-in list)* | Use only this OpenAI-style endpoint. |
+| `AI_PROVIDER` | `free` | `free`: the free web AI services, or your own endpoint (below). `claude`: Claude with an API key (below). `off`: built-in AI only. |
+| `FREE_AI_URL` | *(the built-in list)* | Use only this OpenAI-style chat endpoint (the full `/v1/chat/completions` URL): Ollama, LM Studio, vLLM, a hosted service. |
+| `AI_MODEL` | `openai` (free), `claude-opus-5-5` (Claude) | The model name the endpoint expects. |
+| `FREE_AI_KEY` | *(none)* | The endpoint's API key, if it needs one. |
 | `FREE_AI_INTERVAL_MS` | `2500` | Minimum gap between calls. |
 
 ### Using Claude instead (optional)
 
-With `AI_PROVIDER=claude` and an API key, Claude voices the *big moments* instead: tough career/business dilemmas and conversations about money, jobs and debts.
+With `AI_PROVIDER=claude` and an API key, Claude voices the *big moments* instead: tough career/business dilemmas, the agents' decisions, and conversations about money, jobs and debts (negotiated turn by turn), within the budget below.
 
 1. Get an API key from [console.anthropic.com](https://console.anthropic.com) (API usage is billed separately from a Claude.ai subscription).
 2. Copy `.env.example` to `.env` and set `AI_PROVIDER=claude` and `ANTHROPIC_API_KEY=...`
@@ -110,13 +156,13 @@ In practice the city makes **~2–3 Claude calls per game day** (≈ $0.03/day w
 | **👁 Ground** | (3D) drop to street level: behind whoever you've selected, or slowly looking round town |
 | **Pan / zoom / rotate** | Drag the map / mouse wheel or pinch (or WASD + `+`/`-`); in 3D, `Q`/`E` or ⟲ ⟳ turn the view 90° |
 | **🎬 Director** | (3D) the camera glides to deals, conversations, new businesses and big money moments on its own |
-| **Inspect a citizen** | Click them on the map or in the list. Tabs: Overview (who they are, backstory, how they feel), 🤖 Chatbot (talk to them; edit their character card), 🧠 Mind (why they did things, lessons learned), Social (relationships, memories and the feelings attached, conversations), Money. Strong feelings show as an emoji next to people on the map and in the list |
+| **Inspect a citizen** | Click them on the map or in the list. Tabs: Overview (who they are, backstory, how they feel), 🎯 Agent (goals, plans, every decision marked 🧠 AI or ⚙️ rules with what came of it, reputation, beliefs; put them on or off the AI roster), 🤖 Chatbot (talk to them; edit their character card), 🧠 Mind (why they did things, lessons learned), Social (relationships, memories and the feelings attached, conversations), Money. Strong feelings show as an emoji next to people on the map and in the list |
 | **Inspect a business** | Click a shop |
 | **Speed** | ⏸ 1× 5× 20× 50× (1× = one game hour every 15 s) |
 | **Skip ahead** | ⏩ +1h, +1d, +1w: jumps instantly (same result as watching it; the AI is paused during a skip) |
 | **📊 Dashboard** | Money supply, wealth, inequality, unemployment, businesses, prices, richest/poorest, top businesses… |
 | **⚡ God Mode** | Give/take money, shortages, surpluses, set prices, assign jobs, spawn/close businesses, booms and crashes, save/export, new world. People react to whatever you do to them (see below) |
-| **🧠 AI** | Who's writing conversations, on/off, call log (every prompt and reply), recent conversations |
+| **🧠 AI** | Who's writing conversations, on/off, the Agents box (how many people the AI runs and who, decisions by the AI vs the built-in judgement, stories going round), call log (every prompt and reply), recent conversations |
 | **Town news** | Chips over the map for what's going on (a fire, a festival, a storm…); click one to see who or where |
 | **📰 Live events** | Everything happening, filterable; click names; "Read conversation" opens transcripts |
 
@@ -149,6 +195,9 @@ Every decision records the options considered, their scores and the factors behi
 npm run sim -- --days 10 --seed 42                 # run 10 days, print the story
 npm run sim -- --days 5 --seed 42 --explain Jake   # every decision Jake made, and why
 npm run diagnose -- --days 20 --seed 42            # money flows, businesses, earnings by job
+npm run agents -- --days 7 --seed 42               # the ten agents' week: plans, decisions, people, reputation
+npm run talkbench -- --seed 42                     # conversation quality: variety, memory, each voice
+npm run chatcheck                                  # thousands of chats checked for nonsense
 npm test                                           # determinism, money conservation, systems
 npm run soak -- --days 365 --seeds 42,7,2024       # play whole years, checking dozens of rules every game hour
 npm run soak -- --days 150 --god                   # …while randomly using God Mode
@@ -188,8 +237,14 @@ src/
     town/              Happenings (fires, festivals, storms…) and how news spreads
     mind/              Personality, emotions, nightly reflection, behaviour tilts, speaking voice,
                        chatbot character cards and chat memory (bot.ts)
-    social/            Relationships, encounters, conversations, negotiation, dialogue,
-                       improvised chats (improv.ts)
+    social/            Relationships, encounters, conversations (lifecycle), deals' outcomes
+                       (offers.ts), group conversations in town (group.ts), the chat audit
+    dialogue/          The conversation engine: per-person context, turn planning, the
+                       built-in voice, model prompts and checks, negotiation (deal.ts),
+                       the group turn scheduler (group.ts), what each takes away
+    society/           The agents: goals, multi-day plans, decisions (proposals, checks,
+                       carrying out), the built-in judgement, model prompts, reputation,
+                       rumours, the inspector
     god.ts             God Mode commands + macro economy
     stats.ts           Economy statistics
     snapshot.ts        World → UI messages

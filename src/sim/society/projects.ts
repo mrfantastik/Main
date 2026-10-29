@@ -44,6 +44,8 @@ function businessIdea(world: WorldState, c: Citizen, kinds: BusinessKind[] = ["s
 export function canStart(world: WorldState, c: Citizen, kind: ProjectKind, who?: CitizenId): string | null {
   const s = c.society;
   if (s?.projects.some((x) => x.kind === kind && x.status !== "active" && x.who === who && world.time - (x.log[x.log.length - 1]?.t ?? x.started) < 3 * DAY)) return "they only just finished a plan like that";
+  // Something they pulled off this week doesn't need doing again.
+  if (kind === "beat_rival" && s?.projects.some((x) => x.kind === kind && x.status === "done" && world.time - (x.log[x.log.length - 1]?.t ?? x.started) < 7 * DAY)) return "they've only just come out on top";
   const other = who ? world.citizens[who] : undefined;
   switch (kind) {
     case "open_business":
@@ -254,6 +256,8 @@ export function projectsDaily(world: WorldState, c: Citizen): void {
         pr.steps[0].done = (c.relationships[pr.who!]?.familiarity ?? 0) > 30;
         if (o && (theirs >= 50 || c.relationships[pr.who!]?.roles.includes("couple"))) done(`${o.name} and I are close now.`);
         else if (world.time > pr.deadline || theirs < -30) fail(`${o?.name ?? "They"} just isn't interested.`);
+        // Never managing to catch them: they let it go.
+        else if ((c.society?.decisions ?? []).filter((d) => d.action.target === pr.who && d.status === "expired" && d.t >= pr.started).length >= 3) fail(`I never manage to catch ${o?.name ?? "them"}.`);
         void mine;
         break;
       }

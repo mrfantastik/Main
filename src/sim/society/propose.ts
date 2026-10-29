@@ -54,9 +54,11 @@ export function proposeByRules(world: WorldState, c: Citizen): { action: AgentAc
   const sit = situation(world, c);
   const r = rng(world, c);
   const out: Candidate[] = [{ action: { type: "carry_on", reason: "Nothing needs doing about anyone right now." }, score: 0.27 }];
+  // What's gone wrong lately counts against trying the same thing again (and the stubborn mind less).
+  const setbacks = (a: AgentAction) => s.decisions.filter((d) => d.action.type === a.type && d.action.target === a.target && world.time - d.t < 3 * 1440 && (d.status === "expired" || d.status === "failed" || d.status === "rejected")).length;
   const add = (action: AgentAction, score: number) => {
     if (score <= 0.05 || checkAction(world, c, action)) return;
-    out.push({ action, score });
+    out.push({ action, score: score * Math.pow(0.3 + c.personality.big5.conscientiousness * 0.2, setbacks(action)) });
   };
   const goals = activeGoals(c);
   const others = people(world, c);

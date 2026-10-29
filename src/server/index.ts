@@ -55,6 +55,9 @@ let runner: SimRunner;
 // AI_PROVIDER=free (default): citizens' conversations are written by a free,
 // keyless public AI (Pollinations). AI_PROVIDER=claude: Claude, with an
 // ANTHROPIC_API_KEY and a budget. AI_PROVIDER=off: built-in AI only.
+// Any OpenAI-compatible model (a local Ollama or LM Studio, or a hosted one):
+// AI_PROVIDER=free FREE_AI_URL=<its /v1/chat/completions URL> AI_MODEL=<model>
+// (and FREE_AI_KEY=<key> if it needs one).
 const AI_PROVIDER = (process.env.AI_PROVIDER || "free").toLowerCase();
 const FREE = AI_PROVIDER === "free";
 // (An AI_MODEL left over from a Claude setup doesn't apply to the free AI.)
@@ -78,7 +81,7 @@ const director =
   AI_PROVIDER === "off"
     ? new AIDirector(null, ledger)
     : FREE
-      ? new AIDirector(createFreeAIClient({ model: AI_MODEL, url: process.env.FREE_AI_URL || undefined }), ledger, {
+      ? new AIDirector(createFreeAIClient({ model: AI_MODEL, url: process.env.FREE_AI_URL || undefined, key: process.env.FREE_AI_KEY || undefined }), ledger, {
           maxConcurrent: 2,
           minIntervalMs: Number(process.env.FREE_AI_INTERVAL_MS ?? 2500),
           timeoutMs: 45_000,
