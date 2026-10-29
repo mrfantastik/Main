@@ -7,6 +7,7 @@ import { createFreeAIClient } from "../../sim/ai/freeai";
 import { applyGodCommand, GodError } from "../../sim/god";
 import { saveCard } from "../../sim/mind/bot";
 import { prepareLoadedWorld } from "../../sim/migrate";
+import { applyAgentsCommand } from "../../sim/society/state";
 import { SimRunner } from "../../sim/runner";
 import * as snap from "../../sim/snapshot";
 import type { WorldState } from "../../sim/types";
@@ -444,6 +445,10 @@ export class LocalHost {
         this.toast(`⏩ Skipped ${describeSkip(minutes)} — ${n} things happened. It's now ${snap.describeTime(w.time)}.`);
         break;
       }
+      case "agents":
+        this.toast(applyAgentsCommand(w, msg));
+        this.pushState();
+        break;
       case "invent": {
         const why = this.director.invent(w, typeof msg.idea === "string" ? msg.idea : "");
         this.toast(why ?? "✨ The free AI is dreaming something up…", why ? "error" : "info");

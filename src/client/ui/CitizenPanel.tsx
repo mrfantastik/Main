@@ -8,6 +8,7 @@ import { aiName, EMOTION_UI, gbp, KIND_LABEL, OCC_COLORS, OCC_LABEL, VALUE_LABEL
 import { Sparkline } from "./charts";
 import { Transcript } from "./Transcript";
 import { ChatbotTab } from "./ChatbotTab";
+import { AgentTab } from "./AgentTab";
 
 function Bar({ label, value, max = 100, color }: { label: string; value: number; max?: number; color: string }) {
   return (
@@ -507,7 +508,7 @@ export function CitizenPanel() {
   const d = useStore((s) => (s.detail?.kind === "citizen" ? s.detail : null));
   const follow = useStore((s) => s.followSelected);
   const summary = useStore((s) => s.state?.citizens.find((c) => c.id === s.selection?.id));
-  const [tab, setTab] = useState<"overview" | "bot" | "mind" | "social" | "money">("overview");
+  const [tab, setTab] = useState<"overview" | "agent" | "bot" | "mind" | "social" | "money">("overview");
   if (!d) {
     return (
       <div className="side-body">
@@ -536,9 +537,9 @@ export function CitizenPanel() {
       </div>
       <div style={{ padding: "0 12px" }}>
         <div className="tabs">
-          {(["overview", "bot", "mind", "social", "money"] as const).map((t) => (
+          {(["overview", "agent", "bot", "mind", "social", "money"] as const).map((t) => (
             <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
-              {t === "overview" ? "Overview" : t === "bot" ? "🤖 Chatbot" : t === "mind" ? "🧠 Mind" : t === "social" ? "Social" : "Money"}
+              {t === "overview" ? "Overview" : t === "agent" ? "🎯 Agent" : t === "bot" ? "🤖 Chatbot" : t === "mind" ? "🧠 Mind" : t === "social" ? "Social" : "Money"}
             </button>
           ))}
         </div>
@@ -558,6 +559,7 @@ export function CitizenPanel() {
       </div>
       <div className="side-body">
         {tab === "overview" && <Overview d={d} />}
+        {tab === "agent" && <AgentTab d={d} />}
         {tab === "bot" && <ChatbotTab d={d} />}
         {tab === "mind" && <Mind d={d} />}
         {tab === "social" && <Social d={d} />}

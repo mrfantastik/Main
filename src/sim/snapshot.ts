@@ -1,3 +1,4 @@
+import { agentInspector, conversationLines, societyDTO } from "./society/inspect";
 import { HAPPENING_ICON, isActive } from "./town/happenings";
 import type {
   AIStatusDTO,
@@ -207,6 +208,7 @@ export function state(
     conversations: world.conversationLog.slice(-12).map((x) => conversationDTO(world, x)),
     happenings: happeningsDTO(world),
     fx: opts.fx,
+    society: societyDTO(world),
   };
 }
 
@@ -244,7 +246,8 @@ export function conversationDTO(world: WorldState, c: Conversation): Conversatio
     aName: name(c.a),
     bName: name(c.b),
     place: c.buildingId ? placeName(world, c.buildingId) : "town",
-    lines: c.lines.map((l) => ({ speaker: l.speaker, name: name(l.speaker), text: l.text })),
+    lines: conversationLines(world, c),
+    ...(c.group ? { members: c.group.members.map((id) => ({ id, name: name(id) })) } : {}),
     summary: c.summary,
     source: c.source,
     topics: c.topics ?? [],
@@ -343,6 +346,7 @@ export function citizenDetail(world: WorldState, id: string): CitizenDetail | nu
       .slice(0, 20)
       .map((t) => txDTO(world, t)),
     decisions: [...c.strategyLog.slice(-8), ...c.decisions.slice(-10)].sort((a, b) => b.t - a.t),
+    society: agentInspector(world, c),
     agent: c.agent ? { plan: c.agent.plan && c.agent.plan.day === dayOf(world.time) ? c.agent.plan.items : null, diary: [...c.agent.diary].reverse() } : null,
     bot: botCard(c),
     playerChat: (c.playerChat ?? []).slice(-30),
@@ -363,7 +367,7 @@ export function citizenDetail(world: WorldState, id: string): CitizenDetail | nu
       return [{ id: h.id, icon: HAPPENING_ICON[h.kind], title: h.title, t: k.t, via, stance: k.stance }];
     }),
     conversations: [...world.conversations, ...world.conversationLog]
-      .filter((x) => (x.a === c.id || x.b === c.id) && x.lines.length > 0)
+      .filter((x) => (x.a === c.id || x.b === c.id || !!x.group?.members.includes(c.id)) && x.lines.length > 0)
       .sort((x, y) => y.startedT - x.startedT)
       .slice(0, 8)
       .map((x) => conversationDTO(world, x)),

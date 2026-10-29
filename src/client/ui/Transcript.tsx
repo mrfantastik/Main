@@ -30,11 +30,16 @@ export function Transcript({ c }: { c: ConversationDTO }) {
         {c.source === "llm" ? <span className="chip llm">{c.spoken ? "🧠 each speaking for themselves" : `✨ ${ai}`}</span> : <span className="chip">{c.topic === "chat" ? "improvised" : "built-in AI"}</span>}
         {c.live && <span className="chip good">talking now</span>}
       </div>
+      {c.members && c.members.length > 2 && (
+        <div className="meta">
+          👥 {c.members.map((m) => m.name).join(", ")}
+        </div>
+      )}
       {c.topics.length > 0 && <div className="meta">Talked about: {c.topics.join(" · ")}</div>}
       <div className="tlines">
         {c.lines.map((l, i) => {
-          const left = l.speaker === c.a;
-          const first = i === 0 || c.lines[i - 1].speaker !== l.speaker;
+          const left = c.members && c.members.length > 2 ? c.members.findIndex((m) => m.id === l.speaker) % 2 === 0 : l.speaker === c.a;
+          const first = i === 0 || c.lines[i - 1].speaker !== l.speaker || !!c.members;
           const color = colorOf(l.speaker);
           return (
             <div key={i} className={`tline ${left ? "left" : "right"}${first ? " first" : ""}`}>
@@ -45,10 +50,13 @@ export function Transcript({ c }: { c: ConversationDTO }) {
                 {first && (
                   <span className="tname" style={{ color }}>
                     {l.name}
+                    {c.members && (l.toName ? <span className="muted"> → {l.toName}</span> : l.move ? <span className="muted"> → everyone</span> : null)}
+                    {l.move && <span className="muted"> · {l.move}</span>}
                   </span>
                 )}
-                <span className="tbubble" style={{ ["--c" as string]: color }}>
+                <span className="tbubble" style={{ ["--c" as string]: color, borderLeft: l.by === "llm" ? "3px solid var(--llm)" : undefined }} title={l.by === "llm" ? "Written by the AI, as this person" : "The built-in voice (no AI)"}>
                   {l.text}
+                  <span className="tby" style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>{l.by === "llm" ? "🧠" : "⚙️"}</span>
                 </span>
               </div>
             </div>

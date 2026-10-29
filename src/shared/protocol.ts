@@ -243,6 +243,58 @@ export interface StateMsg {
   happenings: HappeningDTO[];
   /** Money moving around the map since the last update (floating "+£5"). */
   fx: { x: number; y: number; amount: number }[];
+  /** The agents: who the AI runs, and how their decisions are going. */
+  society: SocietyDTO;
+}
+
+/** The town's agents at a glance (for the AI panel). */
+export interface SocietyDTO {
+  /** How many citizens the AI runs as agents, and who. */
+  size: number;
+  roster: { id: string; name: string }[];
+  /** Decisions so far (still in the logs): proposed by the AI, by the built-in judgement, and AI proposals the town turned down. */
+  decisions: { llm: number; rules: number; rejected: number };
+  /** Group conversations going on now. */
+  groupsNow: number;
+  /** Stories going round (debug: whether they're true). */
+  rumours: { text: string; origin: string; about: string; truth: boolean | null; heard: number; exposed: number }[];
+}
+
+/** One decision an agent made: what, who proposed it (the AI or the built-in judgement), whether the town allowed it, what came of it. */
+export interface AgentDecisionDTO {
+  id: number;
+  t: number;
+  type: string;
+  /** In words ("Ask Mei to lend you £50"). */
+  label: string;
+  target: string | null;
+  status: "pending" | "done" | "rejected" | "failed" | "expired";
+  result: string | null;
+  /** Why the town turned it down. */
+  error: string | null;
+  source: "llm" | "rules";
+  /** Their reason (or the built-in judgement's weighing). */
+  why: string | null;
+}
+
+/** The agent inspector: what they want, what they're planning, what they decided and what came of it, what they believe. */
+export interface AgentInspectorDTO {
+  onRoster: boolean;
+  /** Who decides for them right now. */
+  decider: "llm" | "rules";
+  goals: { text: string; why: string; priority: number; status: string; source: "llm" | "rules" }[];
+  projects: { title: string; kind: string; status: string; need: number; raised: number; partners: string[]; refused: string[]; next: string | null; log: { t: number; text: string; good: boolean }[]; source: "llm" | "rules" }[];
+  intention: { text: string; t: number; source: "llm" | "rules" } | null;
+  /** Things they mean to do with someone, waiting for the chance. */
+  intents: { what: string; who: string; until: number }[];
+  /** Newest first. */
+  decisions: AgentDecisionDTO[];
+  days: { day: number; text: string }[];
+  reputation: { standing: number; trust: number; knownBy: number; tags: string[] };
+  allies: { ally: string; against: string }[];
+  /** What they believe about other people: where they heard it, how sure they are (and, for the debug view, whether a rumour is true). */
+  beliefs: { about: string; text: string; source: string; from: string | null; certainty: number; rumour?: { truth: boolean | null; origin: string } }[];
+  crush: string | null;
 }
 
 export interface RelationshipDTO {
@@ -276,7 +328,10 @@ export interface ConversationDTO {
   aName: string;
   bName: string;
   place: string;
-  lines: { speaker: string; name: string; text: string }[];
+  /** `by`: written by the AI, or the built-in voice. In a group: who it was said to (null: everyone) and what it did ("joined", "chipped in"). */
+  lines: { speaker: string; name: string; text: string; by?: "llm" | "built-in"; to?: string | null; toName?: string; move?: string }[];
+  /** A group conversation: everyone who was in it. */
+  members?: { id: string; name: string }[];
   summary: string;
   source: "template" | "llm";
   topics: string[];
@@ -328,6 +383,8 @@ export interface CitizenDetail {
   decisions: DecisionRecord[];
   /** Run by the town's brain: their own plan for today, and their diary (newest first). */
   agent: { plan: AgentPlanItem[] | null; diary: { day: number; text: string }[] } | null;
+  /** As an agent: goals, plans, decisions (and who made them), beliefs. */
+  society: AgentInspectorDTO;
   /** Their chatbot's character card (the player's version if they've edited it). */
   bot: BotCard;
   /** What they and the player have said to each other, and whether they're answering now. */
@@ -445,6 +502,8 @@ export type ClientMsg =
   /** Replace the city with a saved one (the JSON from "Download world" / "Copy save"). */
   | { type: "import"; world: unknown }
   /** Ask Claude to invent something that happens in town. */
-  | { type: "invent"; idea?: string };
+  | { type: "invent"; idea?: string }
+  /** The AI's agents: how many it runs, or put one citizen on (or off) the roster. */
+  | { type: "agents"; size?: number; id?: string; on?: boolean };
 
 export type { ConversationLine };

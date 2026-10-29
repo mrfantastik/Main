@@ -84,6 +84,7 @@ export function AIPanel() {
           </p>
         </div>
         )}
+        <AgentsBox />
         <div className="box">
           <h3>{aiName(ai)} log</h3>
           {!dash?.aiLog?.length && <div className="empty">No AI calls yet.</div>}
@@ -91,7 +92,7 @@ export function AIPanel() {
             {dash?.aiLog?.map((l) => (
               <details key={l.id} className="item">
                 <summary style={{ cursor: "pointer" }}>
-                  <span className={`chip ${l.status === "ok" ? "good" : l.status === "error" ? "bad" : ""}`}>{l.status}</span> {l.kind === "plan" ? "next move" : l.kind} · {l.citizenName} · {when(l.t)}
+                  <span className={`chip ${l.status === "ok" ? "good" : l.status === "error" ? "bad" : ""}`}>{l.status}</span> {l.kind === "plan" ? "next move" : l.kind === "decide" ? "decision" : l.kind} · {l.citizenName} · {when(l.t)}
                   {ai.free ? "" : ` · $${l.costUsd.toFixed(4)}`} · {(l.ms / 1000).toFixed(1)}s
                   <div className="meta">{l.note}</div>
                 </summary>
@@ -114,6 +115,65 @@ export function AIPanel() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+/** The town's agents: how many the AI runs, who, and how their decisions are going. */
+function AgentsBox() {
+  const s = useStore((x) => x.state?.society);
+  const ai = useStore((x) => x.state?.ai);
+  const [size, setSize] = useState("");
+  if (!s) return null;
+  const on = !!ai?.available && ai.mode === "llm";
+  return (
+    <div className="box">
+      <h3>🎯 Agents</h3>
+      <p style={{ marginTop: 0 }}>
+        Every citizen is an agent with their own goals, plans, memories and beliefs. For the <b>{s.size}</b> on the AI roster, {on ? "the AI proposes" : "the AI would propose (it's off now, so the built-in judgement does)"} what they do next: talk to someone, ask
+        for a loan or a job, lend, help, start a plan, spread a story, undercut a rival, make up, ask someone out. The town checks every proposal
+        (money, ownership, who knows whom, time) before anything happens, and tells them how it went. Everyone else, and anyone the AI can't answer
+        for, is run by the built-in judgement. 🧠 marks what the AI came up with, ⚙️ the built-in judgement.
+      </p>
+      <div className="kv">
+        <span className="k">Decisions</span>
+        <span>
+          🧠 {s.decisions.llm} by the AI ({s.decisions.rejected} turned down by the town) · ⚙️ {s.decisions.rules} built-in
+        </span>
+        <span className="k">Group chats now</span>
+        <span>{s.groupsNow}</span>
+      </div>
+      <div className="god-row">
+        <input placeholder={`AI agents (now ${s.size})`} value={size} onChange={(e) => setSize(e.target.value)} />
+        <button
+          className="btn"
+          onClick={() => {
+            const v = Number(size);
+            if (Number.isFinite(v) && v >= 0) store.send({ type: "agents", size: v });
+            setSize("");
+          }}
+        >
+          Set
+        </button>
+      </div>
+      <div className="tags">
+        {s.roster.map((r) => (
+          <button key={r.id} className="chip" onClick={() => store.select({ kind: "citizen", id: r.id })} title="See their agent inspector">
+            {r.name}
+          </button>
+        ))}
+      </div>
+      {s.rumours.length > 0 && (
+        <details style={{ marginTop: 6 }}>
+          <summary style={{ cursor: "pointer" }}>Stories going round ({s.rumours.length})</summary>
+          {s.rumours.map((r, i) => (
+            <div key={i} className="meta">
+              "{r.text}" · started by {r.origin} · heard by {r.heard}
+              {r.truth === false ? ` · made up${r.exposed ? `, ${r.exposed} saw through it` : ""}` : r.truth ? " · true" : ""}
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
   );
 }
 

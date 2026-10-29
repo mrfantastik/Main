@@ -55,6 +55,21 @@ export function fillRoster(world: WorldState, size = societyWorld(world).size): 
   return sw.roster;
 }
 
+/** The player's change to the agents (how many the AI runs, or one person on or off): what happened, in words. */
+export function applyAgentsCommand(world: WorldState, msg: { size?: number; id?: string; on?: boolean }): string {
+  if (msg.id && typeof msg.on === "boolean") {
+    const c = world.citizens[msg.id];
+    if (!c) return "Nobody by that name.";
+    setOnRoster(world, msg.id, msg.on);
+    return msg.on ? `🧠 The AI now decides for ${c.name}.` : `⚙️ ${c.name} goes back to the built-in judgement.`;
+  }
+  if (typeof msg.size === "number" && Number.isFinite(msg.size)) {
+    const n = fillRoster(world, msg.size).length;
+    return `🧠 The AI runs ${n} of the town's people as agents${n ? "" : " (none: everyone uses the built-in judgement)"}.`;
+  }
+  return "Nothing changed.";
+}
+
 /** Put someone on the roster or take them off (the player's choice in the agent inspector). */
 export function setOnRoster(world: WorldState, id: CitizenId, on: boolean): void {
   const sw = societyWorld(world);

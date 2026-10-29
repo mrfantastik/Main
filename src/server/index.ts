@@ -13,6 +13,7 @@ import { AIDirector } from "../sim/ai/director";
 import { createFreeAIClient } from "../sim/ai/freeai";
 import type { SpendLedger } from "../sim/ai/director";
 import { prepareLoadedWorld } from "../sim/migrate";
+import { applyAgentsCommand } from "../sim/society/state";
 import { createClaudeClient } from "./anthropic";
 import { openJsonStore } from "./persistence/jsonStore";
 import { openSqliteStore } from "./persistence/sqliteStore";
@@ -241,6 +242,10 @@ function handle(client: Client, msg: ClientMsg): void {
       for (const c of clients) send(c.ws, { type: "toast", text: `⏩ Skipped ${describeSkip(minutes)} — ${events} things happened. It's now ${snap.describeTime(world.time)}.`, level: "info" });
       break;
     }
+    case "agents":
+      send(client.ws, { type: "toast", text: applyAgentsCommand(world, msg), level: "info" });
+      broadcastState();
+      break;
     case "invent": {
       const why = director.invent(world, typeof msg.idea === "string" ? msg.idea : "");
       send(client.ws, { type: "toast", text: why ?? `✨ ${director.free ? "The free AI" : "Claude"} is dreaming something up…`, level: why ? "error" : "info" });
