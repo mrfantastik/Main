@@ -148,7 +148,7 @@ export function candidates(x: TopicContext): Topic[] {
     let score = willing * (0.35 + Math.min(10, Math.max(1, it.importance)) / 14);
     if (kind === "brag") score *= 0.4 + p.selfFocus * 0.9 + (rel.kind === "rival" ? 0.4 : 0);
     if (kind === "complain" || kind === "problem") score *= 0.6 + (1 - p.optimism) * 0.5;
-    if (kind === "disclose" && it.sensitivity > 0.5) score *= rel.kind === "close friend" || rel.kind === "family" ? 1 : 0.15;
+    if (kind === "disclose" && it.sensitivity > 0.5) score *= rel.kind === "close friend" || rel.kind === "family" || rel.kind === "couple" ? 1 : 0.15;
     if (SYSTEMY.has(kind)) score *= clamp(0.5 + urgent + it.importance / 20, 0.4, 1.2);
     // Something big that happened today is on their mind; so is whatever's behind how they feel.
     if (it.memory !== undefined && it.importance >= 7 && world.time - it.t < 1440) score *= 1.7;

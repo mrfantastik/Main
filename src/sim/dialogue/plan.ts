@@ -10,7 +10,7 @@ import { howItWent, lifeItems } from "./life";
 import { happeningById } from "../town/happenings";
 import { profileOf } from "./profile";
 import { candidates, drawAgenda, lifeTopic, rngFor } from "./topics";
-import type { DialogueState, Intent, Move, Topic, TopicKind, TalkProfile, TurnMeta } from "./types";
+import type { DealAction, DealTerms, DialogueState, Intent, Move, Topic, TopicKind, TalkProfile, TurnMeta } from "./types";
 
 // Planning a conversation, and each turn of it.
 //
@@ -72,6 +72,8 @@ export interface Directive {
   rel: RelView;
   /** Plain instruction for the model, from this speaker's point of view only. */
   hint: string;
+  /** In a deal: what they mean to do about what's on the table (the model may decide otherwise, within what's possible). */
+  deal?: { action: DealAction; terms: DealTerms };
 }
 
 const LEISURE = new Set(["socialize", "eat", "rest", "idle", "talk", "browse", "shop"]);

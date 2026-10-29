@@ -19,7 +19,8 @@ import type { Citizen, Conversation, ConversationTopic, ConvValue, EventCategory
 import { clamp, inDays, money, newId, pct, pushRing, round2 } from "../util";
 import { hotNews, knows } from "../town/happenings";
 import { applyNotes } from "./notes";
-import { adoptLines, beginDialogue, builtInTurn, endDialogue, planTurn, recordLine, revealMinutes, scriptConversation, whoseTurn, type Directive } from "../dialogue";
+import { OFFER_HANDLERS } from "./offers";
+import { adoptLines, beginDialogue, builtInTurn, dealOutcome, endDialogue, isDeal, planTurn, recordLine, revealMinutes, scriptConversation, whoseTurn, type Directive } from "../dialogue";
 import type { TurnMeta } from "../dialogue/types";
 import { rememberChat } from "../mind/bot";
 import { talkIn } from "./talk";
@@ -176,7 +177,7 @@ export function agendasFor(world: WorldState, c: Citizen): Agenda[] {
 
 // ------------------------------------------------------- topic handlers
 
-interface Prepared {
+export interface Prepared {
   terms: Record<string, ConvValue>;
   lines: Conversation["lines"];
   outcome: Record<string, ConvValue>;
@@ -186,14 +187,14 @@ interface Prepared {
   brief: string;
 }
 
-interface News {
+export interface News {
   text: string;
   cat: EventCategory;
   importance: number;
 }
-const news = (text: string, cat: EventCategory, importance: number): News => ({ text, cat, importance });
+export const news = (text: string, cat: EventCategory, importance: number): News => ({ text, cat, importance });
 
-interface TopicHandler {
+export interface TopicHandler {
   prepare(world: WorldState, conv: Conversation, a: Citizen, b: Citizen, r: RngHolder): Prepared | null;
   /** Validate an outcome (from AI or template) against the engine's terms. Returns the safe version. */
   validate(conv: Conversation, raw: Record<string, ConvValue>): Record<string, ConvValue>;
@@ -209,6 +210,8 @@ const bool = (v: ConvValue | undefined): boolean => v === true;
 const OUTCOME_AGREED = { agreed: { type: "boolean" } };
 
 const handlers: Record<ConversationTopic, TopicHandler> = {
+  // Coming to someone unasked: a loan, money, sorry, a date, a plan.
+  ...OFFER_HANDLERS,
   ask_loan: {
     schema: { ...OUTCOME_AGREED, amount: { type: "number" }, rate: { type: "number" }, days: { type: "integer" } },
     prepare(world, conv, a, b, r) {
@@ -714,15 +717,22 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
     talkIn(was, world.time);
   }
   if (!prepared) return null;
-  // Chats and rows are already in each person's own voice; deals get theirs here.
-  if (topic !== "chat" && topic !== "argue") {
+  // Deals are negotiated a turn at a time: nothing is settled until one of them accepts.
+  // (This is the built-in voices' version; if an AI speaks for them, they negotiate afresh.)
+  const negotiated = isDeal(topic);
+  if (negotiated) {
+    conv.terms = prepared.terms;
+    beginDialogue(world, conv, a, b, "deal", prepared.brief);
+    prepared.lines = scriptConversation(world, conv).slice();
+    prepared.outcome = dealOutcome(conv);
+  } else if (topic !== "chat" && topic !== "argue") {
     prepared.lines = voiceConversation(conv.id, topic, a, b, prepared.lines, typeof prepared.outcome.agreed === "boolean" ? prepared.outcome.agreed : null, dayOf(world.time));
     beginDialogue(world, conv, a, b, "deal", prepared.brief);
     adoptLines(world, conv, prepared.lines);
   }
   conv.lines = [];
   conv.terms = prepared.terms;
-  conv.fallback = { lines: prepared.lines, outcome: handlers[topic].validate(conv, prepared.outcome), dlg: conv.dlg ? JSON.parse(JSON.stringify(conv.dlg)) : undefined };
+  conv.fallback = { lines: prepared.lines, outcome: negotiated ? prepared.outcome : handlers[topic].validate(conv, prepared.outcome), dlg: conv.dlg ? JSON.parse(JSON.stringify(conv.dlg)) : undefined };
   // Register first: interrupting their current activities must not start
   // another conversation (e.g. finishing a "go and find X" errand).
   world.conversations.push(conv);
@@ -740,7 +750,11 @@ export function startConversation(world: WorldState, a: Citizen, b: Citizen, top
     conv.live = { done: false, lastLineT: world.time };
     // A fresh start for the live version (the same plan; the built-in script is kept as the fallback).
     if (topic === "chat" || topic === "argue") beginDialogue(world, conv, a, b, topic === "argue" ? "argument" : undefined);
-    else if (conv.dlg) conv.dlg.turns = [];
+    else if (negotiated) {
+      // They negotiate it themselves: the outcome is whatever they agree.
+      beginDialogue(world, conv, a, b, "deal", prepared.brief);
+      conv.outcome = null;
+    } else if (conv.dlg) conv.dlg.turns = [];
     return conv;
   }
   if (ai) {
@@ -825,6 +839,8 @@ function finish(world: WorldState, conv: Conversation): void {
   const b = world.citizens[conv.b];
   conv.status = "done";
   conv.endT = world.time;
+  // A negotiation's outcome is what they agreed (or didn't).
+  if (conv.dlg?.deal) conv.outcome = dealOutcome(conv);
   rememberChat(world, conv);
   // What each of them takes away: what they learned, what to ask next time, how it went.
   if (conv.dlg) endDialogue(world, conv);

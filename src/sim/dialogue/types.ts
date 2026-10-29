@@ -292,6 +292,8 @@ export interface TurnMeta {
   told: number[];
   /** Who wrote it: the model, or the built-in fallback. */
   by: "llm" | "built-in";
+  /** In a deal: what this turn did about what's on the table. */
+  deal?: { action: DealAction; terms: DealTerms };
 }
 
 /** The state of a conversation in progress (kept on it, and on the finished record for the debug view). */
@@ -335,6 +337,41 @@ export interface DialogueState {
   hid?: CitizenId[];
   /** Wordings already used in this conversation (built-in lines), so nothing's said twice. */
   said?: string[];
+  /** A deal being negotiated, turn by turn. */
+  deal?: DealState;
   /** What each was given to work from (debug view only). */
   debug: { retrieved: Record<CitizenId, string[]>; candidates: Record<CitizenId, string[]> };
+}
+
+// ------------------------------------------------------------- negotiation
+
+/** What's on the table in a deal (only the fields that kind of deal uses). */
+export interface DealTerms {
+  amount?: number;
+  /** Interest, as a fraction (0.1 = 10%). */
+  rate?: number;
+  days?: number;
+  wage?: number;
+  /** Share of profits, as a fraction. */
+  share?: number;
+  price?: number;
+  qty?: number;
+  /** For a choice rather than a number ("paid", "partial", "promise", "refuse"). */
+  choice?: string;
+}
+
+export type DealAction = "propose" | "counter" | "accept" | "decline";
+
+/** A negotiation in progress: who's asking, what's been offered, and how it stands. Nothing is decided until one of them accepts. */
+export interface DealState {
+  topic: string;
+  proposer: CitizenId;
+  responder: CitizenId;
+  status: "open" | "agreed" | "declined";
+  offers: { by: CitizenId; action: DealAction; terms: DealTerms; t: number; source: "llm" | "built-in" }[];
+  /** The terms they shook on. */
+  agreed: DealTerms | null;
+  /** Who walked away or said no, and why (in their own head). */
+  declinedBy?: CitizenId;
+  why?: string;
 }

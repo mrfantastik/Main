@@ -6,6 +6,7 @@
 // browser, on a server, or in a headless test.
 
 import type { DialogueState, TalkState } from "./dialogue/types";
+import type { SocietyState, SocietyWorld } from "./society/types";
 
 export type CitizenId = string;
 export type BusinessId = string;
@@ -313,7 +314,8 @@ export type RelRole =
   | "investee"
   | "creditor"
   | "debtor"
-  | "rival";
+  | "rival"
+  | "couple";
 
 export interface Relationship {
   /** -100 (hate) .. 100 (love). */
@@ -538,6 +540,8 @@ export interface Citizen {
   chatWaiting?: boolean;
   /** How they talk, what they privately know, and what they remember of each person they talk to (see dialogue/). */
   talk?: TalkState;
+  /** Their goals, plans that take days, what they mean to do next, and what they decided and what came of it (see society/). */
+  society?: SocietyState;
   thoughtT: number;
   /** 1 mundane, 2 urgent need, 3 strategic/social, 4 major life event. */
   thoughtPriority: number;
@@ -806,7 +810,12 @@ export type ConversationTopic =
   | "sell_stock"
   | "argue"
   | "ask_help"
-  | "share_tip";
+  | "share_tip"
+  | "offer_loan"
+  | "offer_help"
+  | "make_peace"
+  | "ask_out"
+  | "recruit";
 
 export interface ConversationLine {
   speaker: CitizenId;
@@ -1038,6 +1047,8 @@ export interface WorldState {
   conversationLog: Conversation[];
   /** Wordings used lately in conversations around town (so the same ones don't keep coming up). */
   talkRecent?: string[];
+  /** The agents a language model runs, and the rumours going round (see society/). */
+  society?: SocietyWorld;
   events: SimEvent[];
   transactions: Transaction[];
   txCount: number;

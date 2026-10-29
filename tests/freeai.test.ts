@@ -143,7 +143,7 @@ async function run(w: WorldState, director: AIDirector, minutes: number): Promis
   }
 }
 
-test("with the free AI, each person speaks for themselves a turn at a time; the town still decides what happens; it costs nothing", async () => {
+test("with the free AI, each person speaks for themselves a turn at a time; deals are negotiated, not decided in advance; it costs nothing", async () => {
   const calls: Call[] = [];
   const client = createFreeAIClient({ url: "http://fake/openai", fetchImpl: fakeEndpoint(calls, (body, n) => ({ content: messyTurn(body, n) })) });
   const director = new AIDirector(client, { total: () => 1e9, add: () => assert.fail("nothing to pay") }, { maxConcurrent: 2, minIntervalMs: 0, timeoutMs: 5000 });
@@ -169,7 +169,8 @@ test("with the free AI, each person speaks for themselves a turn at a time; the 
       // Cleaned up: no name, no stage directions, no brackets.
       if (turns[i].by === "llm") assert.match(l.text, /^Turn \d+: [^*()]+\.$/, `cleaned: "${l.text}"`);
     });
-    if (c.topic !== "chat") assert.deepEqual(c.outcome, c.fallback!.outcome, "the outcome is the town's, not the model's");
+    // A deal's outcome is what they agreed between them, turn by turn (never decided before they spoke).
+    if (c.dlg?.deal) assert.ok(c.dlg.deal.offers.length >= 1 && c.dlg.deal.status !== "open", `a negotiated deal (${c.topic})`);
   }
   assert.equal(w.ai.spentUsd, 0);
   // Each request is one person's turn, from their own side.

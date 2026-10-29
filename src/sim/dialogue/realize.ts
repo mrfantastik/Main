@@ -84,6 +84,7 @@ function greetLine(x: Ctx): string {
   else if (k === "stranger") pool = ["Hello.", "Hi.", "Alright?", ...timely];
   else if (k === "boss") pool = [`Morning, ${nm}.`.replace("Morning", cap(part === "night" ? "evening" : part)), `Hi, ${nm}.`, `Alright, ${nm}?`];
   else if (k === "rival" || k === "dislikes" || k === "enemy") pool = [`${nm}.`, "Oh. Hello.", `Well, well. ${nm}.`];
+  else if (k === "couple") pool = ["Hey, you.", "There you are.", `Hello, gorgeous.`, `${nm}!`, "Missed you."];
   else if (k === "close friend" || k === "family") pool = ["Look who it is.", `Oi, ${nm}.`, "There they are.", `${nm}!`, "Oh, it's you.", "Hey you."];
   else if (k === "friend" || k === "friendly coworker") pool = [`${nm}!`, `Alright, ${nm}?`, "Hey.", "There they are.", `Hiya, ${nm}.`];
   else pool = [`Alright, ${nm}?`, "Hiya.", `Hi, ${nm}.`, ...timely.map((t) => t.replace(".", `, ${nm}.`))];
@@ -525,7 +526,16 @@ function detailFor(x: Ctx, want: "when" | "what"): string | null {
     const when = whenText(h.t);
     // The news itself first (to someone who hadn't heard), then the details.
     const parts = h.text.split(/(?<=[.!?])\s+/);
-    if (want === "what" && parts[0] && !said(parts[0])) return firstPerson(parts[0], me.name);
+    if (want === "what" && parts[0] && !said(parts[0])) {
+      // Told in their own words, not read off the paper.
+      const subj = h.subject ? world.citizens[h.subject]?.name : undefined;
+      const own: Record<string, string[]> = {
+        lottery: subj ? [`${subj} won the lottery!`, `${subj} only went and won the lottery.`, `${subj}'s won a fortune on the lottery.`] : [],
+        fire: [`${cap(h.about)}. The whole place went up.`, `There was a fire. ${cap(h.about.replace(/^the fire at /, ""))}.`],
+        burglary: [`Someone broke into ${subj ? `${subj}'s` : "a"} place.`, `${subj ?? "Someone"} got burgled.`],
+      };
+      return firstPerson(pickFor(world, me, r, `detail:tell:${h.kind}`, [parts[0], ...(own[h.kind] ?? [])]), me.name);
+    }
     const second = parts.slice(1).find((s2) => s2.length < 110 && !said(s2) && !/£(\d{1,2}(\.\d+)?)\b(?![\d,])/.test(s2));
     if (want === "when" && !said(when)) return when;
     if (second) return second;

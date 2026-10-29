@@ -127,7 +127,7 @@ export function bondsDaily(world: WorldState, c: Citizen): void {
 
 // --------------------------------------------------------------- relationships
 
-export type RelKind = "stranger" | "acquaintance" | "coworker" | "friendly coworker" | "friend" | "close friend" | "family" | "boss" | "staff" | "partner" | "rival" | "dislikes" | "enemy";
+export type RelKind = "stranger" | "acquaintance" | "coworker" | "friendly coworker" | "friend" | "close friend" | "family" | "couple" | "boss" | "staff" | "partner" | "rival" | "dislikes" | "enemy";
 
 export interface RelView {
   kind: RelKind;
@@ -165,6 +165,7 @@ export function relView(world: WorldState, me: Citizen, them: Citizen): RelView 
   const coworker = !!mine && mine === workplaceKey(world, them);
   let kind: RelKind;
   if (me.family.includes(them.id) || roles.includes("family")) kind = "family";
+  else if (roles.includes("couple") && affinity > -20) kind = "couple";
   else if (roles.includes("employer")) kind = "boss";
   else if (roles.includes("employee")) kind = "staff";
   else if (roles.includes("partner") || roles.includes("investor") || roles.includes("investee")) kind = affinity >= 35 ? "friend" : "partner";
@@ -176,7 +177,7 @@ export function relView(world: WorldState, me: Citizen, them: Citizen): RelView 
   else if (coworker) kind = affinity >= 12 ? "friendly coworker" : "coworker";
   else if (familiarity >= 8) kind = "acquaintance";
   else kind = "stranger";
-  const closeness = clamp((affinity + 10) / 90, 0, 1) * clamp(familiarity / 30 + 0.3, 0, 1) + (kind === "family" ? 0.3 : 0);
+  const closeness = clamp((affinity + 10) / 90, 0, 1) * clamp(familiarity / 30 + 0.3, 0, 1) + (kind === "family" ? 0.3 : kind === "couple" ? 0.35 : 0);
   const ease = clamp(closeness * 1.1 - (kind === "boss" ? 0.5 : 0) - (kind === "stranger" ? 0.3 : 0), 0, 1);
   const guarded = clamp((kind === "boss" ? 0.6 : 0) + (kind === "rival" ? 0.6 : 0) + (trust < -20 ? 0.4 : 0) + (kind === "stranger" ? 0.3 : 0) + (kind === "enemy" || kind === "dislikes" ? 0.5 : 0) - closeness * 0.4, 0, 1);
   let owed: RelView["owed"] = null;
@@ -203,6 +204,7 @@ export function relGuide(world: WorldState, me: Citizen, them: Citizen, v: RelVi
     friend: `${n} is a friend. You're relaxed and informal with them: you tease a bit, say what you think, and tell them what's going on with you.`,
     "close friend": `${n} is one of your closest friends. No pleasantries needed: you take the mick, say exactly what you think, and can tell when they're hiding something.`,
     family: `${n} is family. You talk to them the way you talk to family: frankly, sometimes impatiently, with history behind it.`,
+    couple: `You and ${n} are together. Affectionate, teasing, comfortable; you tell each other things you tell nobody else.`,
     boss: `${n} is your boss. You keep it polite and a bit careful, and you don't moan about work to their face.`,
     staff: `${n} works for you. Friendly, but you're the boss and you both know it.`,
     partner: `${n} is a business partner of yours: civil, practical, with money between you.`,

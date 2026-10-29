@@ -5,6 +5,7 @@ import { TALK } from "./config";
 import { clipContext, type Context } from "./context";
 import { profileOf } from "./profile";
 import type { DialogueState } from "./types";
+import { dealContext } from "./deal";
 
 // The prompt for one person's next line, built in layers:
 //   1. the rules of the world (a real person, never an assistant; only what
@@ -47,6 +48,21 @@ export const TURN_SCHEMA = {
       },
     },
     perceived: { type: ["string", "null"] },
+    deal: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["propose", "counter", "accept", "decline"] },
+        amount: { type: "number" },
+        rate: { type: "number" },
+        days: { type: "integer" },
+        wage: { type: "number" },
+        share: { type: "number" },
+        price: { type: "number" },
+        qty: { type: "integer" },
+        choice: { type: "string", enum: ["paid", "partial", "promise", "refuse"] },
+      },
+      required: ["action"],
+    },
   },
   required: ["spoken", "intent", "topic", "endConversation"],
 };
@@ -78,11 +94,15 @@ export function bigPrompt(world: WorldState, conv: Conversation, st: DialogueSta
     .filter((x) => x !== null)
     .join("\n");
   const lines = transcript(world, conv, me);
+  // A deal: your own position (never theirs), what's on the table, and the move is yours to make.
+  const deal = dealContext(world, conv, me);
   const user = [
     lines.length ? `The conversation so far:\n${lines.join("\n")}` : `You've just run into ${them.name}.`,
     st.topicLabel ? `(Talking about: ${st.topicLabel}. The mood: ${st.tone}.)` : "",
+    ...(deal.length ? ["THE DEAL (only you know your side of it)", ...deal] : []),
     ctx.intent,
     `This turn: ${ctx.plan} (A suggestion: answer what was actually said first, and do it your way.)`,
+    deal.length && st.deal?.status === "open" ? `Decide your move yourself: "deal": {"action": "propose" | "counter" | "accept" | "decline", and the terms you're naming (amount in pounds, rate and share as fractions like 0.1, days, wage per day, price per item, qty, or choice for a debt: paid/partial/promise/refuse)}. You can't promise money you haven't got.` : "",
     "",
     `Reply as JSON: "spoken" is only the words ${me.name} says out loud (no name, no quotes, no actions). "learned" lists anything new ${me.name} just said about their own life or plans, or passed on about someone ("about": "me" or a person's name; "when": "today", "tomorrow", "in a few days", "next week" or null; "private": whether it's meant to stay between you). "perceived": how ${them.name} came across to you just now, in a few words, or null. "endConversation": true if you're wrapping up.`,
   ]
@@ -109,6 +129,7 @@ export function smallTurn(world: WorldState, conv: Conversation, st: DialogueSta
     ...ctx.relationship.slice(0, 3),
     ...ctx.memories.slice(0, 5),
     ...ctx.scene.slice(0, 2),
+    ...dealContext(world, conv, me).slice(0, 2),
   ]
     .filter(Boolean)
     .join("\n");

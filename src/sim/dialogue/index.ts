@@ -2,8 +2,11 @@ import type { SmallPrompt } from "../ai/small";
 import { setMemoryObserver } from "../memory/memory";
 import type { Citizen, Conversation, ConversationLine, WorldState } from "../types";
 import { argueDirective, argueLine } from "./argue";
-import { sayingIn } from "./voice";
-import { bondOf, bondsDaily, relView } from "./bonds";
+import { sayingIn, stressOf, voiced } from "./voice";
+import { applyDealMove, checkDealMove, dealLine, isDeal, negotiationDirective, startDeal } from "./deal";
+export { dealOutcome, isDeal } from "./deal";
+import { rngFor } from "./topics";
+import { bondOf, bondsDaily } from "./bonds";
 import { TALK } from "./config";
 import { contextFor } from "./context";
 import { lifeShapesThem, takeAway } from "./extract";
@@ -15,7 +18,7 @@ import { profileOf, talkOf } from "./profile";
 import { bigPrompt, smallTurn } from "./prompt";
 import { realize } from "./realize";
 import { asksSomething, checkLine, GOODBYE } from "./turn";
-import type { DialogueState, Intent, TurnMeta } from "./types";
+import type { DealAction, DealTerms, DialogueState, Intent, TurnMeta } from "./types";
 
 // The conversation system, end to end.
 //
@@ -43,6 +46,8 @@ setMemoryObserver((world, c, m) => workGrapevine(world, c, m));
 export function beginDialogue(world: WorldState, conv: Conversation, a: Citizen, b: Citizen, mode?: "argument" | "deal", decided?: string): DialogueState {
   const st = planChat(world, conv, a, b, mode);
   if (mode === "deal" && decided) st.reason = decided;
+  // Nothing's on the table yet: they'll negotiate it.
+  if (mode === "deal" && isDeal(conv.topic)) st.deal = startDeal(conv);
   if (mode === "argument") st.reason = String(conv.agenda.reason ?? conv.terms.reason ?? "a row");
   conv.dlg = st;
   return st;
@@ -54,20 +59,6 @@ export function whoseTurn(conv: Conversation): string {
   return !last ? conv.a : last.speaker === conv.a ? conv.b : conv.a;
 }
 
-/** A deal (a loan, a job...) the town has already settled: the turn's plan is to say it, your way. */
-function dealDirective(world: WorldState, conv: Conversation, st: DialogueState, me: Citizen, them: Citizen): Directive | null {
-  const i = st.turns.length;
-  const last = st.turns[i - 1] ?? null;
-  const rel = relView(world, me, them);
-  const base = { reply: last, askBack: null, bye: false, rel, topic: null, length: "short" as const };
-  if (last?.bye) return st.turns.some((t) => t.speaker === me.id && t.bye) ? null : { ...base, move: "byeback", intent: "pass time", bye: true, hint: `${them.name} is going. Say bye back, or not.` };
-  if (i >= st.maxTurns) return null;
-  const decided = st.reason;
-  if (i === 0) return { ...base, move: "raise", intent: "ask a favour", hint: `You've come to ${them.name} about this: ${decided.split(". ")[0]}. Bring it up, your way.` };
-  if (i >= st.maxTurns - 2) return { ...base, move: "close", intent: "close the deal", bye: true, hint: `Wrap it up and go. (What happened: ${decided})` };
-  return { ...base, move: i === 1 ? "answer" : "react", intent: "close the deal", hint: `Answer what ${them.name} said. What happens is already settled, so stick to it: ${decided}` };
-}
-
 /** What `speaker` means to do next (null: they've nothing more to say). */
 export function planTurn(world: WorldState, conv: Conversation, speaker: string): Directive | null {
   const st = conv.dlg;
@@ -75,7 +66,7 @@ export function planTurn(world: WorldState, conv: Conversation, speaker: string)
   const them = world.citizens[speaker === conv.a ? conv.b : conv.a];
   if (!st || !me || !them) return null;
   if (st.mode === "argument") return argueDirective(world, conv, st, me, them);
-  if (st.mode === "deal") return dealDirective(world, conv, st, me, them);
+  if (st.mode === "deal") return negotiationDirective(world, conv, st, me, them);
   return nextDirective(world, conv, st, me, them);
 }
 
@@ -108,8 +99,11 @@ export function builtInTurn(world: WorldState, conv: Conversation, speaker: stri
     return { text, meta: meta(speaker, d, { kind: "argument" as never, tone: d.move === "concede" ? "warm" : "heated", bye: d.bye, asks: asksSomething(text) }, "built-in"), extras: {} };
   }
   if (st.mode === "deal") {
-    const t = conv.fallback?.lines[st.turns.length]?.text ?? (d.bye ? "Right. See you." : "Right.");
-    return { text: t, meta: meta(speaker, d, { kind: "deal", asks: asksSomething(t), bye: d.bye || GOODBYE.test(t) }, "built-in"), extras: {} };
+    sayingIn((st.said ??= []));
+    const raw = dealLine(world, conv, st, me, them, d);
+    sayingIn(null);
+    const t = voiced(world, me, them, raw, { move: d.move, rel: d.rel, stress: stressOf(me), negative: d.deal?.action === "decline" }, rngFor(world, conv, me.id, `dealvoice${st.turns.length}`));
+    return { text: t, meta: meta(speaker, d, { kind: "deal", asks: asksSomething(t), bye: d.bye, ...(d.deal ? { deal: d.deal } : {}) }, "built-in"), extras: {} };
   }
   const r = realize(world, conv, st, me, them, d);
   return { text: r.text, meta: { ...r.meta, speaker, by: "built-in" }, extras: { disclosed: r.disclosed, gift: r.gift } };
@@ -140,6 +134,8 @@ export function recordLine(world: WorldState, conv: Conversation, speaker: strin
   const them = world.citizens[speaker === conv.a ? conv.b : conv.a];
   conv.lines.push({ speaker, text });
   recordTurn(st, m, d);
+  // A move in a deal goes on the record (it was checked before it got here).
+  if (st.deal && m.deal) applyDealMove(world, st.deal, speaker, m.deal.action, m.deal.terms, m.by === "llm" ? "llm" : "built-in");
   const t = talkOf(me);
   if (m.asks) {
     t.recent.questions.push(text.toLowerCase().replace(/[^a-z ]/g, "").slice(0, 60));
@@ -232,6 +228,27 @@ export function readModelTurn(world: WorldState, conv: Conversation, speaker: st
   const c = checkLine(world, conv, me, them, raw, given);
   if (!c.ok) return { error: c.why ?? "rejected" };
   const text = c.text;
+  // In a deal, the model decides the move (accept, say no, name its own terms), and the world checks it's possible.
+  let deal: TurnMeta["deal"];
+  const ds = conv.dlg?.deal;
+  if (ds && ds.status === "open" && d.deal) {
+    const jd = (reply as { deal?: Record<string, unknown> } | null)?.deal;
+    if (jd && typeof jd.action === "string" && ["propose", "counter", "accept", "decline"].includes(jd.action)) {
+      const terms: DealTerms = {};
+      for (const f of ["amount", "rate", "days", "wage", "share", "price", "qty"] as const) {
+        const v = jd[f];
+        if (typeof v === "number" && Number.isFinite(v) && v >= 0) terms[f] = (f === "rate" || f === "share") && v > 1 ? v / 100 : v;
+      }
+      if (typeof jd.choice === "string") terms.choice = jd.choice;
+      const chk = checkDealMove(world, conv, ds, speaker, jd.action as DealAction, terms);
+      if (!chk.ok) return { error: `deal: ${chk.why}` };
+      deal = { action: chk.action, terms: chk.terms };
+    } else if (typeof j.line === "string") {
+      // A small model only writes the words: the move is the one their own judgement came to.
+      const chk = checkDealMove(world, conv, ds, speaker, d.deal.action, d.deal.terms);
+      if (chk.ok) deal = { action: chk.action, terms: chk.terms };
+    } else return { error: "no decision about the deal" };
+  }
   const asks = asksSomething(text);
   const bye = d.bye || GOODBYE.test(text) || j.endConversation === true;
   const q = asks ? (d.askBack ?? (d.move === "raise" ? qFor(d) : d.move === "open" ? "how" : "what")) : undefined;
@@ -251,6 +268,7 @@ export function readModelTurn(world: WorldState, conv: Conversation, speaker: st
     valence: d.topic?.valence ?? 0,
     told: d.topic?.kind === "gossip" && d.topic.fact !== undefined ? [d.topic.fact] : [],
     by: "llm",
+    ...(deal ? { deal } : {}),
   };
   const learned = Array.isArray(j.learned)
     ? (j.learned as unknown[])
