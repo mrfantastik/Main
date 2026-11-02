@@ -82,21 +82,81 @@ agent inspector.
 | **Deals** | Each side's moves: propose, counter, accept, walk away, and the terms. | Each side's limits; whether a move is possible; applying the agreement (the ledger moves the money). |
 | **Daily life** (sleep, eat, work, shop, walk, prices, stock, rent) | With the in-page brain: a plan for the day and the next activity, chosen from what's possible. | The utility AI scores options from needs, money and personality; the economy runs by rules. |
 | **Feelings, memories, relationships, reputation, news spreading, rumours being seen through** | | Rules, from what actually happened. |
-| **Thoughts and diaries** | With a model connected. | A built-in thought otherwise. |
+| **Thoughts and diaries** | With a model connected. | A built-in thought otherwise (never with only the AI: then nothing is shown until the AI has thought it). |
+| **With only the AI on** | Every line, every thought shown, every decision: next moves, big decisions, agents' moves, an owner's answer to an applicant or an offer, prices, a trader's or reseller's move. | Checking and applying them, and running the world. Until the model decides, people wait. |
 
 In the UI, 🧠 marks anything from the model and ⚙️ anything from the rules: decisions in the Agent tab, lines in transcripts (AI lines also have a gold edge), the AI log.
 
-### Only the AI speaks
+### Only the AI speaks, thinks and decides
 
-With **Only the AI speaks** on (`world.ai.aiOnly`; `AI_ONLY=1` on the server, a switch in the 🧠 AI panel), every word spoken in town is the model's:
+With **Only the AI** on (`world.ai.aiOnly`; `AI_ONLY=1` on the server, a switch in the 🧠 AI panel, and what `npm run free` sets), nothing the player sees comes from the rules: every line, every thought shown and every decision is the model's. The rules keep their other job: checking what the model proposes and running the world.
+
+**What people say:**
 
 - A conversation only starts if the director takes it on. It's asked before anyone stops what they're doing, so when it can't, nothing happens and they try again later. No built-in draft is even prepared.
 - A line the checks turn down (or a timeout, or no reply) is sent back with the reason ("too close to something already said", "you don't know anyone called X") and asked for again, up to 4 tries. Then the conversation ends where it is.
 - While the model is busy or asks the game to slow down, people wait. If it's switched off, out of calls or gone, conversations end where they are. One where nobody got a word out never happened. None goes on longer than 6 game hours.
 - Groups never switch to the built-in voice. A save loaded mid-conversation is picked up again by the AI, or ends where it is if no AI is connected.
-- The rules still do what they always did: decide whose turn it is and suggest what they might do with it (the model may ignore the suggestion), check every line, and apply what was agreed. The model only ever writes the words.
+- The rules still decide whose turn it is and suggest what they might do with it (the model may ignore the suggestion), check every line, and apply what was agreed. The model only ever writes the words.
 
-`tests/aionly.test.ts` checks that every line is the model's (with a good model and a flaky one), that a dead model leaves a quiet town with nobody stuck mid-conversation, that every kind of conversation can be spoken, and that a reloaded save carries on with the AI.
+**What they do and decide** (`ai/brain.ts`, `ai/choices.ts`, `ai/director.ts`):
+
+- **What they do next.** While someone is busy, the model is asked what they'll do once they've finished. It chooses from everything that makes sense for them then (up to eight options, ordered by the town's scores, plus going to see a friend) and says why. If no pick is ready when they finish, they don't fall back on the utility AI. Instead they **wait where they are** ("Making up their mind", a `WAIT` action of 10 minutes) until it is. A pick that's no longer possible is asked for again. The ones standing waiting are asked about first, hungriest and most tired first.
+- **Big decisions** (career, business, money: `ai/strategy.ts`) all go to the model, whatever the stakes. If it can't take one now, or its answer can't be used, they think it over again later.
+- **Agents' moves about other people** (`society/`): everyone is an agent, and every decision is the model's. An answer the town turns down is asked again with the reason (twice), then they think again later; the built-in judgement never steps in. The built-in habits that used to start some conversations are off: chasing an overdue debt, asking a friend for help, rows between people with a grudge. Agents can do those themselves (`propose_deal` with `repayment` or `ask_help`, and `confront`).
+- **Things that come up out of the blue** go to the person they come up for, through `world.choices` (saved with the world):
+  - an applicant asking an owner for a job;
+  - an investor's offer;
+  - an owner's prices;
+  - a trader's move at the Exchange (one a session);
+  - which bargain a reseller buys.
+
+  Each kind lists its options again when the model answers, so it never decides on stale facts, and checks the answer against them. One nobody decides in time lapses: the applicant never hears back, the offer goes nowhere. If only-the-AI is switched off meanwhile, whatever's still waiting is decided the usual way.
+- **Thoughts.** The town's own thoughts (`setThought` from the rules) become a cue (`thoughtCue`) instead of being shown. The model puts the important ones into the person's own words, with the most important first. Moves, decisions and choices come with their reason, which is what they're shown thinking. A person shows no thought until the AI has given them one.
+- **The clock.** While people stand waiting for the model, the game clock slows down (`director.pace`: 2 ÷ the number waiting, at least 10%), so a slower model can keep up; `world.ai.waitForAI = false` lets it run regardless. Instant skips are refused: the model can't think a day's worth in an instant.
+
+**What stays with the rules:** checking every proposal; applying it (the ledger moves the money); feelings, memories, relationships and reputation, from what actually happened; and the world itself (prices at the market, CityCorp's hiring, wages, rent, chance meetings and who wanders over to a group, how a trading session's chosen trade fills). A model never changes the world directly.
+
+**Requests:** about 730 a game day for a 20-person town, which is 2 a second at 1×:
+- ~270 picks and choices (prompts of ~300 tokens);
+- ~300 lines (~900 tokens);
+- ~100 agent decisions (~1,000 tokens);
+- ~60 thoughts (~300 tokens).
+
+`tests/aionly.test.ts` checks that every line is the model's (with a good model and a flaky one), that a dead model leaves a quiet town with nobody stuck mid-conversation, that every kind of conversation can be spoken, and that a reloaded save carries on with the AI. `tests/aidecides.test.ts` checks:
+- that over a day every decision made (next moves, big decisions, agents' moves) and every thought shown is the model's;
+- that with no model answering nobody decides anything for anyone, people wait, the clock slows and nothing breaks;
+- that an owner's model hires an applicant, and that an unanswered one lapses;
+- the clock;
+- the new agent moves;
+- that free mode only ever uses models on this computer.
+
+### Free mode
+
+`npm run free` (and `Play-Free.bat` on Windows, which installs what's needed first) is the free way to play (`scripts/free.ts`, `src/server/free.ts`, `src/sim/ai/localai.ts`):
+
+1. It finds Ollama (at `OLLAMA_HOST`, by default `127.0.0.1:11434`) and starts it if it's installed but not running, with `OLLAMA_NUM_PARALLEL=4` and a 4,096-token context.
+2. It picks the model to use. Cloud models (`-cloud`/`:cloud`, or anything with a remote host) are never used, and nor are embedding models.
+   - **Asked for one with `--model`:** that one, downloaded if need be.
+   - **Already have some:** the best of the ones known to work well.
+   - **None yet:** it downloads one that suits the graphics memory (or RAM on Apple Silicon).
+3. It times one realistic request and sets how hard to work the model from it:
+
+   | One answer takes | Requests at once | Conversations voiced at once | Timeout |
+   | --- | --- | --- | --- |
+   | ≤ 2.5 s | 4 | 20 | 45 s |
+   | ≤ 8 s | 2 | 6 | 60 s |
+   | more | 1 | 2 | 120 s |
+
+4. It starts the server with `LOCAL_ONLY=1` and only the AI speaking, thinking and deciding, and opens the browser.
+
+`LOCAL_ONLY=1` refuses:
+- Claude, even with `AI_PROVIDER=claude` set;
+- any endpoint that isn't on this computer or the local network;
+- cloud model names;
+- endpoints entered in the 🧠 AI panel.
+
+The free client never picks a cloud model when it looks for one, and asks Ollama for JSON replies (`response_format`), which small local models need.
 
 ## Tuning
 
@@ -108,7 +168,7 @@ With **Only the AI speaks** on (`world.ai.aiOnly`; `AI_ONLY=1` on the server, a 
 
 ## Tests
 
-`npm test` (115 tests) includes, for this work:
+`npm test` (121 tests) includes, for this work:
 
 - `tests/society.test.ts`: a diverse roster of ten; private knowledge kept out of other agents' prompts; proposals checked and turned down with reasons (the built-in judgement stepping in); a model's decision carried out and settled; a week of ten agents with money conserved, every decision settled and logs bounded; different seeds turning out differently; save/load of agent state; lies found out; break-ups; a connected model making the roster's decisions, a broken model handing back to the rules, and requests staying within the concurrency cap.
 - `tests/group.test.ts`: newcomers say hello first, each pair alternates, questions are answered, goodbyes get replies, no gossip about someone present, nobody left stuck; the same start gives the same group; everyone present hears the news; groups form on their own over days with people joining, chipping in and leaving, and fewer than 1 problem per 100 chats; a group saved mid-conversation carries on after loading.
@@ -118,6 +178,8 @@ With **Only the AI speaks** on (`world.ai.aiOnly`; `AI_ONLY=1` on the server, a 
 `npm run agents` is the success test in one command: ten agents, a week, nobody touching anything, and a report of what happened to each of them.
 
 ## Known limits
+
+- With only the AI deciding, the town is only as lively as the model is fast. On a processor (several seconds an answer) most people spend much of the day waiting for it, and the clock slows right down to let it catch up. A graphics card, or a smaller model, helps.
 
 - Without a model connected, the agents run on the built-in judgement. It's personality-driven and varied, but it can't come up with anything outside its list of moves, and it often carries on with the day when nothing is pressing.
 - A small in-page model chooses from the built-in judgement's shortlist rather than writing free-form proposals; a bigger model (Claude, or a decent local model through an OpenAI-compatible endpoint) gets the full prompt.

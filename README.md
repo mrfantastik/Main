@@ -6,6 +6,41 @@ Nothing is scripted. Every story comes from the systems: needs, money, personali
 
 ---
 
+## Totally free: the AI runs on your own computer
+
+The best way to play is also free. Every conversation, thought and decision in town is written by an open-source AI model running on **your own computer**, through [Ollama](https://ollama.com). You don't need an account, an API key or credits, there's nothing to pay, and nothing the town says or does leaves your computer.
+
+> **About the ollama.com website:** you don't need to sign in there. Its "Pay as you go" credits, "Add funds" and "Create API key" are only for Ollama's *cloud* models, which run on their servers. This game never uses them: the free launcher refuses any cloud model, Claude and every paid or public service. Just press **Download**.
+
+**On Windows:**
+
+1. Install **Ollama** from <https://ollama.com/download> (free).
+2. Install **Node.js** (the LTS version) from <https://nodejs.org> (free).
+3. Get the game: on GitHub, **Code → Download ZIP**, then unzip it (or `git clone` it).
+4. Double-click **`Play-Free.bat`** in the game's folder.
+
+The first time, it sets up the game's parts and downloads a free model to suit your computer (2–9 GB, once). Then the town opens in your browser. Leave the black window open while you play, and close it to stop.
+
+**On a Mac or Linux:** install Ollama and Node.js, then run `npm install` once and `npm run free` each time.
+
+**What the launcher does:**
+- It finds Ollama, and starts it if it isn't running.
+- It uses a model you already have (never one of Ollama's cloud models, or an embedding model). If you have none, it downloads one that suits your computer:
+  - `qwen2.5:14b` with 11 GB or more of graphics memory;
+  - `qwen2.5:7b` with 6 GB or more;
+  - `qwen2.5:3b` with less, or on the processor;
+  - `qwen2.5:1.5b` on a computer without much memory.
+- It times one answer to see how hard the model can be worked, and sets how many requests go out at once and how many conversations it speaks at once.
+- It starts the game with **only the AI speaking, thinking and deciding** (below), in **free mode** (`LOCAL_ONLY=1`): the game won't use anything that could cost money, even if you ask it to in the 🧠 AI panel. The top bar shows **🆓 Free · on this computer**.
+
+Options: `npm run free -- --model llama3.1:8b` (a particular model, downloaded if need be), `--port 3001`, `--no-open`. On Windows, add them after the file's name in a command prompt: `Play-Free.bat --model llama3.1:8b`.
+
+**How lively it is depends on your computer.** With a graphics card (NVIDIA with 6 GB or more, or an Apple Silicon Mac), a 7B model answers in a second or two and keeps up with the whole town at 1×. On the processor alone, an answer takes several seconds: the town is quieter, and the clock slows down while people wait for the AI to decide what they do. A smaller model (`--model qwen2.5:1.5b`) is quicker but less clever.
+
+**Without installing anything:** the browser version (`ai-hustle-city.html`) is free too. It runs a small model inside the page (the town's brain, see below). That model is smaller, so fewer people talk at once.
+
+---
+
 ## The town as a society of agents
 
 Every citizen is an agent with their own personality, memories, private knowledge (who told them what, how sure they are, whether it's only a rumour), relationships, goals, plans that take days, intentions, and a log of every decision they made and what came of it.
@@ -14,7 +49,7 @@ Every citizen is an agent with their own personality, memories, private knowledg
 
 > talk to someone · look for work or ask someone for a job · propose a deal (a loan, an investment, a partnership, a job offer, a sale) · lend · give someone money · spread a story about someone (true or not) · undercut a rival · have it out with someone · make up · ask someone out · start a plan · change what they're aiming for · carry on
 
-The **town checks every proposal** against the real world: do they have the money, do they know this person, does that business exist and is it hiring, did they only just try this. Then it either carries the action out or turns it down with the reason. Either way it goes into the agent's log and comes back in their next prompt. **Nothing the model says changes the world directly.** Whatever the model can't answer for (no model connected, a timeout, an impossible proposal) is decided by the **built-in judgement**, which weighs the same things by personality. The 🎯 Agent tab marks every decision 🧠 AI or ⚙️ rules.
+The **town checks every proposal** against the real world: do they have the money, do they know this person, does that business exist and is it hiring, did they only just try this. Then it either carries the action out or turns it down with the reason. Either way it goes into the agent's log and comes back in their next prompt. **Nothing the model says changes the world directly.** Whatever the model can't answer for (no model connected, a timeout, an impossible proposal) is decided by the **built-in judgement**, which weighs the same things by personality. The 🎯 Agent tab marks every decision 🧠 AI or ⚙️ rules. With **only the AI speaking, thinking and deciding** (below), the model runs all twenty and nothing falls back to the built-in judgement: it's asked again instead.
 
 - **Conversations are turn by turn, and each person speaks for themselves.** Each line is one person's turn, written from that person's context only: they never see the other's private thoughts, agenda or limits. It's checked, then recorded. People answer what was said, change the subject, disagree, and wind it up.
 - **Deals are negotiated, not decided in advance.** A loan, an investment, a job or a sale starts with nothing on the table. Each side has private limits that only they see (what they can spare, the rate they'd accept, whether they trust the other). They propose, counter, accept or walk away, turn by turn, and the outcome is whatever they agree. The town only refuses moves that are impossible, such as offering money they haven't got.
@@ -37,42 +72,71 @@ The **town checks every proposal** against the real world: do they have the mone
 
 ---
 
-## Only the AIs talk: the best way to run it
+## Only the AI speaks, thinks and decides
 
-Turn on **Only the AI speaks** and no built-in line is ever said. A conversation happens only if the AI will speak it. A line it gets wrong (a repeat, a name the speaker couldn't know, a made-up sum, assistant-speak) is sent back with the reason and asked for again, never replaced. If the AI stops answering, the conversation just ends where it is. Every line in the transcripts is then marked 🧠.
+Turn on **Only the AI speaks, thinks and decides** (the free launcher does it for you) and nothing built-in is ever shown:
 
-How much the town talks then depends on how fast your model is. A town says about **570 lines a game day** across ~55 conversations (up to 5 at once), plus ~100 agent decisions: roughly **700 requests a game day**. Each prompt is under ~1,200 tokens and each reply a few dozen. At 1× a game day is 6 real minutes, so keeping up with everyone takes about **2 requests a second**. If the model is slower, nothing breaks: conversations take longer (people stand chatting longer) and fewer happen at once.
+- **Every line is the AI's.** A conversation happens only if the AI will speak it. A line it gets wrong (a repeat, a name the speaker couldn't know, a made-up sum, assistant-speak) is sent back with the reason and asked for again, never replaced. If the AI stops answering, the conversation just ends where it is.
+- **Every decision is the AI's.** That covers:
+  - what everyone does next (picked while they're still busy with the last thing);
+  - their big decisions (career, business, money);
+  - what they do about other people: talk, ask for a loan, a job or help, chase a debt, lend, give, start a plan, spread a story, undercut a rival, make up, ask someone out;
+  - an owner's answer to an applicant or an investor;
+  - what to charge;
+  - a trader's or reseller's move.
 
-**The best setup is the server version with a local model, through Ollama, on a graphics card.** It's free, private, has no rate limits, and keeps up with the whole town.
+  Until the AI has decided, people wait where they are ("Making up their mind"). A choice it can't use is asked for again, with the reason. Nothing falls back to the built-in rules.
+- **Every thought you see is the AI's.** What the town knows has happened to someone becomes a cue for the AI, and the AI puts it into their words.
+- **The clock waits for the AI.** While people stand waiting for it to decide, the game clock slows down (the top bar shows ⏳ and by how much), and the hungriest and most tired are seen to first. You can turn this off in the 🧠 AI panel. Instant skips are off in this mode: the AI can't think a day's worth in an instant.
 
-1. Install [Ollama](https://ollama.com) and get a model:
-   - `ollama pull qwen2.5:7b`: needs ~6 GB of graphics memory; reliable, and follows the reply format well.
-   - `ollama pull qwen2.5:14b`: 10–12 GB; noticeably better conversations.
-   - `mistral-nemo` (12B) or `gemma2:9b`: livelier writing, if you have the memory.
+The town's rules still check every proposal (can they afford it, do they know this person, is it hiring), apply what was agreed, and run the world itself: prices at the market, wages, rent, chance meetings. So the AI can't break the economy. The 🎯 Agent tab, the transcripts and the 🧠 AI panel's log show every decision and line and where it came from.
 
-   Avoid "thinking" (reasoning) models: they're slow and wrap their replies in reasoning.
-2. Let it answer four at once: `OLLAMA_NUM_PARALLEL=4 ollama serve`.
-3. Run the town against it, with only the AI speaking:
+**How much it asks of the model:** a town makes about **730 requests a game day**:
+- ~270 choices of what to do next or what to decide (prompts of ~300 tokens);
+- ~300 lines of conversation (~900 tokens);
+- ~100 agents' decisions (~1,000 tokens);
+- ~60 thoughts (~300 tokens).
+
+Each reply is a few dozen tokens. At 1× a game day is 6 real minutes, so keeping up with everyone takes about **2 requests a second**. In a test with a model taking 1.5 s an answer, four at a time, the town kept up with the clock at 94% of full speed. With one taking 8 s, one at a time (a processor), the clock ran at about 20%. Nothing breaks if the model is slower: the town is just quieter and slower.
+
+**Setting it up by hand** (what the launcher does), with Ollama:
+
+1. Get a model: `ollama pull qwen2.5:7b` (~6 GB of graphics memory), or `qwen2.5:14b` (10–12 GB) for better conversations. `mistral-nemo` and `gemma2:9b` write livelier lines. Avoid "thinking" models (they're slow and wrap their replies in reasoning), and don't use the `-cloud` ones: those run on ollama.com and use paid credits.
+2. Run the town against it:
 
    ```bash
-   AI_PROVIDER=free FREE_AI_URL=http://localhost:11434/v1/chat/completions AI_MODEL=qwen2.5:7b \
+   LOCAL_ONLY=1 FREE_AI_URL=http://localhost:11434/v1/chat/completions AI_MODEL=qwen2.5:7b \
    FREE_AI_INTERVAL_MS=0 AI_CONCURRENCY=4 AI_LIVE_CHATS=20 AI_ONLY=1 npm start
    ```
 
-4. Open http://localhost:3000 and play at **1×**. At higher speeds the model can't keep up, and conversations are cut short (cleanly, with nothing filled in).
+   On Windows, in PowerShell:
+
+   ```powershell
+   $env:LOCAL_ONLY=1; $env:FREE_AI_URL="http://localhost:11434/v1/chat/completions"; $env:AI_MODEL="qwen2.5:7b"
+   $env:FREE_AI_INTERVAL_MS=0; $env:AI_CONCURRENCY=4; $env:AI_LIVE_CHATS=20; $env:AI_ONLY=1; npm start
+   ```
+
+3. Open http://localhost:3000 and play at **1×**.
+
+To let Ollama answer four at once, set `OLLAMA_NUM_PARALLEL=4` before it starts. On Windows, run `setx OLLAMA_NUM_PARALLEL 4`, then quit Ollama from the tray and start it again. (The launcher does this when it starts Ollama itself.)
 
 **Other ways, and what they give you:**
 
 | | Conversations | Notes |
 |---|---|---|
-| **Local model, server** (above) | the whole town | the recommended setup |
+| **Local model, server** (above) | the whole town | the recommended setup, and free |
 | **Local model, browser game** | the whole town | Start Ollama with `OLLAMA_ORIGINS=*` (so the page may call it), open `ai-hustle-city.html?freeai=http://localhost:11434/v1/chat/completions&model=qwen2.5:7b`, then press **🗣️ The AI speaks for everyone** in the 🧠 AI panel's Agents box. |
 | **LM Studio, vLLM, any OpenAI-compatible server** | the whole town | the same, with its `/v1/chat/completions` URL and model name |
-| **A hosted model (Claude, or an OpenAI-compatible service)** | the whole town | Claude writes the best conversations, but every line is a paid call: about 700 calls a game day, around 6 million input tokens an hour at 1×. Fine for a session with a budget, expensive to leave running. Use `AI_PROVIDER=claude AI_ONLY=1 AI_LIVE_CHATS=20 AI_CONCURRENCY=4 AI_MAX_CALLS_PER_DAY=5000`, and raise `AI_BUDGET_USD`. |
-| **The town's brain** (in-page, no install) | a few at once | Small models (up to 1.5B): on a graphics card up to 3 conversations at once; on a processor only the one you're watching, so with only the AI speaking the rest of the town stays quiet. |
-| **The free public AI** (the default) | a couple at once | Rate-limited (two at a time, a call every few seconds): it can't speak for a whole town. |
+| **A hosted model (Claude, or an OpenAI-compatible service)** | the whole town | **Not free.** Claude writes the best conversations, but every request is a paid call (around 730 a game day, ~6 million input tokens an hour at 1×). Use `AI_PROVIDER=claude AI_ONLY=1 AI_LIVE_CHATS=20 AI_CONCURRENCY=4 AI_MAX_CALLS_PER_DAY=5000`, and raise `AI_BUDGET_USD`. |
+| **The town's brain** (in-page, no install) | a few at once | Free. Small models (up to 1.5B): on a graphics card up to 3 conversations at once; on a processor only the one you're watching, so with only the AI the rest of the town is quiet. |
+| **The free public AI** (the default) | a couple at once | Free, but rate-limited (two at a time, a call every few seconds): it can't speak for a whole town. |
 
-The same settings are in the game: the 🧠 AI panel's **Agents** box has the **Only the AI speaks** switch, how many conversations the AI speaks at once, how many requests it sends at once, and the gap between calls. **🗣️ The AI speaks for everyone** sets all of them for a model of your own.
+The same settings are in the game. The 🧠 AI panel's **Agents** box has:
+- the **Only the AI speaks, thinks and decides** switch;
+- how many people are waiting for it, and the switch to slow the clock for them;
+- how many conversations the AI speaks at once, how many requests it sends at once, and the gap between calls.
+
+**🗣️ The AI speaks for everyone** sets all of them for a model of your own.
 
 ---
 
@@ -166,7 +230,9 @@ One model serves the whole town. Each request carries one person's own context a
 | `AI_MODEL` | `openai` (free), `claude-opus-5-5` (Claude) | The model name the endpoint expects. |
 | `FREE_AI_KEY` | *(none)* | The endpoint's API key, if it needs one. |
 | `FREE_AI_INTERVAL_MS` | `2500` | Minimum gap between calls (set `0` for a model of your own). |
-| `AI_ONLY` | *(off)* | `1`: only the AI speaks, with no built-in lines at all (see above). |
+| `AI_ONLY` | *(off)* | `1`: only the AI speaks, thinks and decides, with nothing built-in at all (see above). |
+| `LOCAL_ONLY` | *(off)* | `1`: free mode. Only ever a model on this computer or your own network; Claude, public and hosted services and Ollama's cloud models are refused (`npm run free` sets it). With no `FREE_AI_URL` it uses Ollama at `http://127.0.0.1:11434`. |
+| `FREE_AI_TIMEOUT_MS` | `45000` | How long to wait for an answer (raise it for a slow model on the processor). |
 | `AI_LIVE_CHATS` | *(a couple)* | How many conversations the AI speaks at once, whatever they're about (`20`: everyone). |
 | `AI_CONCURRENCY` | `2` | Requests out at once (match it to your model server, e.g. `OLLAMA_NUM_PARALLEL`). |
 

@@ -347,7 +347,7 @@ function FreeAIBox({ ai }: { ai: AIStatusDTO }) {
       )}
       <div className="god-row">
         <button className="btn" disabled={!ai.available} onClick={() => store.send({ type: "ai", mode: on ? "off" : "llm" })}>
-          {on ? "⏸ Built-in AI only (nothing leaves the page)" : "▶ Use the free AI"}
+          {on ? (ai.aiOnly ? "⏸ Pause the AI (everyone waits)" : "⏸ Built-in AI only (nothing leaves the page)") : ai.localOnly ? "▶ Use the AI on this computer" : "▶ Use the free AI"}
         </button>
         <button className="btn" disabled={!on} onClick={() => store.send({ type: "ai", probe: true })}>
           🔄 Test connection
@@ -386,10 +386,17 @@ function FreeAIBox({ ai }: { ai: AIStatusDTO }) {
           )}
         </div>
       </details>
-      <p className="muted" style={{ fontSize: 11 }}>
-        Services tried in turn: Pollinations, LLM7, Pollinations (simple). What's sent: the made-up townsfolk's names, personalities, feelings,
-        memories and town news. Running the server with AI_PROVIDER=claude and an API key uses Claude instead.
-      </p>
+      {ai.localOnly ? (
+        <p className="muted" style={{ fontSize: 11 }}>
+          Free mode: only the model on this computer ({ai.model}) is ever used. To use another, start the game again with it (for example{" "}
+          <code>npm run free -- --model llama3.1:8b</code>).
+        </p>
+      ) : (
+        <p className="muted" style={{ fontSize: 11 }}>
+          Services tried in turn: Pollinations, LLM7, Pollinations (simple). What's sent: the made-up townsfolk's names, personalities, feelings,
+          memories and town news. Running the server with AI_PROVIDER=claude and an API key uses Claude instead.
+        </p>
+      )}
     </div>
   );
 }
