@@ -242,6 +242,7 @@ export function smallThoughtPrompt(world: WorldState, c: Citizen): SmallPrompt {
   const user = [
     sketch(world, c),
     `It's ${formatTime(world.time).replace(/^Day \d+ /, "")} ${partOfDay(world.time)}. ${c.name} is ${c.activity.label.charAt(0).toLowerCase()}${c.activity.label.slice(1)} (${placeName(world, c.insideId)}).`,
+    ...(world.ai.aiOnly && c.thoughtCue && world.time - c.thoughtCue.t < 180 ? [`Just now: ${c.thoughtCue.text}`] : []),
     ...onTheirMind(world, c),
     `Money: ${money(c.money)} in their pocket, ${money(c.savings)} saved. Goal: ${c.goal.label}.`,
     `What is ${c.name} thinking right now?`,
@@ -250,12 +251,12 @@ export function smallThoughtPrompt(world: WorldState, c: Citizen): SmallPrompt {
 }
 
 /** A tough choice, as a numbered list. */
-export function smallChoicePrompt(world: WorldState, c: Citizen, options: { id: string; label: string }[]): SmallPrompt {
+export function smallChoicePrompt(world: WorldState, c: Citizen, options: { id: string; label: string }[], about?: string): SmallPrompt {
   const user = [
     sketch(world, c),
     ...onTheirMind(world, c),
     `Money: ${money(c.money)} in their pocket, ${money(c.savings)} saved.`,
-    `${c.name} has to decide:`,
+    about ? `${about}. ${c.name} has to decide:` : `${c.name} has to decide:`,
     ...options.map((o, i) => `${i + 1}. ${o.label}`),
     `Which would ${c.name} choose?`,
   ].join("\n");

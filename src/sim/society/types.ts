@@ -19,7 +19,7 @@ export type AgentActionType =
   | "start_project" // begin a plan that takes days
   | "carry_on"; // nothing new: get on with the day
 
-export type DealKind = "loan" | "investment" | "job_offer" | "job_ask" | "sale" | "partnership";
+export type DealKind = "loan" | "investment" | "job_offer" | "job_ask" | "sale" | "partnership" | "repayment" | "ask_help";
 
 export interface AgentAction {
   type: AgentActionType;

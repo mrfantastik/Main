@@ -176,8 +176,8 @@ export function strategyOptions(world: WorldState, c: Citizen): StrategyOption[]
 }
 
 export function applyStrategy(world: WorldState, c: Citizen, options: StrategyOption[], chosen: StrategyOption, source: "utility" | "llm" | "llm-rejected", thought: string): void {
-  recordDecision(world, c, "strategy", options, chosen, source, thought);
-  setThought(world, c, thought, chosen.id === "stay" ? 2 : 3, source === "llm" ? "llm" : "utility");
+  recordDecision(world, c, "strategy", options, chosen, source, thought || chosen.label);
+  if (thought) setThought(world, c, thought, chosen.id === "stay" ? 2 : 3, source === "llm" ? "llm" : "utility");
   chosen.payload.execute?.(world, c);
 }
 
@@ -199,5 +199,15 @@ export function strategicReview(world: WorldState, c: Citizen): void {
   }
   const chosen = choose(world, options, 0.12);
   if (strategyHook && strategyHook(world, c, options, chosen)) return;
+  // Only the AI decides, and it can't take this on now: they'll think it over again later.
+  if (world.ai.aiOnly) {
+    askAgainLater(c, "waiting for the AI");
+    return;
+  }
   applyStrategy(world, c, options, chosen, "utility", chosen.thought);
+}
+
+/** A big decision the AI couldn't make yet: it comes up again in a while (see needsReview). */
+export function askAgainLater(c: Citizen, why: string): void {
+  c.reviewRequested ??= why;
 }

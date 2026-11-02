@@ -3,7 +3,8 @@ import { societyDaily, societyTick } from "./society/tick";
 import { happeningsHourly } from "./town/happenings";
 import { beginAction, finishActivity, makeAction, startActivity, tickActivity } from "./ai/actions";
 import { updateBeliefsDaily } from "./ai/beliefs";
-import { decideNext } from "./ai/brain";
+import { couldNotDo, decideNext, waitForAI } from "./ai/brain";
+import { choicesHourly } from "./ai/choices";
 import "./ai/economyActivities";
 import "./ai/economyStrategy";
 import { interestDaily, loansDaily, registerBankActions } from "./economy/bank";
@@ -13,7 +14,6 @@ import { registerOperationsActions } from "./economy/operations";
 import { registerResellerActions } from "./economy/reselling";
 import { registerShoppingActions, updateWants } from "./economy/shopping";
 import { registerTradingActions } from "./economy/trading";
-import { setThought } from "./ai/decision";
 import { chargeRent, reviewRents, settleArrears } from "./economy/housing";
 import { corpDaily, registerJobActions } from "./economy/jobs";
 import { netWorth } from "./economy/valuation";
@@ -107,9 +107,10 @@ function think(world: WorldState, c: Citizen): void {
   const action = decideNext(world, c);
   const err = beginAction(world, c, action);
   if (err) {
-    setThought(world, c, `I wanted to ${action.label.toLowerCase()}, but: ${err.toLowerCase()}.`, 2);
-    // The engine refused the plan (e.g. can't afford it): fall back to resting.
-    const fallback = makeAction("REST", c.insideId ?? homeOrShelter(world, c), 30, "Taking a breather");
+    couldNotDo(world, c, action.label, err);
+    // The engine refused the plan (e.g. can't afford it): fall back to resting
+    // (only the AI deciding: wait for it to think of something else).
+    const fallback = world.ai.aiOnly ? waitForAI(c) : makeAction("REST", c.insideId ?? homeOrShelter(world, c), 30, "Taking a breather");
     if (beginAction(world, c, fallback)) {
       c.activity = { kind: "idle", label: "Thinking", buildingId: c.insideId, startedAt: world.time, endsAt: world.time + 15, action: null };
     }
@@ -117,6 +118,7 @@ function think(world: WorldState, c: Citizen): void {
 }
 
 function hourly(world: WorldState): void {
+  choicesHourly(world);
   macroHourly(world);
   marketHourly(world);
   salesHourly(world);

@@ -30,6 +30,9 @@ import type {
 export const SPEEDS = [1, 5, 20, 50] as const;
 /** Real milliseconds per game minute at 1x speed (1 game hour = 15 s). */
 export const MS_PER_GAME_MINUTE = 250;
+/** Only the AI deciding: skipping ahead can't be done (the AI can't think a day's worth in an instant, and nobody else decides). */
+export const SKIP_AI_ONLY = "⏩ Skipping ahead is off while only the AI speaks, thinks and decides: it can't think a day's worth in an instant, and nobody else decides anything. Play at a faster speed instead, or untick “Only the AI” in the 🧠 AI panel first.";
+
 /** Time-skip buttons (game minutes). */
 export const SKIPS = [
   { minutes: 60, label: "+1h", title: "an hour" },
@@ -156,7 +159,7 @@ export interface AIStatusDTO {
   /** What the AI is working on right now, in words ("Deciding what Mike does next"). */
   doing?: string | null;
   /** What it has done so far (free AI): moves it picked that people made, conversations written, thoughts, day plans written and moves made from them, diary entries. */
-  done?: { plan: number; conversation: number; thought: number; dayplan: number; followed: number; diary: number };
+  done?: { plan: number; conversation: number; thought: number; dayplan: number; followed: number; diary: number; decide?: number; choice?: number };
   /** The writer is a free public AI (no budget; rate limited). */
   free?: boolean;
   /** Free AI: which services answer, and whether this page can reach the internet at all. */
@@ -172,8 +175,12 @@ export interface AIStatusDTO {
   brain?: BrainDTO | null;
   /** Requests out at once, the gap between calls, and how many conversations the AI voices at once (null: a couple, the ones that matter). */
   limits?: { maxConcurrent: number; minIntervalMs: number; liveChats: number | null };
-  /** Only the AI speaks: no built-in lines at all (a conversation happens only if the AI speaks it). */
+  /** Only the AI speaks and decides: no built-in lines, thoughts or choices at all. */
   aiOnly?: boolean;
+  /** Only the AI deciding: people standing there waiting for it to decide what they do, decisions queued for it, and how far the clock is slowed meanwhile (1: not at all). */
+  waiting?: { people: number; decisions: number; pace: number; waitForAI: boolean } | null;
+  /** Free and on this computer: the AI is only ever a model on this computer or your own network, never a paid or public service. */
+  localOnly?: boolean;
 }
 
 export interface BrainDTO {
@@ -498,8 +505,10 @@ export type ClientMsg =
       model?: string;
       /** How hard the AI works: requests at once, gap between calls (ms), conversations voiced at once (null: back to the default). */
       limits?: { maxConcurrent?: number; minIntervalMs?: number; liveChats?: number | null };
-      /** Only the AI speaks (no built-in lines), or the built-in voice fills in again. */
+      /** Only the AI speaks and decides (no built-in lines, thoughts or choices), or the built-in AI fills in again. */
       aiOnly?: boolean;
+      /** Only the AI deciding: slow the clock while people wait for it (default), or let it run. */
+      waitForAI?: boolean;
     }
   /** Rewrite a citizen's chatbot (null: back to the one made from their personality). */
   | { type: "bot"; id: string; card: Partial<BotCard> | null }

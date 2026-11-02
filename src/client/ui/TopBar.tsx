@@ -35,11 +35,30 @@ export function TopBar() {
           ⏩
         </span>
         {SKIPS.map((k) => (
-          <button key={k.minutes} title={`Skip ahead ${k.title} instantly`} aria-label={`Skip ahead ${k.title}`} disabled={!connected} onClick={() => store.send({ type: "skip", minutes: k.minutes })}>
+          <button
+            key={k.minutes}
+            title={ai?.aiOnly ? "Skipping ahead is off while only the AI decides (it can't think a day's worth in an instant)" : `Skip ahead ${k.title} instantly`}
+            aria-label={`Skip ahead ${k.title}`}
+            disabled={!connected || !!ai?.aiOnly}
+            onClick={() => store.send({ type: "skip", minutes: k.minutes })}
+          >
             {k.label}
           </button>
         ))}
       </div>
+      {ai?.waiting && ai.waiting.pace < 1 && !st?.paused && (
+        <span
+          className="chip"
+          title={`Only the AI decides, and ${ai.waiting.people} people are waiting for it to decide what they do, so the clock is running at ${Math.round(ai.waiting.pace * 100)}% to let it catch up. (The 🧠 AI panel can turn this off.)`}
+        >
+          ⏳ {Math.round(ai.waiting.pace * 100)}% · {ai.waiting.people} waiting for the AI
+        </span>
+      )}
+      {ai?.localOnly && (
+        <span className="chip good" title="Every conversation, thought and decision comes from an AI model running on this computer. Nothing here can cost money.">
+          🆓 Free · on this computer
+        </span>
+      )}
       {st?.economy.mode && st.economy.mode !== "normal" && (
         <span className={`chip ${st.economy.mode === "boom" ? "good" : "bad"}`}>{st.economy.mode === "boom" ? "📈 BOOM" : "📉 CRASH"}</span>
       )}

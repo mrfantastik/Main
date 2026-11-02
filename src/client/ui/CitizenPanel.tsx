@@ -130,8 +130,8 @@ function Overview({ d }: { d: CitizenDetail }) {
     <>
       <div className="section">💭 What is {d.name} thinking?</div>
       <div className={`thought ${d.thoughtSource === "llm" ? "llm" : ""}`}>
-        {d.thought}
-        <span className="src">{d.thoughtSource === "llm" ? `🧠 Reasoned by ${ai}` : "⚙️ From the utility AI's current decision"}</span>
+        {d.thought || <span className="muted">Nothing yet: only the AI puts their thoughts into words, and it hasn't yet.</span>}
+        <span className="src">{d.thoughtSource === "llm" && d.thought ? `🧠 Reasoned by ${ai}` : !d.thought ? "⏳ Waiting for the AI" : "⚙️ From the utility AI's current decision"}</span>
       </div>
       {d.agent?.plan && <TodaysPlan d={d} ai={ai} />}
       <div className="section">
@@ -280,7 +280,7 @@ function Mind({ d }: { d: CitizenDetail }) {
   return (
     <>
       <div className="section">Current thought</div>
-      <div className={`thought ${d.thoughtSource === "llm" ? "llm" : ""}`}>{d.thought}</div>
+      <div className={`thought ${d.thoughtSource === "llm" ? "llm" : ""}`}>{d.thought || <span className="muted">Nothing yet (only the AI puts their thoughts into words).</span>}</div>
       {d.agent && d.agent.diary.length > 0 && (
         <>
           <div className="section">📔 Diary</div>

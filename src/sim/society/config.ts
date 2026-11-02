@@ -9,6 +9,8 @@ export const SOCIETY = {
   rulesThinkEvery: 300,
   /** Something big happening makes them think again sooner (but not more often than this). */
   minThinkGap: 45,
+  /** Only the AI deciding, and it couldn't take a decision on: when they try again (game minutes). */
+  retryAfter: 30,
   /** Kept per agent. */
   decisionsKept: 30,
   goalsKept: 6,

@@ -3,7 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { describeSkip, type AIStatusDTO, type ClientMsg, type HelloMsg, type ServerMsg } from "../shared/protocol";
+import { describeSkip, SKIP_AI_ONLY, type AIStatusDTO, type ClientMsg, type HelloMsg, type ServerMsg } from "../shared/protocol";
 import { newWorld as createWorld } from "../sim";
 import { applyGodCommand, GodError } from "../sim/god";
 import { saveCard } from "../sim/mind/bot";
@@ -11,6 +11,7 @@ import * as snap from "../sim/snapshot";
 import type { WorldState } from "../sim/types";
 import { AIDirector } from "../sim/ai/director";
 import { createFreeAIClient } from "../sim/ai/freeai";
+import { notLocal } from "../sim/ai/localai";
 import type { SpendLedger } from "../sim/ai/director";
 import { prepareLoadedWorld } from "../sim/migrate";
 import { applyAgentsCommand } from "../sim/society/state";
@@ -58,10 +59,24 @@ let runner: SimRunner;
 // Any OpenAI-compatible model (a local Ollama or LM Studio, or a hosted one):
 // AI_PROVIDER=free FREE_AI_URL=<its /v1/chat/completions URL> AI_MODEL=<model>
 // (and FREE_AI_KEY=<key> if it needs one).
-const AI_PROVIDER = (process.env.AI_PROVIDER || "free").toLowerCase();
+// LOCAL_ONLY=1 (what `npm run free` sets): only ever a model on this computer or your own
+// network (Ollama, LM Studio...), so nothing can cost money: no Claude, no public or hosted
+// services, no Ollama cloud models, and the AI panel won't take anything else.
+const LOCAL_ONLY = /^(1|true|yes|on)$/i.test(process.env.LOCAL_ONLY ?? "");
+const OLLAMA_URL = "http://127.0.0.1:11434/v1/chat/completions";
+if (LOCAL_ONLY && (process.env.AI_PROVIDER || "free").toLowerCase() === "claude") console.warn("  🆓 LOCAL_ONLY is on, so Claude stays off (it's a paid service). Using the model on this computer.");
+const AI_PROVIDER = LOCAL_ONLY ? "free" : (process.env.AI_PROVIDER || "free").toLowerCase();
 const FREE = AI_PROVIDER === "free";
 // (An AI_MODEL left over from a Claude setup doesn't apply to the free AI.)
 const AI_MODEL = FREE ? (process.env.AI_MODEL && !/^claude/.test(process.env.AI_MODEL) ? process.env.AI_MODEL : "openai") : process.env.AI_MODEL || "claude-opus-5-5";
+const FREE_AI_URL = process.env.FREE_AI_URL || (LOCAL_ONLY ? OLLAMA_URL : undefined);
+if (LOCAL_ONLY) {
+  const why = notLocal(FREE_AI_URL!, AI_MODEL);
+  if (why) {
+    console.error(`\n  🆓 LOCAL_ONLY is on, but ${why}. Nothing that might cost money is used in this mode.\n     Point FREE_AI_URL at a model on this computer (e.g. ${OLLAMA_URL}) and AI_MODEL at a local model.\n`);
+    process.exit(1);
+  }
+}
 const AI_BUDGET_USD = Number(process.env.AI_BUDGET_USD ?? 2);
 const AI_MAX_CALLS_PER_DAY = Number(process.env.AI_MAX_CALLS_PER_DAY ?? (FREE ? 5000 : 12));
 // How hard the AI works: requests at once, and how many conversations it voices at once
@@ -87,10 +102,10 @@ const director =
   AI_PROVIDER === "off"
     ? new AIDirector(null, ledger)
     : FREE
-      ? new AIDirector(createFreeAIClient({ model: AI_MODEL, url: process.env.FREE_AI_URL || undefined, key: process.env.FREE_AI_KEY || undefined }), ledger, {
+      ? new AIDirector(createFreeAIClient({ model: AI_MODEL, url: FREE_AI_URL, key: process.env.FREE_AI_KEY || undefined }), ledger, {
           maxConcurrent: AI_CONCURRENCY ?? 2,
           minIntervalMs: Number(process.env.FREE_AI_INTERVAL_MS ?? 2500),
-          timeoutMs: 45_000,
+          timeoutMs: Number(process.env.FREE_AI_TIMEOUT_MS ?? 45_000),
           liveChats: AI_LIVE_CHATS,
         })
       : new AIDirector(createClaudeClient(AI_MODEL), ledger, { maxConcurrent: AI_CONCURRENCY ?? 2, minIntervalMs: Number(process.env.AI_INTERVAL_MS ?? 2500), timeoutMs: 25_000, liveChats: AI_LIVE_CHATS });
@@ -136,6 +151,8 @@ function aiStatus(world: WorldState): AIStatusDTO {
     endpoint: customEndpoint ? { url: customEndpoint.url, model: customEndpoint.model } : null,
     limits: { ...director.limits, liveChats: director.limits.liveChats ?? null },
     aiOnly: !!world.ai.aiOnly,
+    waiting: world.ai.aiOnly ? { ...director.backlog(world), pace: director.pace(world), waitForAI: world.ai.waitForAI !== false } : null,
+    localOnly: LOCAL_ONLY,
   };
 }
 
@@ -225,10 +242,15 @@ function handle(client: Client, msg: ClientMsg): void {
       break;
     }
     case "ai": {
-      if (msg.limits || msg.aiOnly !== undefined) {
+      if (msg.limits || msg.aiOnly !== undefined || msg.waitForAI !== undefined) {
         if (msg.limits) director.setLimits(msg.limits);
         if (msg.aiOnly !== undefined) world.ai.aiOnly = msg.aiOnly;
+        if (msg.waitForAI !== undefined) world.ai.waitForAI = msg.waitForAI;
         broadcastState();
+        break;
+      }
+      if (msg.endpoint !== undefined && LOCAL_ONLY) {
+        send(client.ws, { type: "toast", text: `🆓 Free mode only uses the model on this computer (${AI_MODEL}). To use another, start the game again with it.`, level: "error" });
         break;
       }
       if (msg.endpoint !== undefined) {
@@ -256,6 +278,10 @@ function handle(client: Client, msg: ClientMsg): void {
     case "skip": {
       const minutes = Number(msg.minutes);
       if (!Number.isFinite(minutes) || minutes <= 0) break;
+      if (world.ai.aiOnly) {
+        send(client.ws, { type: "toast", text: SKIP_AI_ONLY, level: "error" });
+        break;
+      }
       const events = runner.skip(minutes);
       broadcastState();
       for (const c of clients) send(c.ws, { type: "toast", text: `⏩ Skipped ${describeSkip(minutes)} — ${events} things happened. It's now ${snap.describeTime(world.time)}.`, level: "info" });
@@ -432,6 +458,7 @@ async function main(): Promise<void> {
     ws.on("close", () => clients.delete(client));
   });
 
+  runner.pace = () => director.pace(runner.world);
   runner.afterSteps = (w) => {
     director.pump(w);
     for (const n of director.notices.splice(0)) for (const c of clients) send(c.ws, { type: "toast", text: n.text, level: n.level });
@@ -450,9 +477,11 @@ async function main(): Promise<void> {
       ? AI_PROVIDER === "off"
         ? "  🧠 AI off (AI_PROVIDER=off): using the built-in utility AI"
         : "  🧠 Claude disabled (no ANTHROPIC_API_KEY): using the built-in utility AI"
-      : director.free
-        ? `  🧠 Conversations written by the ${director.writer}; the built-in AI fills in when it's busy`
-        : `  🧠 Claude enabled (${director.model}), budget $${AI_BUDGET_USD}, spent so far $${ledger.total().toFixed(3)}`,
+      : LOCAL_ONLY
+        ? `  🆓 Free: ${AI_MODEL} on this computer (${FREE_AI_URL}) ${runner.world.ai.aiOnly ? "speaks, thinks and decides for everyone; nothing is built-in" : "writes the conversations"}. Nothing here can cost money.`
+        : director.free
+          ? `  🧠 ${runner.world.ai.aiOnly ? `Only the AI speaks, thinks and decides (${director.writer})` : `Conversations written by the ${director.writer}; the built-in AI fills in when it's busy`}`
+          : `  🧠 Claude enabled (${director.model}), budget $${AI_BUDGET_USD}, spent so far $${ledger.total().toFixed(3)}`,
   );
   setInterval(broadcastFrames, 100);
   setInterval(broadcastState, 500);

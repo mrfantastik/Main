@@ -25,9 +25,11 @@ export function societyDTO(world: WorldState): SocietyDTO {
       if (d.status === "rejected") rejected++;
     }
   }
+  // (With only the AI deciding, it runs everyone.)
+  const roster = world.ai.aiOnly ? world.citizenOrder : sw.roster;
   return {
-    size: sw.size,
-    roster: sw.roster.map((id) => ({ id, name: nameOf(world, id) })),
+    size: roster.length,
+    roster: roster.map((id) => ({ id, name: nameOf(world, id) })),
     decisions: { llm, rules, rejected },
     groupsNow: world.conversations.filter((c) => c.group && c.group.present.length >= 3).length,
     rumours: [...sw.rumours].reverse().slice(0, 8).map((r) => ({ text: r.text, origin: nameOf(world, r.origin), about: nameOf(world, r.about), truth: r.truth, heard: r.heard, exposed: r.exposed?.length ?? 0 })),

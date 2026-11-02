@@ -15,6 +15,7 @@ import type {
   MarketRow,
   StateMsg,
 } from "../shared/protocol";
+import { shownThought } from "./ai/decision";
 import { getBuildingIndexed } from "./city/lookup";
 import { placeName } from "./places";
 import { employerName } from "./economy/jobs";
@@ -84,7 +85,7 @@ export function citizenSummary(world: WorldState, c: Citizen): CitizenSummary {
     activity: c.activity.label,
     activityKind: c.activity.kind,
     goal: c.goal.label,
-    thought: c.thought,
+    thought: shownThought(world, c),
     thoughtSource: c.thoughtSource,
     mood: Math.round(c.mood),
     homeless: c.homeless,
@@ -303,7 +304,7 @@ export function citizenDetail(world: WorldState, id: string): CitizenDetail | nu
     location: inside ? placeName(world, inside.id) : dest ? `On the way to ${placeName(world, dest.id)}` : "Out and about",
     activity: c.activity.label,
     goal: c.goal,
-    thought: c.thought,
+    thought: shownThought(world, c),
     thoughtSource: c.thoughtSource,
     archetypes: c.archetypes,
     traits: c.traits,

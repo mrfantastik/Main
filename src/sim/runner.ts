@@ -15,6 +15,11 @@ export class SimRunner {
   private timer: ReturnType<typeof setInterval> | null = null;
   /** Called after each batch of steps (used by the AI director). */
   afterSteps: ((world: WorldState) => void) | null = null;
+  /**
+   * How fast the clock runs relative to the speed setting (1: as set). The
+   * AI director slows it while people wait for the AI (only the AI deciding).
+   */
+  pace: (() => number) | null = null;
 
   constructor(public world: WorldState) {}
 
@@ -61,7 +66,7 @@ export class SimRunner {
       this.acc = 0;
       return;
     }
-    this.acc += (dt * this.speed) / MS_PER_GAME_MINUTE;
+    this.acc += (dt * this.speed * Math.max(0, Math.min(1, this.pace?.() ?? 1))) / MS_PER_GAME_MINUTE;
     let steps = Math.floor(this.acc);
     if (steps > 400) {
       // Server fell behind (e.g. laptop asleep): don't try to catch up.

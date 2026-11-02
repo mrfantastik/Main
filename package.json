@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "tsx src/server/index.ts",
+    "free": "tsx scripts/free.ts",
     "dev": "tsx src/server/index.ts",
     "build": "vite build",
     "serve": "vite build && tsx src/server/index.ts --prod",

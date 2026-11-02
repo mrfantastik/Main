@@ -1,4 +1,5 @@
 import type { LLMClient, LLMRequest, LLMResponse } from "./llm";
+import { isCloudModel } from "./localai";
 
 // Free AI anyone can use: public chat endpoints that need no account and no
 // key. Several are tried in turn, because free services come and go and
@@ -119,7 +120,8 @@ export function extractJson(text: string): unknown {
 
 /** For a model list: prefer small, fast, general chat models. */
 export function pickModel(ids: string[]): string | null {
-  const usable = ids.filter((id) => !/embed|whisper|tts|audio|image|vision|dall|moderation|coder|guard|rerank/i.test(id));
+  // (Never one of Ollama's cloud models: they run on ollama.com and can cost money.)
+  const usable = ids.filter((id) => !/embed|whisper|tts|audio|image|vision|dall|moderation|coder|guard|rerank/i.test(id) && !isCloudModel(id));
   const preferred = [/gpt-4o-mini|gpt-4\.1-nano|gpt-4\.1-mini|gpt-oss/i, /llama.*(8b|instruct)|mistral-small|gemma|qwen.*instruct/i, /mini|nano|small|fast|flash|turbo/i];
   for (const re of preferred) {
     const hit = usable.find((id) => re.test(id) && !/r1|reason|think/i.test(id));
@@ -182,6 +184,8 @@ export function createFreeAIClient(opts: FreeAIOptions = {}): FreeAIClient {
 
   async function callChat(p: FreeProvider, system: string, user: string): Promise<LLMResponse> {
     const isPollinations = /pollinations\.ai/.test(p.url);
+    // Ollama (on its usual port) can be held to JSON, which small local models need.
+    const isOllama = /:11434\//.test(p.url);
     const res = await timed(p.url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(p.key ? { Authorization: `Bearer ${p.key}` } : {}) },
@@ -196,6 +200,7 @@ export function createFreeAIClient(opts: FreeAIOptions = {}): FreeAIClient {
         seed: seed++,
         // Pollinations: keep the town's chatter out of the public feed, and say who's asking.
         ...(isPollinations ? { private: true, referrer: "ai-hustle-city" } : {}),
+        ...(isOllama ? { response_format: { type: "json_object" } } : {}),
       }),
     });
     if (!res.ok) throw await failure(res);

@@ -171,12 +171,26 @@ export function thoughtPrompt(world: WorldState, c: Citizen): { user: string; sc
     s.worry ? `On their mind: ${s.worry}` : "",
     mem.length ? `Lately:\n${mem.join("\n")}` : "",
     news.length ? `News they've heard:\n${news.join("\n")}` : "",
-    `What the simulation says they're thinking (for reference only, say it your own way or think about something else on their mind): ${c.thought}`,
+    ...thoughtCueLines(world, c),
     `Reply as JSON: {"thought": "..."}`,
   ]
     .filter(Boolean)
     .join("\n");
   return { user, schema: { type: "object", properties: { thought: { type: "string" } }, required: ["thought"] } };
+}
+
+/**
+ * What prompted the thought. With only the AI deciding: what's just happened
+ * or what they're off to do (the town's words, for reference) and their last
+ * thought (so it moves on). Otherwise the built-in AI's own thought.
+ */
+function thoughtCueLines(world: WorldState, c: Citizen): string[] {
+  if (!world.ai.aiOnly) return [`What the simulation says they're thinking (for reference only, say it your own way or think about something else on their mind): ${c.thought}`];
+  const cue = c.thoughtCue && world.time - c.thoughtCue.t < 180 ? c.thoughtCue.text : "";
+  return [
+    cue ? `What's just happened, or what they're about to do (the town's words, for reference: put it their own way, or think about something else on their mind): ${cue}` : "",
+    c.thoughtSource === "llm" && c.thought ? `Their last thought (don't repeat it): ${c.thought}` : "",
+  ].filter(Boolean);
 }
 
 /** What a citizen has heard about lately, and their take. */

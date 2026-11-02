@@ -1,5 +1,6 @@
 import { situation } from "../ai/situation";
 import { priceFloor } from "../economy/business";
+import { outstanding } from "../economy/bank";
 import { corpOpenings } from "../economy/jobs";
 import { netWorth } from "../economy/valuation";
 import { learn } from "../dialogue/knowledge";
@@ -23,13 +24,13 @@ import type { AgentAction, AgentActionType, AgentDecision, DealKind, Intent } fr
 // rumour started). Either way the agent is told what actually happened.
 
 export const ACTION_TYPES: AgentActionType[] = ["talk", "seek_work", "propose_deal", "lend", "help", "spread_rumour", "compete", "confront", "make_up", "ask_out", "change_goal", "start_project", "carry_on"];
-export const DEAL_KINDS: DealKind[] = ["loan", "investment", "job_offer", "job_ask", "sale", "partnership"];
+export const DEAL_KINDS: DealKind[] = ["loan", "investment", "job_offer", "job_ask", "sale", "partnership", "repayment", "ask_help"];
 
 /** The action menu, as a model sees it. */
 export const ACTION_HELP: Record<AgentActionType, string> = {
   talk: "go and find someone to talk to (target; text: what about)",
   seek_work: "look for a job (target: a business owner to ask, or none for CityCorp)",
-  propose_deal: "propose a deal (target; deal: loan = ask them to lend you money (amount), investment = ask them to invest in your business (amount), job_offer = offer them a job at your business, job_ask = ask them for a job, sale = sell them your stock, partnership = ask them to put money into your plan (amount))",
+  propose_deal: "propose a deal (target; deal: loan = ask them to lend you money (amount), investment = ask them to invest in your business (amount), job_offer = offer them a job at your business, job_ask = ask them for a job, sale = sell them your stock, partnership = ask them to put money into your plan (amount), repayment = ask them to pay back what they owe you, ask_help = ask them to help you out with a bit of money when you're desperate)",
   lend: "offer to lend someone money (target, amount)",
   help: "give someone money, no strings (target, amount)",
   spread_rumour: "tell people something about someone (about; text: what you'll say; it doesn't have to be true)",
@@ -67,6 +68,11 @@ const spareOf = (world: WorldState, c: Citizen) => {
 
 function openBizOf(world: WorldState, c: Citizen) {
   return c.businessIds.map((id) => world.businesses[id]).find((b) => b && b.open && b.ownerId === c.id) ?? null;
+}
+
+/** The loan `borrower` hasn't paid `lender` back yet (if any). */
+function owedBy(world: WorldState, lender: Citizen, borrower: Citizen) {
+  return world.loans.find((l) => l.lender === lender.id && l.borrower === borrower.id && l.status === "active") ?? null;
 }
 
 function inCouple(c: Citizen): CitizenId | null {
@@ -176,6 +182,14 @@ export function checkAction(world: WorldState, c: Citizen, a: AgentAction): stri
           if (pr.partners.includes(t!.id)) return `${t!.name} is already in`;
           return null;
         }
+        case "repayment": {
+          const l = owedBy(world, c, t!);
+          if (!l) return `${t!.name} doesn't owe them anything`;
+          if (world.time < l.dueT - 1440) return `it isn't due until day ${Math.floor(l.dueT / 1440) + 1}`;
+          return world.time - (c.cooldowns[`chase:${t!.id}`] ?? -1e9) < 1440 ? `they chased ${t!.name} for it only yesterday` : null;
+        }
+        case "ask_help":
+          return world.time - (c.cooldowns[`help:${t!.id}`] ?? -1e9) < 1440 ? `they asked ${t!.name} for help only yesterday` : null;
       }
       return null;
     }
@@ -306,6 +320,12 @@ export function carryOut(world: WorldState, c: Citizen, a: AgentAction, d: Agent
           const pr = s.projects.find((p) => p.status === "active" && p.need > p.raised)!;
           return later("recruit", { projectId: pr.id, amount: Math.max(20, Math.min(pr.need - pr.raised, a.amount ?? pr.need - pr.raised)) }, 0.7, `Going to ask ${t!.name} to come in on the plan to ${pr.title.toLowerCase()}.`);
         }
+        case "repayment": {
+          const l = owedBy(world, c, t!)!;
+          return later("demand_repayment", { loanId: l.id }, 0.7, `Going to ask ${t!.name} for the ${money(Math.round(outstanding(l)))} they owe.`);
+        }
+        case "ask_help":
+          return later("ask_help", {}, 0.75, `Going to ask ${t!.name} to help them out.`);
       }
       return "Nothing came of it.";
     }

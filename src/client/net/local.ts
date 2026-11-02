@@ -1,9 +1,10 @@
-import { describeSkip, type AIStatusDTO, type ClientMsg, type HelloMsg, type ServerMsg } from "../../shared/protocol";
+import { describeSkip, SKIP_AI_ONLY, type AIStatusDTO, type ClientMsg, type HelloMsg, type ServerMsg } from "../../shared/protocol";
 import { newWorld as createWorld } from "../../sim";
 import { AIDirector, type DirectorLimits } from "../../sim/ai/director";
 import { BrainClient } from "../brain/client";
 import { packFromFiles, saveToDisk } from "../brain/models";
 import { createFreeAIClient } from "../../sim/ai/freeai";
+import { notLocal } from "../../sim/ai/localai";
 import { applyGodCommand, GodError } from "../../sim/god";
 import { saveCard } from "../../sim/mind/bot";
 import { prepareLoadedWorld } from "../../sim/migrate";
@@ -122,6 +123,8 @@ export class LocalHost {
   /** The town's brain: an open-source model running in this page (the default AI here). */
   private readonly brain: BrainClient | null;
   private lastBrainPush = 0;
+  /** Free and on this computer: the town's brain, or a model of your own on this computer or network. */
+  private readonly localOnly: boolean;
   private selected: { kind: "citizen" | "business"; id: string } | null = null;
   private dashboardOpen = false;
   private lastEventId = 0;
@@ -145,12 +148,14 @@ export class LocalHost {
         }
       };
       this.director = new AIDirector(this.brain, { total: () => 0, add: () => undefined }, { maxConcurrent: 1, minIntervalMs: 0, timeoutMs: 120_000 });
+      this.localOnly = true;
     } else {
       // ?freeai=<url> (tests, or a model server of your own): a free OpenAI-style endpoint instead.
       this.brain = null;
       this.endpoint = url === null ? null : savedEndpoint();
       // (?model=: the model name the endpoint expects, e.g. llama3.1 for Ollama.)
       this.director = new AIDirector(url === null ? null : createFreeAIClient({ url, model: params.get("model") || undefined, custom: this.endpoint }), { total: () => 0, add: () => undefined }, { maxConcurrent: 2, minIntervalMs: 2500, timeoutMs: 45_000 });
+      this.localOnly = url !== null && !notLocal(url, params.get("model"));
     }
     const limits = savedLimits();
     if (limits) this.director.setLimits(limits);
@@ -174,6 +179,7 @@ export class LocalHost {
     if (world) this.savedAt = world.time;
     this.runner = new SimRunner(world ?? this.fresh());
     this.configureAI(this.runner.world);
+    this.runner.pace = () => this.director.pace(this.runner.world);
     this.runner.afterSteps = (w) => {
       this.director.pump(w);
       for (const n of this.director.notices.splice(0)) this.toast(n.text, n.level);
@@ -295,6 +301,8 @@ export class LocalHost {
       brain: this.brain ? { ...this.brain.status } : null,
       limits: { ...this.director.limits, liveChats: this.director.limits.liveChats ?? null },
       aiOnly: !!ai.aiOnly,
+      waiting: ai.aiOnly ? { ...this.director.backlog(this.world), pace: this.director.pace(this.world), waitForAI: ai.waitForAI !== false } : null,
+      localOnly: this.localOnly,
     };
   }
 
@@ -392,9 +400,10 @@ export class LocalHost {
         }
         break;
       case "ai":
-        if (msg.limits || msg.aiOnly !== undefined) {
+        if (msg.limits || msg.aiOnly !== undefined || msg.waitForAI !== undefined) {
           if (msg.limits) this.director.setLimits(msg.limits);
           if (msg.aiOnly !== undefined) w.ai.aiOnly = msg.aiOnly;
+          if (msg.waitForAI !== undefined) w.ai.waitForAI = msg.waitForAI;
           try {
             localStorage.setItem(AI_LIMITS, JSON.stringify(this.director.limits));
             localStorage.setItem(AI_ONLY_PREF, w.ai.aiOnly ? "on" : "off");
@@ -478,6 +487,10 @@ export class LocalHost {
       case "skip": {
         const minutes = Number(msg.minutes);
         if (!Number.isFinite(minutes) || minutes <= 0) break;
+        if (w.ai.aiOnly) {
+          this.toast(SKIP_AI_ONLY, "error");
+          break;
+        }
         const n = this.runner.skip(minutes);
         this.pushState();
         if (this.dashboardOpen) this.deliver(snap.dashboard(w));

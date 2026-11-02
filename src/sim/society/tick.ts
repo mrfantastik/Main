@@ -55,14 +55,16 @@ export function decide(world: WorldState, c: Citizen, a: AgentAction, source: "l
 export function applyModelDecision(world: WorldState, c: Citizen, reply: unknown, note?: string): { decision: AgentDecision; fallback: AgentDecision | null } {
   const r = readAction(world, c, (reply as { decision?: unknown } | null)?.decision ?? reply);
   const intention = typeof (reply as { intention?: unknown } | null)?.intention === "string" ? String((reply as { intention: string }).intention).slice(0, 160) : null;
+  // (Only the AI decides: no built-in judgement to fall back on; the AI is asked again instead.)
+  const fallback = (why: string) => (world.ai.aiOnly ? null : rulesDecide(world, c, why));
   if (!r.ok) {
     const d = logDecision(world, c, { type: "carry_on", reason: "(the model's answer couldn't be used)" }, "llm", note);
     settleDecision(c, d.id, "rejected", `Couldn't use it: ${r.error}.`, r.error);
-    return { decision: d, fallback: rulesDecide(world, c, `after the model's answer was turned down (${r.error})`) };
+    return { decision: d, fallback: fallback(`after the model's answer was turned down (${r.error})`) };
   }
   const d = decide(world, c, r.action, "llm", note);
   if (intention && d.status !== "rejected") societyOf(world, c).intention = { text: intention, t: world.time, source: "llm" };
-  if (d.status === "rejected") return { decision: d, fallback: rulesDecide(world, c, `after the model's choice wasn't possible (${d.error})`) };
+  if (d.status === "rejected") return { decision: d, fallback: fallback(`after the model's choice wasn't possible (${d.error})`) };
   return { decision: d, fallback: null };
 }
 
@@ -99,6 +101,11 @@ export function societyTick(world: WorldState): void {
     s.lastThought = world.time;
     const why = jolt ? `after: ${jolt}` : "time to take stock";
     if (roster && decisionHook && decisionHook(world, c, why)) continue;
+    // Only the AI decides, and it can't take this on now: they think again in a little while.
+    if (world.ai.aiOnly) {
+      s.lastThought = world.time - SOCIETY.thinkEvery + SOCIETY.retryAfter;
+      continue;
+    }
     rulesDecide(world, c, why);
   }
 }

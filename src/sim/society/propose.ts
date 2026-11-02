@@ -158,6 +158,19 @@ export function proposeByRules(world: WorldState, c: Citizen): { action: AgentAc
     .sort((x, y) => (rel(y)?.affinity ?? 0) - (rel(x)?.affinity ?? 0))[0];
   if (missed) add({ type: "talk", target: missed.id, reason: `I haven't caught up with ${missed.name} in days.` }, 0.1 + b5.extraversion * 0.2 + p.warmth * 0.12 + (c.family.includes(missed.id) && goals.some((g) => g.kind === "help_family") ? 0.15 : 0));
 
+  // Money they're owed and should have had back by now: chase it.
+  for (const l of world.loans) {
+    if (l.lender !== c.id || l.status !== "active" || world.time < l.dueT) continue;
+    const o = world.citizens[l.borrower];
+    if (o) add({ type: "propose_deal", deal: "repayment", target: o.id, reason: `${o.name} still owes me money.` }, 0.35 + c.traits.greed * 0.25 + Math.min(0.2, (world.time - l.dueT) / (5 * 1440)));
+  }
+
+  // Broke and hungry: ask family or a close friend for help.
+  if (sit.liquid < 12 && (c.needs.hunger < 45 || c.homeless)) {
+    const helper = others.filter((o) => c.family.includes(o.id) || (rel(o)?.affinity ?? 0) > 40).sort((x, y) => y.money + y.savings - (x.money + x.savings))[0];
+    if (helper) add({ type: "propose_deal", deal: "ask_help", target: helper.id, reason: "I'm broke and I'm hungry." }, 0.6 + (1 - b5.agreeableness) * 0.05);
+  }
+
   // Out of work and no plan for it.
   if (c.occupation === "unemployed" && !s.projects.some((x) => x.status === "active" && x.kind === "get_job")) add({ type: "seek_work", reason: "I need a job." }, 0.4 + sit.pressure * 0.4);
 

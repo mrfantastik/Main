@@ -86,8 +86,9 @@ export function agendasFor(world: WorldState, c: Citizen): Agenda[] {
     if (world.time > it.until || !world.citizens[it.target] || it.topic.startsWith("activity:")) continue;
     out.push({ topic: it.topic as ConversationTopic, targetId: it.target, urgency: it.urgency, params: { ...it.params, decision: it.decision }, reason: it.reason });
   }
-  // An agent the model runs makes its own moves: the built-in habits below stand back.
-  if (modelRuns(world, c)) return out.sort((x, y) => y.urgency - x.urgency);
+  // An agent the model runs makes its own moves: the built-in habits below stand back
+  // (and with only the AI deciding, there are no built-in habits at all).
+  if (world.ai.aiOnly || modelRuns(world, c)) return out.sort((x, y) => y.urgency - x.urgency);
   const others = world.citizenOrder.filter((id) => id !== c.id).map((id) => world.citizens[id]);
   // Net worth is costly; nothing changes while we plan, so work it out once per person.
   const worthCache = new Map<string, number>();
@@ -1045,7 +1046,8 @@ export function startOpportunisticConversations(world: WorldState): void {
         return feuding(o) || (f.anger ?? 0) > 35 || (f.envy ?? 0) > 40;
       });
       const feud = !!foe && feuding(foe);
-      if (foe && chance(world, (feud ? 0.12 : 0.06) + (1 - c.mood / 100) * 0.1 + (c.emotions.anger / 100) * 0.15)) {
+      // (Only the AI decides: having it out with someone is theirs to decide, as an agent.)
+      if (foe && !world.ai.aiOnly && chance(world, (feud ? 0.12 : 0.06) + (1 - c.mood / 100) * 0.1 + (c.emotions.anger / 100) * 0.15)) {
         const r = peekRel(c, foe.id)!;
         const g = feelingsToward(c, foe.id);
         c.cooldowns[`argue:${foe.id}`] = foe.cooldowns[`argue:${c.id}`] = world.time;

@@ -79,6 +79,11 @@ export function recordDecision(
  * conversations, life events) aren't immediately overwritten by mundane ones.
  */
 export function setThought(world: WorldState, c: Citizen, text: string, priority: number, source: "utility" | "llm" = "utility"): void {
+  // Only the AI decides: the town's own words are a cue for the AI to think about, never shown.
+  if (world.ai.aiOnly && source !== "llm") {
+    cueThought(world, c, text, priority);
+    return;
+  }
   const age = world.time - c.thoughtT;
   const holdFor = c.thoughtPriority >= 3 ? 150 : 45;
   if (priority >= c.thoughtPriority || age > holdFor) {
@@ -88,4 +93,20 @@ export function setThought(world: WorldState, c: Citizen, text: string, priority
     c.thoughtT = world.time;
     c.thoughtSource = source;
   }
+}
+
+/**
+ * Only the AI decides: something to think about (what just happened, what
+ * they're off to do), kept until the AI puts it into words. A bigger thing
+ * isn't pushed out by a smaller one for a while.
+ */
+export function cueThought(world: WorldState, c: Citizen, text: string, priority: number): void {
+  const cue = c.thoughtCue;
+  if (cue && !cue.asked && priority < cue.priority && world.time - cue.t < (cue.priority >= 3 ? 150 : 45)) return;
+  c.thoughtCue = { text, t: world.time, priority };
+}
+
+/** What they're thinking, as the player sees it: with only the AI deciding, only ever what the AI wrote. */
+export function shownThought(world: WorldState, c: Citizen): string {
+  return world.ai.aiOnly && c.thoughtSource !== "llm" ? "" : c.thought;
 }

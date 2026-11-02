@@ -128,12 +128,21 @@ function AgentsBox() {
   return (
     <div className="box">
       <h3>🎯 Agents</h3>
-      <p style={{ marginTop: 0 }}>
-        Every citizen is an agent with their own goals, plans, memories and beliefs. For the <b>{s.size}</b> on the AI roster, {on ? "the AI proposes" : "the AI would propose (it's off now, so the built-in judgement does)"} what they do next: talk to someone, ask
-        for a loan or a job, lend, help, start a plan, spread a story, undercut a rival, make up, ask someone out. The town checks every proposal
-        (money, ownership, who knows whom, time) before anything happens, and tells them how it went. Everyone else, and anyone the AI can't answer
-        for, is run by the built-in judgement. 🧠 marks what the AI came up with, ⚙️ the built-in judgement.
-      </p>
+      {ai?.aiOnly ? (
+        <p style={{ marginTop: 0 }}>
+          Every citizen is an agent with their own goals, plans, memories and beliefs, and with only the AI deciding, the AI runs <b>all {s.size}</b>{on ? "" : " (it's off now, so nobody decides anything until it's back)"}: what
+          they do about people (talk to someone, ask for a loan, a job or help, chase a debt, lend, give, start a plan, spread a story, undercut a rival, make up,
+          ask someone out), what they do next, their big decisions and whatever comes up. The town checks every proposal (money, ownership, who knows whom,
+          time) before anything happens, and tells them how it went.
+        </p>
+      ) : (
+        <p style={{ marginTop: 0 }}>
+          Every citizen is an agent with their own goals, plans, memories and beliefs. For the <b>{s.size}</b> on the AI roster, {on ? "the AI proposes" : "the AI would propose (it's off now, so the built-in judgement does)"} what they do next: talk to someone, ask
+          for a loan or a job, lend, help, start a plan, spread a story, undercut a rival, make up, ask someone out. The town checks every proposal
+          (money, ownership, who knows whom, time) before anything happens, and tells them how it went. Everyone else, and anyone the AI can't answer
+          for, is run by the built-in judgement. 🧠 marks what the AI came up with, ⚙️ the built-in judgement.
+        </p>
+      )}
       <div className="kv">
         <span className="k">Decisions</span>
         <span>
@@ -142,7 +151,7 @@ function AgentsBox() {
         <span className="k">Group chats now</span>
         <span>{s.groupsNow}</span>
       </div>
-      <div className="god-row">
+      <div className="god-row" style={ai?.aiOnly ? { display: "none" } : undefined}>
         <input placeholder={`AI agents (now ${s.size})`} value={size} onChange={(e) => setSize(e.target.value)} />
         <button
           className="btn"
@@ -193,10 +202,29 @@ function TalkLimits() {
       <label style={{ display: "flex", gap: 6, alignItems: "flex-start", marginBottom: 6 }}>
         <input type="checkbox" checked={!!ai.aiOnly} onChange={(e) => store.send({ type: "ai", aiOnly: e.target.checked })} />
         <span>
-          <b>Only the AI speaks</b> (no built-in lines, ever). A conversation only happens if the AI can speak it; a line it gets wrong is asked for again, never filled in; if it stops answering, the conversation just ends there.
-          {ai.aiOnly && !on && <span className="chip bad" style={{ marginLeft: 6 }}>no AI connected: nobody's talking</span>}
+          <b>Only the AI speaks, thinks and decides</b> (nothing built-in, ever). Every line, every thought you see and every decision is the AI's: what people
+          do next, their big decisions, what they do about each other, an owner's answer to an applicant or an offer, a trader's move. A conversation only
+          happens if the AI can speak it; anything it gets wrong is asked for again, never filled in. Until the AI has decided, people wait where they are.
+          {ai.aiOnly && !on && <span className="chip bad" style={{ marginLeft: 6 }}>no AI connected: nobody's talking or deciding</span>}
         </span>
       </label>
+      {ai.aiOnly && ai.waiting && (
+        <div className="kv" style={{ marginBottom: 6 }}>
+          <span className="k">Waiting for the AI</span>
+          <span>
+            {ai.waiting.people} {ai.waiting.people === 1 ? "person" : "people"} waiting to be told what they do · {ai.waiting.decisions} other decision{ai.waiting.decisions === 1 ? "" : "s"} queued
+            {ai.waiting.pace < 1 ? ` · clock slowed to ${Math.round(ai.waiting.pace * 100)}%` : ""}
+          </span>
+        </div>
+      )}
+      {ai.aiOnly && (
+        <label style={{ display: "flex", gap: 6, alignItems: "flex-start", marginBottom: 6 }}>
+          <input type="checkbox" checked={ai.waiting?.waitForAI ?? true} onChange={(e) => store.send({ type: "ai", waitForAI: e.target.checked })} />
+          <span>
+            <b>Slow the clock while people wait for the AI</b>, so a slower model can keep up (otherwise the town's day runs on while they stand there).
+          </span>
+        </label>
+      )}
       <div className="kv">
         <span className="k">AI-spoken chats</span>
         <span>
@@ -255,15 +283,31 @@ function FreeAIBox({ ai }: { ai: AIStatusDTO }) {
   return (
     <div className="box">
       <h3>Who's thinking and talking</h3>
-      <p style={{ marginTop: 0 }}>
-        Citizens run on the built-in <b>utility AI</b> (needs, money, personality, memories, relationships). On top of that a <b>free public AI</b>{" "}
-        (no account, no key, no cost) writes their <b>conversations</b>, their <b>thoughts</b> (whoever you're looking at first) and their{" "}
-        <b>tough decisions</b>, from who they are, how they feel, what they've heard and what they remember.
-      </p>
-      <p>
-        The town still decides what happens (who lends what, what news gets passed on), so the AI can't break the economy. Free services are slow
-        and rate limited: whatever they can't get to (or anything during a skip) the built-in AI improvises. AI-written lines have a gold border.
-      </p>
+      {ai.localOnly ? (
+        <>
+          <p style={{ marginTop: 0 }}>
+            <span className="chip good">🆓 Free · on this computer</span> An open-source model running on <b>this computer</b> ({ai.model}, through Ollama or
+            your own model server) writes {ai.aiOnly ? <>every <b>conversation</b>, every <b>thought</b> and every <b>decision</b> in town</> : <>the town's <b>conversations</b>, <b>thoughts</b> and <b>tough decisions</b></>}, each person from their own point of view.
+          </p>
+          <p>
+            Nothing here can cost money: Claude, the public AI services and Ollama's cloud models are all switched off, and nothing you say or the town
+            does leaves your computer. The town still checks every proposal (who can afford what, who knows whom), so the AI can't break the economy.
+            AI-written lines have a gold border.
+          </p>
+        </>
+      ) : (
+        <>
+          <p style={{ marginTop: 0 }}>
+            Citizens run on the built-in <b>utility AI</b> (needs, money, personality, memories, relationships). On top of that a <b>free public AI</b>{" "}
+            (no account, no key, no cost) writes their <b>conversations</b>, their <b>thoughts</b> (whoever you're looking at first) and their{" "}
+            <b>tough decisions</b>, from who they are, how they feel, what they've heard and what they remember.
+          </p>
+          <p>
+            The town still decides what happens (who lends what, what news gets passed on), so the AI can't break the economy. Free services are slow
+            and rate limited: whatever they can't get to (or anything during a skip) the built-in AI improvises. AI-written lines have a gold border.
+          </p>
+        </>
+      )}
       {conn?.blocked && (
         <div className="item" style={{ borderColor: "#e5484d", marginBottom: 8 }}>
           <b>This page can't reach the internet.</b> Pages published on claude.ai aren't allowed to call outside services, so here the built-in AI
@@ -309,7 +353,7 @@ function FreeAIBox({ ai }: { ai: AIStatusDTO }) {
           🔄 Test connection
         </button>
       </div>
-      <details>
+      <details style={ai.localOnly ? { display: "none" } : undefined}>
         <summary style={{ cursor: "pointer" }}>🔌 Use your own free endpoint</summary>
         <p className="muted" style={{ fontSize: 12 }}>
           Any OpenAI-style chat endpoint works (for example a free key from a provider, or a model running on your own computer with Ollama or LM

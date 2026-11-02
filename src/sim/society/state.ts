@@ -21,9 +21,9 @@ export function societyOf(world: WorldState, c: Citizen): SocietyState {
   return c.society;
 }
 
-/** The citizen is one of the agents a language model runs. */
+/** The citizen is one of the agents a language model runs (with only the AI deciding, everyone is). */
 export function onRoster(world: WorldState, id: CitizenId): boolean {
-  return societyWorld(world).roster.includes(id);
+  return !!world.ai.aiOnly || societyWorld(world).roster.includes(id);
 }
 
 /**

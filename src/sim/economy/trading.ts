@@ -1,4 +1,5 @@
 import { registerAction } from "../ai/actions";
+import { putToAI, registerChoice, waitingToHear } from "../ai/choices";
 import { recordDecision, setThought, type Option } from "../ai/decision";
 import { situation } from "../ai/situation";
 import { logEvent } from "../events";
@@ -77,6 +78,11 @@ export function tradingSignals(world: WorldState, c: Citizen): Signal[] {
 }
 
 export function runTradingSession(world: WorldState, c: Citizen): string {
+  // Only the AI deciding: the trader's AI picks the move (see the "trade" choice below).
+  if (putToAI(world, c, "trade", {})) {
+    waitingToHear(world, c, "At the Exchange, weighing up what to buy and sell.");
+    return "";
+  }
   const s = situation(world, c);
   const signals = tradingSignals(world, c).sort((a, b) => b.signal - a.signal);
   const notes: string[] = [];
@@ -103,41 +109,20 @@ export function runTradingSession(world: WorldState, c: Citizen): string {
       thought: "",
     });
     if (!sell) continue;
-    const qty = it.qty;
-    const unitCost = removeStock(c.inventory, sig.pid, qty);
-    const fillPrice = fill(world, sig.pid, qty, "sell");
-    const total = round2(fillPrice * qty);
-    transfer(world, externalAcc("exchange"), citizenAcc(c.id), total, "trade", `Sold ${qty}× ${world.products[sig.pid].name} on the Exchange`);
-    const profit = round2((fillPrice - unitCost) * qty);
-    creditOccupation(world, c.id, profit);
-    notes.push(`${profit >= 0 ? "made" : "lost"} ${money(Math.abs(profit))} on ${world.products[sig.pid].name}`);
-    if (Math.abs(profit) >= 60) {
-      logEvent(world, "finance", `${profit >= 0 ? "📈" : "📉"} ${c.name} ${profit >= 0 ? "made" : "lost"} ${money(Math.abs(profit))} trading ${world.products[sig.pid].name}.`, 3, [c.id]);
-      remember(world, c, { text: `I ${profit >= 0 ? "made" : "lost"} ${money(Math.abs(profit))} trading ${world.products[sig.pid].name}.`, kind: "financial", importance: 6, valence: profit >= 0 ? 0.7 : -0.7, people: [] });
-    }
+    notes.push(sellAll(world, c, sig.pid));
   }
 
   // Then buy the strongest signals.
-  let budget = Math.max(0, (s.liquid - s.dailyCost * 3) * (0.4 + c.traits.risk * 0.5) * (1 - fear * 0.4));
+  let budget = tradingBudget(world, c, s);
   for (const sig of signals.slice(0, 3)) {
     const m = world.market[sig.pid];
     const price = round2(m.wholesale * (1 + SPREAD));
     options.push({ id: `buy:${sig.pid}`, label: `Buy ${world.products[sig.pid].name} at ${money(price)}`, factors: sig.factors, payload: null, thought: "" });
-    if (sig.signal < buyThreshold || budget < price) continue;
-    const room = maxPosition(world, c, sig.pid) - (c.inventory[sig.pid]?.qty ?? 0);
-    const qty = Math.min(room, Math.floor((budget * 0.6) / price));
-    if (qty <= 0) continue;
-    // Quote the whole order (including its price impact) before committing.
-    const move = (IMPACT * qty) / marketDepth(world, sig.pid);
-    const quote = round2(price * (1 + move / 2) * qty);
-    if (quote > budget || !ensureCash(c, quote)) continue;
-    const fillPrice = fill(world, sig.pid, qty, "buy");
-    const total = round2(fillPrice * qty);
-    if (!transfer(world, citizenAcc(c.id), externalAcc("exchange"), total, "trade", `Bought ${qty}× ${world.products[sig.pid].name} on the Exchange`)) continue;
-    addStock(c.inventory, sig.pid, qty, fillPrice);
-    budget -= total;
-    const why = sig.factors.insight ? "my research tip says it's about to boom" : sig.factors.momentum > sig.factors.dip ? "the price has momentum" : "it's below its usual price";
-    notes.push(`bought ${qty}× ${world.products[sig.pid].name} at ${money(fillPrice)} because ${why}`);
+    if (sig.signal < buyThreshold) continue;
+    const got = buyFor(world, c, sig, budget);
+    if (!got) continue;
+    budget -= got.spent;
+    notes.push(got.note);
   }
   c.skills.trading = Math.min(100, c.skills.trading + 0.4);
 
@@ -148,6 +133,91 @@ export function runTradingSession(world: WorldState, c: Citizen): string {
   setThought(world, c, thought, 3);
   return thought;
 }
+
+/** Sell everything they hold of one product at the Exchange: what came of it, in words. */
+function sellAll(world: WorldState, c: Citizen, pid: string): string {
+  const qty = c.inventory[pid]?.qty ?? 0;
+  const name = world.products[pid].name;
+  const unitCost = removeStock(c.inventory, pid, qty);
+  const fillPrice = fill(world, pid, qty, "sell");
+  const total = round2(fillPrice * qty);
+  transfer(world, externalAcc("exchange"), citizenAcc(c.id), total, "trade", `Sold ${qty}× ${name} on the Exchange`);
+  const profit = round2((fillPrice - unitCost) * qty);
+  creditOccupation(world, c.id, profit);
+  if (Math.abs(profit) >= 60) {
+    logEvent(world, "finance", `${profit >= 0 ? "📈" : "📉"} ${c.name} ${profit >= 0 ? "made" : "lost"} ${money(Math.abs(profit))} trading ${name}.`, 3, [c.id]);
+    remember(world, c, { text: `I ${profit >= 0 ? "made" : "lost"} ${money(Math.abs(profit))} trading ${name}.`, kind: "financial", importance: 6, valence: profit >= 0 ? 0.7 : -0.7, people: [] });
+  }
+  return `${profit >= 0 ? "made" : "lost"} ${money(Math.abs(profit))} on ${name}`;
+}
+
+/** How much a trader is prepared to put in today (fear makes them bet less). */
+function tradingBudget(world: WorldState, c: Citizen, s = situation(world, c)): number {
+  const fear = c.emotions.fear / 100;
+  return Math.max(0, (s.liquid - s.dailyCost * 3) * (0.4 + c.traits.risk * 0.5) * (1 - fear * 0.4));
+}
+
+/** Buy into a product with part of the budget (null: not enough for any, or no room for more). */
+function buyFor(world: WorldState, c: Citizen, sig: Signal, budget: number): { spent: number; note: string } | null {
+  const m = world.market[sig.pid];
+  const price = round2(m.wholesale * (1 + SPREAD));
+  if (budget < price) return null;
+  const room = maxPosition(world, c, sig.pid) - (c.inventory[sig.pid]?.qty ?? 0);
+  const qty = Math.min(room, Math.floor((budget * 0.6) / price));
+  if (qty <= 0) return null;
+  // Quote the whole order (including its price impact) before committing.
+  const move = (IMPACT * qty) / marketDepth(world, sig.pid);
+  const quote = round2(price * (1 + move / 2) * qty);
+  if (quote > budget || !ensureCash(c, quote)) return null;
+  const fillPrice = fill(world, sig.pid, qty, "buy");
+  const total = round2(fillPrice * qty);
+  if (!transfer(world, citizenAcc(c.id), externalAcc("exchange"), total, "trade", `Bought ${qty}× ${world.products[sig.pid].name} on the Exchange`)) return null;
+  addStock(c.inventory, sig.pid, qty, fillPrice);
+  return { spent: total, note: `bought ${qty}× ${world.products[sig.pid].name} at ${money(fillPrice)} because ${whyBuy(sig)}` };
+}
+
+function whyBuy(sig: Signal): string {
+  return sig.factors.insight ? "my research tip says it's about to boom" : sig.factors.momentum > sig.factors.dip ? "the price has momentum" : "it's below its usual price";
+}
+
+type TradeMove = { side: "sell" | "buy" | "hold"; pid?: string };
+
+// Only the AI deciding: the trader's AI picks one move a session (see ai/choices.ts).
+registerChoice<TradeMove>("trade", {
+  wait: 4 * 60,
+  title: () => "At the Exchange: what to buy or sell today, if anything",
+  options(world, c) {
+    if (c.occupation !== "trader") return null;
+    const signals = tradingSignals(world, c).sort((a, b) => b.signal - a.signal);
+    const out: Option<TradeMove>[] = [];
+    for (const sig of signals) {
+      const it = c.inventory[sig.pid];
+      if (!it || it.qty <= 0) continue;
+      const price = round2(world.market[sig.pid].wholesale * (1 - SPREAD));
+      const change = (price - it.avgCost) / it.avgCost;
+      out.push({ id: `sell:${sig.pid}`, label: `Sell your ${it.qty}× ${world.products[sig.pid].name} at ${money(price)} (${change >= 0 ? "+" : ""}${Math.round(change * 100)}% on what you paid)`, factors: sig.factors, payload: { side: "sell", pid: sig.pid }, thought: "" });
+    }
+    const budget = tradingBudget(world, c);
+    for (const sig of signals.slice(0, 3)) {
+      const price = round2(world.market[sig.pid].wholesale * (1 + SPREAD));
+      if (budget >= price) out.push({ id: `buy:${sig.pid}`, label: `Buy ${world.products[sig.pid].name} at ${money(price)} (${whyBuy(sig).replace(/^my/, "your")})`, factors: sig.factors, payload: { side: "buy", pid: sig.pid }, thought: "" });
+    }
+    out.push({ id: "hold", label: "Hold: buy and sell nothing today", factors: { patience: 0.03 }, payload: { side: "hold" }, thought: "" });
+    return out;
+  },
+  apply(world, c, _req, chosen) {
+    const move = chosen.payload;
+    let note = "sat on my hands";
+    if (move.side === "sell" && move.pid && (c.inventory[move.pid]?.qty ?? 0) > 0) note = sellAll(world, c, move.pid);
+    else if (move.side === "buy" && move.pid) {
+      const sig = tradingSignals(world, c).find((x) => x.pid === move.pid);
+      const got = sig ? buyFor(world, c, sig, tradingBudget(world, c)) : null;
+      note = got ? got.note : `couldn't get any ${world.products[move.pid]?.name.toLowerCase() ?? "of it"} after all`;
+    }
+    c.skills.trading = Math.min(100, c.skills.trading + 0.4);
+    setThought(world, c, `Trading session: ${note}.`, 3);
+  },
+});
 
 export function registerTradingActions(): void {
   registerAction("TRADE", {

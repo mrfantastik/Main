@@ -33,7 +33,7 @@ export function CitizenList() {
                 <div className="sub">
                   <span style={{ color: OCC_COLORS[c.occupation] }}>{OCC_LABEL[c.occupation]}</span> · {c.activity}
                 </div>
-                <div className="sub">💭 {c.thought}</div>
+                {c.thought && <div className="sub">💭 {c.thought}</div>}
               </div>
               <div className={`worth ${c.netWorth < 0 ? "neg" : ""}`}>{gbp(c.netWorth)}</div>
             </button>

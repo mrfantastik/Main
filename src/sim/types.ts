@@ -240,7 +240,8 @@ export type ActionType =
   | "CLOSE_BUSINESS"
   | "SELL_POSSESSIONS"
   | "DEPOSIT"
-  | "MEET";
+  | "MEET"
+  | "WAIT";
 
 export interface Activity {
   kind: ActivityKind;
@@ -524,6 +525,12 @@ export interface Citizen {
   goal: Goal;
   thought: string;
   thoughtSource: "utility" | "llm";
+  /**
+   * Only the AI decides (AI-only mode): what's just happened to them or what
+   * they're about to do, in the town's own words, for the AI to think about.
+   * It isn't shown: their thought is only ever what the AI wrote.
+   */
+  thoughtCue?: { text: string; t: number; priority: number; asked?: boolean };
   /** Only when the town's brain runs them: their plan for the day and their diary. */
   agent?: AgentMind;
   /** The last thing that happened to them out of the blue (God Mode), for reacting to it. */
@@ -1003,7 +1010,7 @@ export interface AILogEntry {
   id: number;
   t: number;
   citizenId: CitizenId | null;
-  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary" | "chat" | "decide";
+  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary" | "chat" | "decide" | "choice";
   prompt: string;
   response: string;
   costUsd: number;
@@ -1028,6 +1035,28 @@ export interface AIState {
    * and if the AI stops answering, a conversation simply ends where it is.
    */
   aiOnly?: boolean;
+  /**
+   * Only the AI decides: the clock slows down while people are waiting for the
+   * AI to decide what they do (unset: on).
+   */
+  waitForAI?: boolean;
+}
+
+/**
+ * A decision someone has to make about something that came up (an applicant,
+ * an investor's offer, their prices), waiting for the AI to make it (AI-only
+ * mode). Kept with the world so a save doesn't lose it.
+ */
+export interface ChoiceRequest {
+  id: number;
+  who: CitizenId;
+  kind: string;
+  params: Record<string, string | number | boolean | null>;
+  /** When it came up (game time). */
+  t: number;
+  /** Tries so far, and why the last answer was turned down. */
+  tries: number;
+  why?: string;
 }
 
 export interface WorldState {
@@ -1061,6 +1090,8 @@ export interface WorldState {
   talkRecent?: string[];
   /** The agents a language model runs, and the rumours going round (see society/). */
   society?: SocietyWorld;
+  /** Decisions waiting for the AI to make them (AI-only mode; see ai/choices.ts). */
+  choices?: ChoiceRequest[];
   events: SimEvent[];
   transactions: Transaction[];
   txCount: number;

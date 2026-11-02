@@ -15,7 +15,8 @@ import { dayOf } from "../time";
 import type { AgentPlanItem, AILogEntry, Citizen, Conversation, Reflection, WorldState } from "../types";
 import { newId, pushRing, round2 } from "../util";
 import { activityOptions, type ActivityOption } from "./activity";
-import { setActivityHook } from "./brain";
+import { setActivityHook, waitingForAI } from "./brain";
+import { choiceKind, lapseChoice, settleChoice, waitingChoices } from "./choices";
 import { scoreOf, setThought } from "./decision";
 import { addPlayerLine } from "../mind/bot";
 import { botSystem, hourLabel, smallChoicePrompt, smallPlayerChatPrompt, smallDayPlanPrompt, smallDiaryPrompt, smallNextPrompt, smallReactionPrompt, smallThoughtPrompt, type SmallPrompt } from "./small";
@@ -23,7 +24,9 @@ import { situation } from "./situation";
 import { makeAction } from "./actions";
 import type { FreeAIClient, FreeAIStatus } from "./freeai";
 import { costUsd, REFLECTION_SYSTEM, reflectionPrompt, STRATEGY_SYSTEM, strategyPrompt, THOUGHT_SYSTEM, thoughtPrompt, type LLMClient } from "./llm";
-import { applyStrategy, setStrategyHook, strategyOptions, type StrategyOption } from "./strategy";
+import { applyStrategy, askAgainLater, setStrategyHook, strategyOptions, type StrategyOption } from "./strategy";
+import { SOCIETY } from "../society/config";
+import { societyOf } from "../society/state";
 import { applyInvented, INVENT_SCHEMA, INVENT_SYSTEM, inventableKinds, inventPrompt } from "./unscripted";
 
 // The AI Director decides WHEN it's worth asking a language model.
@@ -76,7 +79,7 @@ export type DirectorLimits = Pick<DirectorOptions, "maxConcurrent" | "minInterva
 
 interface Pending {
   id: number;
-  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary" | "chat" | "decide";
+  kind: "strategy" | "conversation" | "reflection" | "invent" | "thought" | "plan" | "dayplan" | "diary" | "chat" | "decide" | "choice";
   world: WorldState;
   citizenId: string;
   convId?: number;
@@ -85,6 +88,10 @@ interface Pending {
   fallbackId?: string;
   /** Plans and diaries: which day; plans: the labels of the things they could choose from. */
   day?: number;
+  /** A decision about something that came up (see ai/choices.ts). */
+  choiceId?: number;
+  /** An agent's decision asked for again (only the AI deciding): how many times so far. */
+  tries?: number;
   labels?: Record<string, string>;
   startedAt: number;
   prompt: string;
@@ -173,12 +180,26 @@ function withNote(req: NonNullable<LiveTurn["req"]>, note: string): NonNullable<
   return { ...req, user: `${req.user}${extra}`, small };
 }
 
+/** Only the AI deciding: an agent whose decision the AI couldn't make thinks again in a little while. */
+function thinkAgainSoon(world: WorldState, c: Citizen): void {
+  societyOf(world, c).lastThought = world.time - SOCIETY.thinkEvery + SOCIETY.retryAfter;
+}
+
+/** What a decision waiting for the AI is about, in words. */
+function choiceTitle(world: WorldState, id: number | undefined): string {
+  const req = waitingChoices(world).find((r) => r.id === id);
+  const c = req ? world.citizens[req.who] : undefined;
+  return (req && c && choiceKind(req.kind)?.title(world, c, req)) || "something that came up";
+}
+
 /** Activities the next move can be planned during (not walking, talking or between things). */
 const PLANNABLE = new Set(["sleep", "work", "eat", "shop", "socialize", "rest", "bank", "browse", "trade", "research", "restock", "job_hunt", "manage"]);
 /** Options within this much of the best are offered to the model... */
 const SHOW_MARGIN = 1.8;
 /** ...and its pick is taken if, when the time comes, it's still within this much of the best. */
 const ACCEPT_MARGIN = 2.2;
+/** Only the AI deciding: the options it chooses between run this far below the best (the town's scores only order them). */
+const AI_ONLY_MARGIN = 4;
 /** A live chat whose AI keeps failing is finished by the built-in voices after this many failures in a row. */
 const LIVE_FAILURES = 3;
 
@@ -207,7 +228,13 @@ export class AIDirector {
   /** Next moves asked for (by citizen). */
   private plans = new Map<string, Plan>();
   /** Agents on the roster waiting to have a decision thought through (by citizen), and why. */
-  private wantDecide = new Map<string, { world: WorldState; why: string; at: number }>();
+  private wantDecide = new Map<string, { world: WorldState; why: string; at: number; tries?: number }>();
+  /** Only the AI deciding: big decisions (career, business, money) waiting for it (by citizen). */
+  private wantStrategy = new Map<string, { world: WorldState; at: number }>();
+  /** Decisions about something that came up, out with the AI now (choice ids). */
+  private choicesOut = new Set<number>();
+  /** Only the AI deciding: which kind of request goes first next time (they take turns). */
+  private turnNo = 0;
   /** For a small model's choice: the actions it was offered (by request id). */
   private decideOptions = new Map<number, AgentAction[]>();
   /** Live chats the town's brain is speaking for, line by line (by conversation id). */
@@ -217,7 +244,7 @@ export class AIDirector {
   /** Messages for the player (the server shows them as toasts). */
   readonly notices: { text: string; level: "info" | "error" }[] = [];
   /** What the AI has done so far: choices people acted on, conversations it wrote, thoughts. */
-  readonly tally = { plan: 0, conversation: 0, thought: 0, dayplan: 0, followed: 0, diary: 0, decide: 0 };
+  readonly tally = { plan: 0, conversation: 0, thought: 0, dayplan: 0, followed: 0, diary: 0, decide: 0, choice: 0 };
 
   constructor(
     private client: LLMClient | null,
@@ -335,6 +362,7 @@ export class AIDirector {
       invent: "Making up something that happens",
       chat: `${name} is answering you`,
       decide: `Thinking as ${name}: what to do about people and plans`,
+      choice: `Deciding for ${name}: ${choiceTitle(world, p.choiceId)}`,
     };
     return what[p.kind] + waiting;
   }
@@ -351,7 +379,7 @@ export class AIDirector {
     setActivityHook((world, c, options, utility) => this.activityHook(world, c, options, utility));
     setDecisionHook(
       (world, c, why) => this.decisionHook(world, c, why),
-      (world) => this.available && world.ai.mode === "llm" && !this.client?.slow?.(),
+      (world) => this.available && world.ai.mode === "llm" && (!this.client?.slow?.() || !!world.ai.aiOnly),
     );
   }
 
@@ -378,6 +406,12 @@ export class AIDirector {
   // ------------------------------------------------------- strategy
 
   private strategyHook(world: WorldState, c: Citizen, options: StrategyOption[], fallback: StrategyOption): boolean {
+    // Only the AI decides: every big decision is the AI's, as soon as it can get to it.
+    if (world.ai.aiOnly) {
+      if (!this.canCall(world, true)) return false;
+      this.wantStrategy.set(c.id, { world, at: world.time });
+      return true;
+    }
     // Only genuine dilemmas with real stakes are worth a call.
     const ranked = [...options].sort((a, b) => scoreOf(b) - scoreOf(a));
     if (ranked.length < 2) return false;
@@ -672,18 +706,31 @@ export class AIDirector {
 
   /** An agent on the roster stops to think: queue it for the model (false: the model can't take it on). */
   private decisionHook(world: WorldState, c: Citizen, why: string): boolean {
-    if (!this.available || world.ai.mode !== "llm" || this.client?.slow?.()) return false;
+    // (A slow model is left out of it, unless only the AI decides.)
+    if (!this.available || world.ai.mode !== "llm" || (this.client?.slow?.() && !world.ai.aiOnly)) return false;
     if (!this.canCall(world, true)) return false;
     if ([...this.inFlight.values()].some((p) => p.kind === "decide" && p.citizenId === c.id)) return true;
     this.wantDecide.set(c.id, { world, why, at: world.time });
     return true;
   }
 
-  /** Decisions waiting too long (the model's busy): the built-in judgement decides instead. */
+  /**
+   * Decisions waiting too long (the model's busy): the built-in judgement
+   * decides instead. Only the AI deciding: they keep waiting for it, and if
+   * it's gone (or it's been hours) they think again a little later.
+   */
   private tendDecisions(world: WorldState): void {
     for (const [id, w] of this.wantDecide) {
       if (w.world !== world) {
         this.wantDecide.delete(id);
+        continue;
+      }
+      if (world.ai.aiOnly) {
+        if (world.time - w.at > 240 || !this.canCall(world, true)) {
+          this.wantDecide.delete(id);
+          const c = world.citizens[id];
+          if (c) thinkAgainSoon(world, c);
+        }
         continue;
       }
       if (world.time - w.at > 90 || !this.canCall(world, true)) {
@@ -704,13 +751,28 @@ export class AIDirector {
     if (!c || c.activity.kind === "talk") return false;
     if (this.small) {
       const { small, options } = smallDecisionPrompt(world, c);
-      const reqId = this.send(world, { kind: "decide", citizenId: c.id }, small.system, small.user, {}, small);
+      const reqId = this.send(world, { kind: "decide", citizenId: c.id, tries: w.tries }, small.system, small.user, {}, small);
       this.decideOptions.set(reqId, options);
       return true;
     }
     const p = decisionPrompt(world, c, w.why);
-    this.send(world, { kind: "decide", citizenId: c.id }, p.system, p.user, p.schema);
+    this.send(world, { kind: "decide", citizenId: c.id, tries: w.tries }, p.system, p.user, p.schema);
     return true;
+  }
+
+  /**
+   * Only the AI deciding, and its answer couldn't be used: ask it again,
+   * telling it why (a couple of times), rather than deciding for them. After
+   * that they think again later.
+   */
+  private decideAgain(world: WorldState, c: Citizen, d: Done, why: string): string {
+    const tries = (d.pending.tries ?? 0) + 1;
+    if (tries > 2) {
+      thinkAgainSoon(world, c);
+      return "they'll think again later";
+    }
+    this.wantDecide.set(c.id, { world, why, at: world.time, tries });
+    return "asking the AI again";
   }
 
   /** A decision came back: the world checks it and carries it out (or the built-in judgement steps in). */
@@ -719,6 +781,10 @@ export class AIDirector {
     const options = this.decideOptions.get(d.pending.id);
     this.decideOptions.delete(d.pending.id);
     if (!c) return;
+    if (!d.json && world.ai.aiOnly) {
+      this.log(world, d, "error", JSON.stringify(d.error ?? null), `error: ${d.error ?? "no reply"}; ${this.decideAgain(world, c, d, "time to take stock")}`);
+      return;
+    }
     if (!d.json) {
       const fb = rulesDecide(world, c, `the AI didn't answer (${d.error ?? "no reply"})`);
       this.log(world, d, "error", JSON.stringify(d.error ?? null), `error: ${d.error ?? "no reply"}; built-in judgement: ${fb.result ?? fb.action.type}`);
@@ -728,6 +794,10 @@ export class AIDirector {
       // A small model chose one of the sensible options.
       const j = d.json as { choice?: unknown; thought?: unknown };
       const a = typeof j.choice === "string" ? options[Number(j.choice)] : undefined;
+      if (!a && world.ai.aiOnly) {
+        this.log(world, d, "rejected", JSON.stringify(d.json), `unreadable choice; ${this.decideAgain(world, c, d, "your last answer couldn't be read: pick one of the numbers")}`);
+        return;
+      }
       if (!a) {
         const fb = rulesDecide(world, c, "the AI's choice couldn't be read");
         this.log(world, d, "rejected", JSON.stringify(d.json), `unreadable choice; built-in judgement: ${fb.result ?? fb.action.type}`);
@@ -736,9 +806,10 @@ export class AIDirector {
       const thought = typeof j.thought === "string" && j.thought ? j.thought.slice(0, 200) : a.reason;
       const dec = decide(world, c, { ...a, reason: thought }, "llm", "chosen by the town's brain from the sensible options");
       if (dec.status !== "rejected") setThought(world, c, thought, 3, "llm");
-      this.log(world, d, dec.status === "rejected" ? "rejected" : "ok", JSON.stringify(d.json), `${c.name}: ${dec.result ?? dec.error ?? dec.action.type}`);
-      if (dec.status === "rejected") rulesDecide(world, c, `the AI's choice wasn't possible (${dec.error})`);
-      else this.tally.decide++;
+      const again = dec.status === "rejected" && world.ai.aiOnly ? `; ${this.decideAgain(world, c, d, `what you chose last time wasn't possible (${dec.error})`)}` : "";
+      this.log(world, d, dec.status === "rejected" ? "rejected" : "ok", JSON.stringify(d.json), `${c.name}: ${dec.result ?? dec.error ?? dec.action.type}${again}`);
+      if (dec.status === "rejected" && !world.ai.aiOnly) rulesDecide(world, c, `the AI's choice wasn't possible (${dec.error})`);
+      else if (dec.status !== "rejected") this.tally.decide++;
       return;
     }
     const { decision, fallback } = applyModelDecision(world, c, d.json);
@@ -746,7 +817,96 @@ export class AIDirector {
       setThought(world, c, decision.action.reason, 3, "llm");
       this.tally.decide++;
     }
-    this.log(world, d, decision.status === "rejected" ? "rejected" : "ok", JSON.stringify(d.json), `${c.name}: ${decision.action.type}${decision.action.target ? ` → ${world.citizens[decision.action.target]?.name}` : ""}: ${decision.result ?? decision.error ?? ""}${fallback ? ` (turned down; built-in judgement: ${fallback.result ?? fallback.action.type})` : ""}`);
+    // (Only the AI deciding: turned down, so it's asked again, told why.)
+    const again = decision.status === "rejected" && world.ai.aiOnly ? ` (turned down; ${this.decideAgain(world, c, d, `the town turned down what you chose last time (${decision.action.type}: ${decision.error ?? "not possible"}); choose again`)})` : "";
+    this.log(world, d, decision.status === "rejected" ? "rejected" : "ok", JSON.stringify(d.json), `${c.name}: ${decision.action.type}${decision.action.target ? ` → ${world.citizens[decision.action.target]?.name}` : ""}: ${decision.result ?? decision.error ?? ""}${fallback ? ` (turned down; built-in judgement: ${fallback.result ?? fallback.action.type})` : ""}${again}`);
+  }
+
+  // ------------------------------------------- big decisions (AI only)
+
+  /** Only the AI deciding: big decisions it hasn't got to in hours, or can't now, come up again later. */
+  private tendStrategy(world: WorldState): void {
+    const gone = !this.canCall(world, true);
+    for (const [id, w] of this.wantStrategy) {
+      if (w.world !== world || (!gone && world.time - w.at <= 240)) continue;
+      this.wantStrategy.delete(id);
+      const c = world.citizens[id];
+      if (c) askAgainLater(c, "the AI didn't get to it");
+    }
+  }
+
+  /** Only the AI deciding: put the big decision that's waited longest (the watched person's first) to the AI. */
+  private maybeStrategy(world: WorldState, watchedOnly = false): boolean {
+    const waiting = [...this.wantStrategy.entries()].filter(([id, w]) => w.world === world && (!watchedOnly || id === this.focus));
+    if (!waiting.length) return false;
+    const [id] = waiting.find(([x]) => x === this.focus) ?? waiting.sort((x, y) => x[1].at - y[1].at)[0];
+    this.wantStrategy.delete(id);
+    const c = world.citizens[id];
+    if (!c || c.awaitingAI) return false;
+    const options = [...strategyOptions(world, c)].sort((a, b) => scoreOf(b) - scoreOf(a));
+    // Nothing to decide any more (only carrying on is possible).
+    if (options.length < 2) return false;
+    const top = options.slice(0, 6);
+    const stay = options.find((o) => o.id === "stay");
+    if (stay && !top.includes(stay)) top.push(stay);
+    const list = top.map((o) => ({ id: o.id, label: o.label }));
+    const { user, schema } = strategyPrompt(world, c, list);
+    c.cooldowns.llmStrategy = world.time;
+    c.awaitingAI = true;
+    this.send(world, { kind: "strategy", citizenId: c.id }, STRATEGY_SYSTEM, user, schema, this.small ? smallChoicePrompt(world, c, list) : undefined);
+    return true;
+  }
+
+  // -------------------------------- something came up (AI only): choices
+
+  /** Only the AI deciding: put the decision that's waited longest (the watched person's first) to the AI. */
+  private maybeChoice(world: WorldState, watchedOnly = false): boolean {
+    const list = waitingChoices(world).filter((r) => !this.choicesOut.has(r.id) && (!watchedOnly || r.who === this.focus));
+    const req = list.find((r) => r.who === this.focus) ?? list[0];
+    if (!req) return false;
+    const c = world.citizens[req.who];
+    const kind = choiceKind(req.kind);
+    const options = c && kind ? kind.options(world, c, req) : null;
+    if (!c || !kind || !options?.length) {
+      // It no longer arises (the applicant found work, the business shut).
+      lapseChoice(world, req);
+      return false;
+    }
+    const title = kind.title(world, c, req);
+    const menu = options.map((o) => ({ id: o.id, label: o.label }));
+    const { user, schema } = strategyPrompt(world, c, menu);
+    const note = req.why ? `\n(Your last answer was turned down: ${req.why}. Choose one of the options.)` : "";
+    this.choicesOut.add(req.id);
+    this.send(world, { kind: "choice", citizenId: c.id, choiceId: req.id }, STRATEGY_SYSTEM, `Something has come up that ${c.name} has to decide: ${title}.\n${user}${note}`, schema, this.small ? smallChoicePrompt(world, c, menu, title) : undefined);
+    return true;
+  }
+
+  private applyChoiceResult(world: WorldState, d: Done): void {
+    const id = d.pending.choiceId!;
+    this.choicesOut.delete(id);
+    const req = waitingChoices(world).find((r) => r.id === id);
+    const c = world.citizens[d.pending.citizenId];
+    if (!req || !c) {
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), "too late: it had already been settled");
+      return;
+    }
+    const reply = d.json as { choice?: unknown; thought?: unknown } | null;
+    const thought = reply && typeof reply.thought === "string" ? reply.thought.replace(/\s+/g, " ").trim().slice(0, 240) : "";
+    const res = reply ? settleChoice(world, req, reply.choice, thought) : ({ ok: false, error: d.error ?? "no reply" } as const);
+    if (res.ok) {
+      this.tally.choice++;
+      this.log(world, d, "ok", JSON.stringify(reply), `${c.name} decided: ${res.label}${thought ? ` ("${thought}")` : ""}`);
+      return;
+    }
+    if ("gone" in res && res.gone) {
+      this.log(world, d, "rejected", JSON.stringify(d.json ?? d.error), `${c.name}: ${res.error}`);
+      return;
+    }
+    req.tries++;
+    req.why = res.error;
+    const giveUp = req.tries >= 3;
+    if (giveUp) lapseChoice(world, req);
+    this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), `${d.error ? `error: ${d.error}` : `turned down (${res.error})`}: ${giveUp ? "nobody decided, so it lapses" : `asking for ${c.name}'s decision again`}`);
   }
 
   // ------------------------------------------------ what's next (free AI)
@@ -761,8 +921,10 @@ export class AIDirector {
   private schedule(world: WorldState): void {
     this.tendLiveChats(world);
     this.tendDecisions(world);
+    this.tendStrategy(world);
     // Claude: live chats' next lines and agents' decisions are scheduled here (everything else is asked for as it comes up).
-    if (!this.free) {
+    // (Only the AI deciding: everything is the AI's, Claude or not.)
+    if (!this.free && !world.ai.aiOnly) {
       for (let n = 0; n < 2 && this.canCall(world); n++) if (!this.maybeLiveTurn(world) && !this.maybeDecide(world)) break;
       return;
     }
@@ -773,7 +935,8 @@ export class AIDirector {
   /** Send the most useful request there is; false when there's nothing to ask. */
   private scheduleOne(world: WorldState): boolean {
     // Whoever the player is looking at comes first: what they say, what they decide, what they do next.
-    if (this.maybeReact(world) || this.maybeLiveTurn(world, true) || this.maybeDecide(world, true) || this.maybeNext(world, true) || this.maybeDayPlan(world, true) || this.maybeThink(world, true)) return true;
+    if (this.maybeReact(world) || this.maybeLiveTurn(world, true) || this.maybeDecide(world, true) || this.maybeStrategy(world, true) || this.maybeChoice(world, true) || this.maybeNext(world, true) || this.maybeDayPlan(world, true) || this.maybeThink(world, true)) return true;
+    if (world.ai.aiOnly) return this.scheduleAIOnly(world);
     // Speaking for the whole town: people standing in a conversation come before everything else.
     if ((this.opts.liveChats !== undefined || world.ai.aiOnly) && this.maybeLiveTurn(world)) return true;
     const turns: [Pending["kind"], () => boolean][] = [
@@ -786,6 +949,43 @@ export class AIDirector {
     const after = turns.findIndex(([k]) => k === this.lastKind) + 1;
     if ([...turns.slice(after), ...turns.slice(0, after)].some(([, f]) => f())) return true;
     return this.maybeDiary(world) || this.maybeThink(world, false);
+  }
+
+  /**
+   * Only the AI decides, so everything waits on it. People standing in a
+   * conversation and people standing there waiting to be told what they do
+   * take turns; then the next moves of people about to finish what they're
+   * doing (so they don't have to wait); and every fourth request goes to the
+   * agents' decisions, big decisions and things that came up, so those never
+   * starve. Thoughts get what's left.
+   */
+  private scheduleAIOnly(world: WorldState): boolean {
+    const live = () => this.maybeLiveTurn(world);
+    const waiting = () => this.maybeNext(world, false, true);
+    const ahead = () => this.maybeNext(world, false);
+    const minds = () => this.maybeDecide(world) || this.maybeStrategy(world) || this.maybeChoice(world);
+    const standing = this.lastKind === "conversation" ? [waiting, live] : [live, waiting];
+    const order = this.turnNo++ % 4 === 3 ? [minds, ...standing, ahead] : [...standing, ahead, minds];
+    return order.some((f) => f()) || this.maybeThink(world, false);
+  }
+
+  /**
+   * Only the AI deciding: how far to slow the clock while people are standing
+   * there waiting for it to decide what they do (1: not at all). Set
+   * world.ai.waitForAI false to let the clock run regardless.
+   */
+  pace(world: WorldState): number {
+    if (!world.ai.aiOnly || world.ai.waitForAI === false || !this.available || world.ai.mode !== "llm") return 1;
+    const waiting = world.citizenOrder.filter((id) => waitingForAI(world.citizens[id])).length;
+    return waiting <= 2 ? 1 : Math.max(0.1, Math.round((2 / waiting) * 100) / 100);
+  }
+
+  /** Only the AI deciding: people standing waiting for it, and decisions queued for it. */
+  backlog(world: WorldState): { people: number; decisions: number } {
+    const people = world.citizenOrder.filter((id) => waitingForAI(world.citizens[id])).length;
+    const mine = (w: { world: WorldState }) => w.world === world;
+    const decisions = [...this.wantDecide.values()].filter(mine).length + [...this.wantStrategy.values()].filter(mine).length + waitingChoices(world).length;
+    return { people, decisions };
   }
 
   /**
@@ -841,31 +1041,41 @@ export class AIDirector {
     const options = this.optionsAfter(world, c).sort((a, b) => scoreOf(b) - scoreOf(a));
     if (!options.length) return [];
     const best = scoreOf(options[0]);
-    const near = options.filter((o) => scoreOf(o) >= best - SHOW_MARGIN).slice(0, 6);
+    // (Only the AI deciding: a wider choice; the town's scores only put them in order.)
+    const near = world.ai.aiOnly ? options.filter((o) => scoreOf(o) >= best - AI_ONLY_MARGIN).slice(0, 8) : options.filter((o) => scoreOf(o) >= best - SHOW_MARGIN).slice(0, 6);
     // Worn out or starving: no wandering off to see friends.
     const s = situation(world, c);
     return s.tired > 0.8 || s.hungry > 0.8 ? near : [...near, ...this.seeOptions(world, c)];
   }
 
-  /** Ask what someone (the person in focus, or anyone else) will do once they've finished what they're doing. */
-  private maybeNext(world: WorldState, focusOnly: boolean): boolean {
+  /**
+   * Ask what someone (the person in focus, or anyone else) will do once
+   * they've finished what they're doing. Only the AI deciding: everyone's
+   * asked, whoever's standing there waiting first (`waitingOnly`: only them).
+   */
+  private maybeNext(world: WorldState, focusOnly: boolean, waitingOnly = false): boolean {
     for (const [id, p] of this.plans) if (world.time > p.until) this.plans.delete(id);
+    const aiOnly = !!world.ai.aiOnly;
     const left = (c: Citizen) => c.activity.endsAt - world.time;
-    const ready = (c: Citizen) => PLANNABLE.has(c.activity.kind) && c.path.length === 0 && !c.awaitingAI && !this.plans.has(c.id);
+    const waits = (c: Citizen) => aiOnly && waitingForAI(c);
+    const need = (c: Citizen) => Math.max(100 - c.needs.hunger, 100 - c.needs.energy);
+    const ready = (c: Citizen) => (PLANNABLE.has(c.activity.kind) || waits(c)) && c.path.length === 0 && !c.awaitingAI && !this.plans.has(c.id) && world.time >= (c.cooldowns.planAgain ?? -1e9);
     const focus = this.focus ? world.citizens[this.focus] : undefined;
-    let c: Citizen | undefined = focusOnly && focus && ready(focus) && left(focus) > 2 && left(focus) < 12 * 60 ? focus : undefined;
+    let c: Citizen | undefined = focusOnly && focus && ready(focus) && (waits(focus) || (left(focus) > 2 && left(focus) < 12 * 60)) ? focus : undefined;
     // A free service has a rate limit to share with the conversations: only the person being watched.
-    if (!focusOnly && this.small) {
+    if (!focusOnly && (this.small || aiOnly)) {
       c = world.citizenOrder
         .map((cid) => world.citizens[cid])
-        .filter((x) => ready(x) && left(x) > 8 && left(x) < 180)
-        .sort((x, y) => left(x) - left(y))[0];
+        .filter((x) => ready(x) && (waits(x) || (!waitingOnly && left(x) > (aiOnly ? 0 : 8) && left(x) < (aiOnly ? 240 : 180))))
+        // (Of those waiting, the hungriest or most worn out first.)
+        .sort((x, y) => Number(waits(y)) - Number(waits(x)) || (waits(x) ? need(y) - need(x) : 0) || left(x) - left(y))[0];
     }
     if (!c) return false;
     const options = this.sensible(world, c);
     // A chat on the way out can hold them up; the pick is still checked against how things are by then.
     const until = c.activity.endsAt + 120;
-    if (options.length < 2) {
+    // (Only the AI deciding, even one thing to do is the AI's to choose, with its reason.)
+    if (options.length < (aiOnly ? 1 : 2)) {
       // Nothing to choose between (e.g. bedtime): don't ask again during this activity.
       this.plans.set(c.id, { reqId: -1, until, choice: null, thought: null });
       return false;
@@ -881,7 +1091,10 @@ export class AIDirector {
     const c = world.citizens[d.pending.citizenId];
     const plan = this.plans.get(d.pending.citizenId);
     if (!c) return;
-    if (!plan || plan.reqId !== d.pending.id) {
+    const aiOnly = !!world.ai.aiOnly;
+    // (Only the AI deciding: a late answer still counts for someone who's still waiting for one.)
+    const stillWaiting = aiOnly && waitingForAI(c) && !this.plans.has(c.id);
+    if ((!plan || plan.reqId !== d.pending.id) && !stillWaiting) {
       this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : `too late: ${c.name} had already moved on`);
       return;
     }
@@ -889,14 +1102,27 @@ export class AIDirector {
     const choice = reply && typeof reply.choice === "string" ? reply.choice : null;
     const option = choice ? (this.optionsAfter(world, c).find((o) => o.id === choice) ?? this.seeOptions(world, c).find((o) => o.id === choice)) : undefined;
     if (!option) {
+      if (aiOnly) {
+        // Only the AI deciding: asked again in a moment (nobody decides for them meanwhile).
+        this.plans.delete(c.id);
+        c.cooldowns.planAgain = world.time + 3;
+        this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), `${d.error ? `error: ${d.error}` : "no usable choice"}: asking again for what ${c.name} does next`);
+        return;
+      }
       // Left unanswered (not asked again during this activity): the utility AI decides.
       this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : "no usable choice: the utility AI decides");
       return;
     }
     const raw = typeof reply!.thought === "string" ? reply!.thought.replace(/\s+/g, " ").trim() : "";
-    plan.choice = option.id;
-    plan.thought = raw.length >= 4 && raw.length <= 240 ? raw : null;
-    this.log(world, d, "ok", JSON.stringify(reply), `${c.name} will ${option.label.charAt(0).toLowerCase()}${option.label.slice(1)} next${plan.thought ? `: "${plan.thought}"` : ""}`);
+    const thought = raw.length >= 4 && raw.length <= 240 ? raw : null;
+    if (!plan || plan.reqId !== d.pending.id) this.plans.set(c.id, { reqId: d.pending.id, until: world.time + 120, choice: option.id, thought });
+    else {
+      plan.choice = option.id;
+      plan.thought = thought;
+    }
+    this.log(world, d, "ok", JSON.stringify(reply), `${c.name} will ${option.label.charAt(0).toLowerCase()}${option.label.slice(1)} next${thought ? `: "${thought}"` : ""}`);
+    // Standing there waiting for this: off they go.
+    if (aiOnly && waitingForAI(c)) c.activity.endsAt = world.time;
   }
 
   // --------------------------------------------- something just happened
@@ -1026,7 +1252,8 @@ export class AIDirector {
     void utility;
     const best = Math.max(...options.map(scoreOf));
     const s = situation(world, c);
-    const fits = (o: ActivityOption) => (o.id.startsWith("see:") ? s.tired <= 0.8 && s.hungry <= 0.8 : scoreOf(o) >= best - ACCEPT_MARGIN);
+    // (Only the AI deciding: whatever it picked, if it's still possible.)
+    const fits = (o: ActivityOption) => !!world.ai.aiOnly || (o.id.startsWith("see:") ? s.tired <= 0.8 && s.hungry <= 0.8 : scoreOf(o) >= best - ACCEPT_MARGIN);
     const find = (id: string) => options.find((o) => o.id === id) ?? (id.startsWith("see:") ? this.seeOptions(world, c).find((o) => o.id === id) : undefined);
     // Their plan for today: what's due now (things left more than three hours late didn't happen).
     const hour = (world.time % 1440) / 60;
@@ -1036,6 +1263,8 @@ export class AIDirector {
 
     const pick = this.plans.get(c.id);
     if (pick && pick.reqId >= 0 && world.time <= pick.until) {
+      // Only the AI deciding, and it's still thinking: they wait for its answer.
+      if (world.ai.aiOnly && pick.choice === null && this.inFlight.has(pick.reqId)) return null;
       this.plans.delete(c.id);
       const o = pick.choice ? find(pick.choice) : undefined;
       // Things change (they got hungrier, the shop shut): a pick that no longer makes sense is dropped.
@@ -1106,19 +1335,25 @@ export class AIDirector {
   private maybeThink(world: WorldState, focusOnly: boolean): boolean {
     const awake = (c: Citizen) => c.activity.kind !== "sleep" && !c.awaitingAI;
     const since = (c: Citizen) => world.time - (c.cooldowns.llmThought ?? -1e9);
+    // Only the AI deciding: something new that's happened to them (and not put into words yet) comes first.
+    const cued = (c: Citizen) => !!world.ai.aiOnly && !!c.thoughtCue && !c.thoughtCue.asked && c.thoughtCue.priority >= 2 && c.thoughtCue.t >= c.thoughtT;
     const focus = this.focus ? world.citizens[this.focus] : undefined;
     let c: Citizen | undefined;
-    if (focusOnly) c = focus && awake(focus) && since(focus) >= 30 && Date.now() >= this.nextFocusThoughtAt ? focus : undefined;
-    else if (Date.now() >= this.nextThoughtAt)
+    if (focusOnly) c = focus && awake(focus) && (since(focus) >= 30 || (cued(focus) && since(focus) >= 5)) && Date.now() >= this.nextFocusThoughtAt ? focus : undefined;
+    else {
+      const now = Date.now() >= this.nextThoughtAt;
       c = world.citizenOrder
         .map((id) => world.citizens[id])
-        .filter((x) => awake(x) && since(x) >= 240)
-        .sort((x, y) => since(y) - since(x))[0];
+        .filter((x) => awake(x) && ((now && since(x) >= 240) || (cued(x) && since(x) >= 20)))
+        .sort((x, y) => Number(cued(y)) - Number(cued(x)) || (y.thoughtCue?.priority ?? 0) - (x.thoughtCue?.priority ?? 0) || since(y) - since(x))[0];
+    }
     if (!c) return false;
+    const fresh = cued(c);
     c.cooldowns.llmThought = world.time;
+    if (c.thoughtCue) c.thoughtCue.asked = true;
     // Fast-forwarding mustn't turn into nothing but thoughts.
     if (focusOnly) this.nextFocusThoughtAt = Date.now() + (this.small ? 8_000 : 10_000);
-    else this.nextThoughtAt = Date.now() + (this.small ? 6_000 : 10_000);
+    else if (!fresh) this.nextThoughtAt = Date.now() + (this.small ? 6_000 : 10_000);
     const { user, schema } = thoughtPrompt(world, c);
     this.send(world, { kind: "thought", citizenId: c.id }, THOUGHT_SYSTEM, user, schema, this.small ? smallThoughtPrompt(world, c) : undefined);
     return true;
@@ -1130,7 +1365,7 @@ export class AIDirector {
     const raw = (d.json as { thought?: unknown } | null)?.thought;
     const text = typeof raw === "string" ? raw.replace(/^["“'\s]+|["”'\s]+$/g, "").replace(/\s+/g, " ").trim() : "";
     if (!text || text.length < 4 || text.length > 240) {
-      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : "no usable thought — kept the built-in one");
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : world.ai.aiOnly ? "no usable thought" : "no usable thought — kept the built-in one");
       return;
     }
     setThought(world, c, text, Math.max(3, c.thoughtPriority), "llm");
@@ -1271,6 +1506,7 @@ export class AIDirector {
       else if (d.pending.kind === "diary") this.applyDiaryResult(world, d);
       else if (d.pending.kind === "chat") this.applyChatResult(world, d);
       else if (d.pending.kind === "decide") this.applyDecideResult(world, d);
+      else if (d.pending.kind === "choice") this.applyChoiceResult(world, d);
       else if (d.pending.turn) this.applyTurnResult(world, d);
     }
     // Replies first, so the next request goes out as soon as the last one is in.
@@ -1295,15 +1531,23 @@ export class AIDirector {
     const chosen = reply && typeof reply.choice === "string" ? options.find((o) => o.id === reply.choice) : undefined;
     // A small model may pick well but explain badly: then they think the option's own thought.
     const thought = reply && typeof reply.thought === "string" && reply.thought ? reply.thought.slice(0, 240) : this.small && chosen ? chosen.thought : "";
-    if (!chosen || !thought) {
+    // (Only the AI deciding: a good choice with no reason given still stands; nothing's shown for the thought.)
+    if (!chosen || (!thought && !world.ai.aiOnly)) {
+      if (world.ai.aiOnly) {
+        // Only the AI deciding: nobody decides for them; it comes up again later.
+        askAgainLater(c, "the AI's answer couldn't be used");
+        this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), `${d.error ? `error: ${d.error}` : "invalid or stale choice"}: ${c.name} will think it over again later`);
+        return;
+      }
       this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : "invalid or stale choice — used utility AI");
       applyStrategy(world, c, options, fallback, d.error ? "utility" : "llm-rejected", fallback.thought);
       return;
     }
-    this.log(world, d, "ok", JSON.stringify(reply), `${c.name} chose "${chosen.label}"${chosen.id !== fallback.id ? ` (utility AI would have picked "${fallback.label}")` : ""}`);
+    const versus = d.pending.fallbackId && chosen.id !== fallback.id ? ` (utility AI would have picked "${fallback.label}")` : "";
+    this.log(world, d, "ok", JSON.stringify(reply), `${c.name} chose "${chosen.label}"${versus}`);
     applyStrategy(world, c, options, chosen, "llm", thought);
     this.tally.plan++;
-    if (chosen.id !== fallback.id) logEvent(world, "ai", `🧠 ${c.name} thought it over: "${thought}"`, 2, [c.id]);
+    if (thought && (versus || (world.ai.aiOnly && chosen.id !== "stay"))) logEvent(world, "ai", `🧠 ${c.name} thought it over: "${thought}"`, 2, [c.id]);
   }
 }
 

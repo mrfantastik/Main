@@ -140,7 +140,21 @@ export function actionLabel(world: WorldState, a: AgentAction): string {
     case "seek_work":
       return t ? `Ask ${t} for a job` : "Go and look for work";
     case "propose_deal":
-      return a.deal === "loan" ? `Ask ${t} to lend you ${money(a.amount ?? 50)}` : a.deal === "investment" ? `Ask ${t} to invest in your business` : a.deal === "job_offer" ? `Offer ${t} a job` : a.deal === "partnership" ? `Ask ${t} to come in on your plan` : a.deal === "sale" ? `Sell ${t} some stock` : `Ask ${t} for a job`;
+      return a.deal === "loan"
+        ? `Ask ${t} to lend you ${money(a.amount ?? 50)}`
+        : a.deal === "investment"
+          ? `Ask ${t} to invest in your business`
+          : a.deal === "job_offer"
+            ? `Offer ${t} a job`
+            : a.deal === "partnership"
+              ? `Ask ${t} to come in on your plan`
+              : a.deal === "sale"
+                ? `Sell ${t} some stock`
+                : a.deal === "repayment"
+                  ? `Ask ${t} to pay back what they owe you`
+                  : a.deal === "ask_help"
+                    ? `Ask ${t} to help you out`
+                    : `Ask ${t} for a job`;
     case "lend":
       return `Offer to lend ${t} ${money(a.amount ?? 30)}`;
     case "help":

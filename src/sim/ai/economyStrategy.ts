@@ -12,7 +12,8 @@ import { ownerShare } from "../economy/valuation";
 import { money, pct, round2 } from "../util";
 import { occupationBelief } from "./beliefs";
 import { changeCareer, registerCareer } from "./careers";
-import { recordDecision, setThought, type Option } from "./decision";
+import { putToAI, registerChoice, waitingToHear } from "./choices";
+import { recordDecision, scoreOf, setThought, type Option } from "./decision";
 import { registerStrategyProvider, type StrategyOption } from "./strategy";
 import type { Situation } from "./situation";
 
@@ -327,12 +328,29 @@ function moneyOptions(world: WorldState, c: Citizen, s: Situation): StrategyOpti
   return out;
 }
 
-/** The owner decides whether to accept an investor's money for equity. */
+/**
+ * The owner decides whether to accept an investor's money for equity (with
+ * only the AI deciding, the owner's AI decides, and the offer stands till then).
+ */
 export function proposeInvestment(world: WorldState, investor: Citizen, b: Business, amount: number, share: number): boolean {
   const owner = world.citizens[b.ownerId];
   if (!owner || !b.open) return false;
   share = round2(Math.min(share, ownerShare(b) - MIN_OWNER_SHARE));
   if (share < 0.01) return false;
+  if (putToAI(world, owner, "invest", { businessId: b.id, investorId: investor.id, amount, share })) {
+    waitingToHear(world, investor, `Offered ${owner.name} ${money(amount)} for ${pct(share)} of ${b.name}. Waiting to hear back.`);
+    return false;
+  }
+  const opts = investChoices(world, owner, investor, b, amount, share);
+  const accept = scoreOf(opts[0]) > 0;
+  const chosen = accept ? opts[0] : opts[1];
+  recordDecision(world, owner, "reaction", opts, chosen, "utility", chosen.thought);
+  setThought(world, owner, chosen.thought, 3);
+  return applyInvestment(world, owner, investor, b, amount, share, chosen);
+}
+
+/** Take the money for a share of the business, or keep it all. */
+function investChoices(world: WorldState, owner: Citizen, investor: Citizen, b: Business, amount: number, share: number): Option<null>[] {
   const rel = peekRel(owner, investor.id);
   const factors: Record<string, number> = {
     needCash: b.cash < 150 ? 0.4 : 0,
@@ -341,15 +359,14 @@ export function proposeInvestment(world: WorldState, investor: Citizen, b: Busin
     control: -(owner.traits.greed * 0.4) - b.partners.reduce((s, p) => s + p.share, 0),
     betrayal: rememberBetrayal(owner, investor.id) ? -1 : 0,
   };
-  const accept = Object.values(factors).reduce((a, x) => a + x, 0) > 0;
-  const opts: Option<null>[] = [
+  return [
     { id: "accept", label: `Sell ${investor.name} ${pct(share)} of ${b.name} for ${money(amount)}`, factors, payload: null, thought: `${investor.name} wants to invest ${money(amount)} in ${b.name}. Extra capital — deal.` },
     { id: "decline", label: "Keep full ownership", factors: { independence: 0 }, payload: null, thought: `${investor.name} wants ${pct(share)} of ${b.name}. No thanks — it's mine.` },
   ];
-  const chosen = accept ? opts[0] : opts[1];
-  recordDecision(world, owner, "reaction", opts, chosen, "utility", chosen.thought);
-  setThought(world, owner, chosen.thought, 3);
-  if (!accept) {
+}
+
+function applyInvestment(world: WorldState, owner: Citizen, investor: Citizen, b: Business, amount: number, share: number, chosen: Option<null>): boolean {
+  if (chosen.id !== "accept") {
     remember(world, investor, { text: `${owner.name} turned down my investment in ${b.name}.`, kind: "deal", importance: 4, valence: -0.3, people: [owner.id] });
     return false;
   }
@@ -361,6 +378,34 @@ export function proposeInvestment(world: WorldState, investor: Citizen, b: Busin
   adjustRel(world, investor, owner.id, { affinity: 6, trust: 6, familiarity: 10 });
   return true;
 }
+
+// Only the AI deciding: the owner's AI decides on the offer (see ai/choices.ts).
+registerChoice<null>("invest", {
+  wait: 12 * 60,
+  title(world, c, req) {
+    const b = world.businesses[String(req.params.businessId)];
+    const inv = world.citizens[String(req.params.investorId)];
+    return `${inv?.name ?? "Someone"} has offered ${money(Number(req.params.amount))} for ${pct(Number(req.params.share))} of ${b?.name ?? "your business"}`;
+  },
+  options(world, c, req) {
+    const b = world.businesses[String(req.params.businessId)];
+    const inv = world.citizens[String(req.params.investorId)];
+    const amount = Number(req.params.amount);
+    const share = round2(Math.min(Number(req.params.share), b ? ownerShare(b) - MIN_OWNER_SHARE : 0));
+    if (!b || !b.open || b.ownerId !== c.id || !inv || inv.money + inv.savings < amount || share < 0.01 || b.partners.some((p) => p.citizenId === inv.id)) return null;
+    return investChoices(world, c, inv, b, amount, share);
+  },
+  apply(world, c, req, chosen) {
+    const b = world.businesses[String(req.params.businessId)]!;
+    const share = round2(Math.min(Number(req.params.share), ownerShare(b) - MIN_OWNER_SHARE));
+    applyInvestment(world, c, world.citizens[String(req.params.investorId)]!, b, Number(req.params.amount), share, chosen);
+  },
+  lapse(world, c, req) {
+    const b = world.businesses[String(req.params.businessId)];
+    const inv = world.citizens[String(req.params.investorId)];
+    if (inv && b) remember(world, inv, { text: `${c.name} never got back to me about investing in ${b.name}.`, kind: "deal", importance: 3, valence: -0.2, people: [c.id] });
+  },
+});
 
 // ------------------------------------------------- working for someone
 

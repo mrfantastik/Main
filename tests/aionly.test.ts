@@ -28,6 +28,10 @@ function fakeModel(opts: { bad?: number; dead?: () => boolean } = {}): LLMClient
       client.calls++;
       const props = (req.schema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {};
       if (props.action && props.intention) return { json: { action: "carry_on", reason: "Nothing doing.", intention: "Get on with my day." }, inputTokens: 1, outputTokens: 1, model: "fake" };
+      // What to do next, a big decision, something that came up: usually the first (best) option.
+      const choices = (props.choice as { enum?: string[] } | undefined)?.enum;
+      if (choices?.length) return { json: { choice: choices[client.calls % 5 === 0 ? choices.length - 1 : 0], thought: `Right, the ${word()} first, then the ${word()}.` }, inputTokens: 1, outputTokens: 1, model: "fake" };
+      if (props.thought) return { json: { thought: `I keep thinking about the ${word()} and the ${word()}.` }, inputTokens: 1, outputTokens: 1, model: "fake" };
       if (opts.dead?.() || (opts.bad && client.calls % opts.bad === 0)) return { json: { spoken: "As an AI language model, I can't help with that." }, inputTokens: 1, outputTokens: 1, model: "fake" };
       if (props.spoken) {
         const deal = /THE DEAL/.test(req.user) && /Decide your move/.test(req.user);
