@@ -14,12 +14,17 @@ The best way to play is also free. Every conversation, thought and decision in t
 
 **On Windows:**
 
-1. Install **Ollama** from <https://ollama.com/download> (free).
-2. Install **Node.js** (the LTS version) from <https://nodejs.org> (free).
-3. Get the game: on GitHub, **Code → Download ZIP**, then unzip it (or `git clone` it).
-4. Double-click **`Play-Free.bat`** in the game's folder.
+1. Get the game: the `AI-Hustle-City-free.zip` you were sent, or on GitHub (this branch, `claude/dreamscape-events`) **Code → Download ZIP**.
+2. Unzip it: right-click the zip, **Extract All…**. (Running the file from inside the zip won't work.)
+3. Double-click **`Play-Free.bat`** in the extracted folder.
+   - If Windows says it "protected your PC", choose **More info → Run anyway**.
 
-The first time, it sets up the game's parts and downloads a free model to suit your computer (2–9 GB, once). Then the town opens in your browser. Leave the black window open while you play, and close it to stop.
+The first time, it:
+- installs **Node.js** and **Ollama** if they're missing, both free, with Windows' own installer (winget). It asks first, and Windows may ask you to allow it. Without winget, it opens their download pages instead.
+- sets up the game's parts;
+- downloads a free model to suit your computer (2–9 GB, once).
+
+Then the town opens in your browser. Leave the black window open while you play, and close it to stop. Next time it starts straight away.
 
 **On a Mac or Linux:** install Ollama and Node.js, then run `npm install` once and `npm run free` each time.
 

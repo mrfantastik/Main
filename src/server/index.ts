@@ -39,6 +39,9 @@ function loadEnv(file: string): void {
 }
 loadEnv(path.join(root, ".env"));
 const PORT = Number(process.env.PORT ?? 3000);
+// HOST=127.0.0.1 (what `npm run free` sets): only this computer can open the game (and
+// Windows doesn't ask to let it through the firewall). Unset: anyone on the network can.
+const HOST = process.env.HOST || undefined;
 const PROD = process.argv.includes("--prod");
 
 interface Client {
@@ -487,7 +490,7 @@ async function main(): Promise<void> {
   setInterval(broadcastState, 500);
   setInterval(broadcastDashboard, 1500);
 
-  server.listen(PORT, () => {
+  server.listen({ port: PORT, host: HOST }, () => {
     console.log(`\n  🏙️  AI Hustle City is running:  http://localhost:${PORT}\n`);
   });
   if (director.free && runner.world.ai.mode === "llm") {

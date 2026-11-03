@@ -47,7 +47,7 @@ function hasOllama(): boolean {
 function openInBrowser(url: string): void {
   const cmd = process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
   try {
-    spawn(cmd[0] as string, cmd[1] as string[], { detached: true, stdio: "ignore" }).unref();
+    spawn(cmd[0] as string, cmd[1] as string[], { detached: true, stdio: "ignore", windowsHide: true }).unref();
   } catch {
     // (No browser to open: the address is printed.)
   }
@@ -203,6 +203,8 @@ async function main(): Promise<void> {
     AI_LIVE_CHATS: process.env.AI_LIVE_CHATS ?? String(plan.liveChats),
     AI_MAX_CALLS_PER_DAY: "1000000",
     PORT: String(PORT),
+    // Only this computer can open it (so Windows doesn't ask to let it through the firewall).
+    HOST: process.env.HOST ?? "127.0.0.1",
   });
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.FREE_AI_KEY;
@@ -219,7 +221,7 @@ async function main(): Promise<void> {
     const url = `http://localhost:${PORT}`;
     for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 500));
-      const up = await fetch(url, { signal: AbortSignal.timeout(1000) }).then((r) => r.ok, () => false);
+      const up = await fetch(`http://127.0.0.1:${PORT}`, { signal: AbortSignal.timeout(1000) }).then((r) => r.ok, () => false);
       if (up) break;
     }
     openInBrowser(url);
