@@ -1,3 +1,4 @@
+import { REASONING } from "../sim/ai/freeai";
 import { isCloudModel } from "../sim/ai/localai";
 
 // What the free launcher (`npm run free`) works out about your computer and
@@ -46,7 +47,7 @@ export function chooseInstalled(models: OllamaModel[], wanted?: string): OllamaM
     if (hit) return hit;
   }
   // Something else: leave out the reasoning models if there's a choice, then the biggest that isn't huge.
-  const plain = local.filter((m) => !/r1|qwq|think|reason|qwen3/i.test(m.name));
+  const plain = local.filter((m) => !REASONING.test(m.name));
   const pool = (plain.length ? plain : local).filter((m) => (m.size ?? 0) < 20e9);
   return [...(pool.length ? pool : local)].sort((a, b) => (b.size ?? 0) - (a.size ?? 0))[0] ?? null;
 }
@@ -61,19 +62,49 @@ export function modelForHardware(vramGb: number | null, ramGb: number, appleSili
   return { name: "qwen2.5:1.5b", size: "1 GB", why: "a small model for a computer without much memory" };
 }
 
-/** How hard to work the model, from how long it took to answer one realistic request (seconds). */
-export function settingsForSpeed(seconds: number): { concurrency: number; liveChats: number; timeoutMs: number; pace: "fast" | "steady" | "slow"; note: string } {
-  if (seconds <= 2.5)
-    return { concurrency: 4, liveChats: 20, timeoutMs: 45_000, pace: "fast", note: "fast enough for the whole town to talk at once at 1× speed" };
+/**
+ * How hard to work the model, from how long it took to answer one realistic
+ * request (seconds) and whether it answers two at once as fast as one
+ * (`parallel`; Ollama answers one at a time unless OLLAMA_NUM_PARALLEL says
+ * otherwise). The wait for an answer allows for the ones queued ahead of it,
+ * with plenty to spare: an answer given up on is wasted, and gets the town
+ * nowhere.
+ */
+export function settingsForSpeed(seconds: number, parallel = true): { concurrency: number; liveChats: number; timeoutMs: number; pace: "fast" | "steady" | "slow"; note: string } {
+  const wait = (n: number) => Math.round(Math.min(300_000, Math.max(90_000, seconds * n * 6_000)) / 1000) * 1000;
+  if (seconds <= 2.5) {
+    const concurrency = parallel ? 4 : 2;
+    return { concurrency, liveChats: parallel ? 20 : 10, timeoutMs: wait(concurrency), pace: "fast", note: parallel ? "fast enough for the whole town to talk at once at 1× speed" : "fast enough for plenty of conversations at once at 1× speed" };
+  }
   if (seconds <= 8)
-    return { concurrency: 2, liveChats: 6, timeoutMs: 60_000, pace: "steady", note: "a few conversations at a time; the clock slows down a little when people are waiting on the AI" };
+    return { concurrency: 2, liveChats: 6, timeoutMs: wait(2), pace: "steady", note: "a few conversations at a time; the clock slows down a little when people are waiting on the AI" };
   return {
     concurrency: 1,
     liveChats: 2,
-    timeoutMs: 120_000,
+    timeoutMs: wait(1),
     pace: "slow",
     note: "slow (it's running on the processor), so the town will be quiet and the clock will often slow down to wait for it. A graphics card, or a smaller model (npm run free -- --model qwen2.5:1.5b), makes it livelier",
   };
+}
+
+/** Billions of parameters, from what Ollama says ("7.6B", "494.03M") or the name ("qwen2.5:14b"); null: can't tell. */
+export function billions(m: OllamaModel | string): number | null {
+  const fromDetails = typeof m === "string" ? undefined : m.details?.parameter_size;
+  const name = typeof m === "string" ? m : m.name;
+  const d = fromDetails?.match(/^([\d.]+)\s*([BM])/i);
+  if (d) return Number(d[1]) / (d[2].toUpperCase() === "M" ? 1000 : 1);
+  const n = name.match(/[:\-_](\d+(?:\.\d+)?)b(?![a-z])/i);
+  return n ? Number(n[1]) : null;
+}
+
+/** A smaller model that answers faster, for a computer that's too slow for this one (null: it's as small as is any good). */
+export function smallerModel(m: OllamaModel | string): { name: string; size: string } | null {
+  const b = billions(m);
+  if (b === null) return null;
+  if (b >= 10) return { name: "qwen2.5:7b", size: "4.7 GB" };
+  if (b >= 5) return { name: "qwen2.5:3b", size: "1.9 GB" };
+  if (b >= 2.5) return { name: "qwen2.5:1.5b", size: "1 GB" };
+  return null;
 }
 
 /** Ollama's address, from OLLAMA_HOST if it's set ("0.0.0.0:11434", "http://127.0.0.1:11434", "myhost"). */

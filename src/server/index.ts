@@ -20,6 +20,7 @@ import { openJsonStore } from "./persistence/jsonStore";
 import { openSqliteStore } from "./persistence/sqliteStore";
 import type { WorldStore } from "./persistence/store";
 import { SimRunner } from "../sim/runner";
+import { formatTime } from "../sim/time";
 
 // AI Hustle City server: runs the simulation continuously and streams it to
 // any number of browser clients over a WebSocket.
@@ -88,6 +89,8 @@ const AI_CONCURRENCY = process.env.AI_CONCURRENCY ? Number(process.env.AI_CONCUR
 const AI_LIVE_CHATS = process.env.AI_LIVE_CHATS ? Number(process.env.AI_LIVE_CHATS) : undefined;
 // AI_ONLY=1: only the AI speaks, with no built-in lines at all (conversations happen when the AI can speak them).
 const AI_ONLY = process.env.AI_ONLY === undefined ? undefined : /^(1|true|yes|on)$/i.test(process.env.AI_ONLY);
+// How long to wait for the free AI's answer (a slow model on the processor needs minutes when it's busy).
+const FREE_AI_TIMEOUT_MS = Number(process.env.FREE_AI_TIMEOUT_MS ?? 45_000);
 const DATA_DIR = process.env.DATA_DIR ?? path.join(root, "data");
 const AUTOSAVE_MS = Number(process.env.AUTOSAVE_SECONDS ?? 30) * 1000;
 
@@ -105,10 +108,11 @@ const director =
   AI_PROVIDER === "off"
     ? new AIDirector(null, ledger)
     : FREE
-      ? new AIDirector(createFreeAIClient({ model: AI_MODEL, url: FREE_AI_URL, key: process.env.FREE_AI_KEY || undefined }), ledger, {
+      ? new AIDirector(createFreeAIClient({ model: AI_MODEL, url: FREE_AI_URL, key: process.env.FREE_AI_KEY || undefined, timeoutMs: FREE_AI_TIMEOUT_MS, ollama: /^(1|true|yes|on)$/i.test(process.env.FREE_AI_OLLAMA ?? "") }), ledger, {
           maxConcurrent: AI_CONCURRENCY ?? 2,
           minIntervalMs: Number(process.env.FREE_AI_INTERVAL_MS ?? 2500),
-          timeoutMs: Number(process.env.FREE_AI_TIMEOUT_MS ?? 45_000),
+          // (The same wait as the client's own, so a request given up on is also cancelled at the model.)
+          timeoutMs: FREE_AI_TIMEOUT_MS,
           liveChats: AI_LIVE_CHATS,
         })
       : new AIDirector(createClaudeClient(AI_MODEL), ledger, { maxConcurrent: AI_CONCURRENCY ?? 2, minIntervalMs: Number(process.env.AI_INTERVAL_MS ?? 2500), timeoutMs: 25_000, liveChats: AI_LIVE_CHATS });
@@ -156,7 +160,43 @@ function aiStatus(world: WorldState): AIStatusDTO {
     aiOnly: !!world.ai.aiOnly,
     waiting: world.ai.aiOnly ? { ...director.backlog(world), pace: director.pace(world), waitForAI: world.ai.waitForAI !== false } : null,
     localOnly: LOCAL_ONLY,
+    trouble: director.trouble(world),
+    answers: director.available && world.ai.mode === "llm" ? director.answers() : null,
   };
+}
+
+/**
+ * The black window: how the AI's getting on. Straight away when something
+ * goes wrong (and what to do about it) or comes right again, and with a free
+ * AI a line a minute: how many answers, how long each took, how many people
+ * are waiting for it and how fast the clock is running.
+ */
+function watchTheAI(): void {
+  let told = "";
+  setInterval(() => {
+    const w = runner.world;
+    const on = director.available && w.ai.mode === "llm";
+    const t = on ? director.trouble(w) : null;
+    if (t && t.level !== told) console.log(`\n  ⚠️  ${t.text}.${t.hint ? `\n      ${t.hint}` : ""}\n`);
+    // (Paused from the AI panel isn't "answering again".)
+    else if (!t && told && on) console.log(`  ✅ The AI is ${told === "error" ? "answering" : "keeping up"} again.`);
+    told = t?.level ?? "";
+  }, 5_000);
+  if (!director.free) return;
+  setInterval(() => {
+    const w = runner.world;
+    if (!director.available || w.ai.mode !== "llm" || runner.paused) return;
+    const a = director.answers();
+    const backlog = w.ai.aiOnly ? director.backlog(w) : null;
+    const pace = Math.round(director.pace(w) * 100);
+    const parts = [
+      `${a.answered} answer${a.answered === 1 ? "" : "s"} in the last minute${a.avgSeconds !== null ? ` (${a.avgSeconds} s each)` : ""}`,
+      ...(a.failed ? [`${a.failed} failed${a.lastError ? ` (${a.lastError})` : ""}`] : []),
+      ...(backlog ? [`${backlog.people} waiting for it`] : []),
+      ...(pace < 100 ? [`clock at ${pace}%`] : []),
+    ];
+    console.log(`  🧠 ${formatTime(w.time)}: ${parts.join(" · ")}`);
+  }, 60_000);
 }
 
 function newWorld(seed?: number): WorldState {
@@ -468,6 +508,7 @@ async function main(): Promise<void> {
   };
   runner.start();
   setInterval(() => saveWorld("autosave"), AUTOSAVE_MS);
+  watchTheAI();
   const shutdown = () => {
     saveWorld("shutdown");
     store.close();

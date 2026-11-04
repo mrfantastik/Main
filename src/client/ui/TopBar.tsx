@@ -54,6 +54,16 @@ export function TopBar() {
           ⏳ {Math.round(ai.waiting.pace * 100)}% · {ai.waiting.people} waiting for the AI
         </span>
       )}
+      {ai?.trouble && (
+        <button
+          className={`chip ${ai.trouble.level === "error" ? "bad" : ""}`}
+          style={{ cursor: "pointer" }}
+          title={`${ai.trouble.text}.${ai.trouble.hint ? ` ${ai.trouble.hint}` : ""} (Click for the 🧠 AI panel.)`}
+          onClick={() => store.setPanel("ai")}
+        >
+          {ai.trouble.level === "error" ? "⚠️ The AI isn't answering" : "🐢 The AI can't keep up"}
+        </button>
+      )}
       {ai?.localOnly && (
         <span className="chip good" title="Every conversation, thought and decision comes from an AI model running on this computer. Nothing here can cost money.">
           🆓 Free · on this computer

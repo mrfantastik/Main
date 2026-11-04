@@ -5,18 +5,22 @@
 //
 //   npm run free                          (Windows: double-click Play-Free.bat)
 //   npm run free -- --model qwen2.5:7b    a particular model (downloaded if need be)
+//   npm run free -- --keep-model          keep the model even if it's slow here (no switching to a smaller one)
 //   npm run free -- --no-open             don't open the browser
 //   npm run free -- --port 3001           another port
 //
 // It finds Ollama (and starts it if it's installed but not running), picks one
 // of your models (never one of Ollama's cloud models, which run on ollama.com
 // and can use paid credits) or downloads a free one that suits your computer,
-// times one answer to see how hard the AI can be worked, then starts the game
-// with only the AI speaking, thinking and deciding, and opens it in your browser.
+// times one answer to see how hard the AI can be worked (and whether it can
+// answer two at once; if it's too slow for a lively town, and it chose the
+// model itself, it tries a smaller one that answers faster), then starts the
+// game with only the AI speaking, thinking and deciding, and opens it in your
+// browser.
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import os from "node:os";
-import { chooseInstalled, localModels, modelForHardware, ollamaBase, settingsForSpeed, type OllamaModel } from "../src/server/free";
+import { chooseInstalled, localModels, modelForHardware, ollamaBase, settingsForSpeed, smallerModel, type OllamaModel } from "../src/server/free";
 import { isCloudModel } from "../src/sim/ai/localai";
 
 const args = process.argv.slice(2);
@@ -121,8 +125,8 @@ async function pull(name: string): Promise<boolean> {
   return ok;
 }
 
-/** How long one realistic request takes (seconds; null: it didn't answer). The first also loads the model. */
-async function timeOne(model: string): Promise<number | null> {
+/** One realistic request: how long it took (seconds; null: it didn't answer). */
+async function timeOnce(model: string): Promise<number | null> {
   const town = Array.from({ length: 60 }, (_, i) => `Fact ${i + 1}: someone in town did something ordinary today.`).join(" ");
   const body = {
     model,
@@ -133,15 +137,24 @@ async function timeOne(model: string): Promise<number | null> {
     response_format: { type: "json_object" },
     temperature: 0.9,
   };
-  const once = async () => {
-    const t0 = Date.now();
-    const res = await fetch(`${BASE}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(180_000) }).catch(() => null);
-    if (!res?.ok) return null;
-    await res.json().catch(() => null);
-    return (Date.now() - t0) / 1000;
-  };
-  if ((await once()) === null) return null;
-  return once();
+  const t0 = Date.now();
+  const res = await fetch(`${BASE}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(300_000) }).catch(() => null);
+  if (!res?.ok) return null;
+  await res.json().catch(() => null);
+  return (Date.now() - t0) / 1000;
+}
+
+/** How long one realistic request takes (seconds; null: it didn't answer). The first one also loads the model, so it's the second that counts. */
+async function timeOne(model: string): Promise<number | null> {
+  if ((await timeOnce(model)) === null) return null;
+  return timeOnce(model);
+}
+
+/** How long two requests at once take together (seconds; null: they didn't both answer). About as long as one: it answers in parallel. */
+async function timeTwo(model: string): Promise<number | null> {
+  const t0 = Date.now();
+  const both = await Promise.all([timeOnce(model), timeOnce(model)]);
+  return both.every((x) => x !== null) ? (Date.now() - t0) / 1000 : null;
 }
 
 async function main(): Promise<void> {
@@ -181,13 +194,37 @@ async function main(): Promise<void> {
   say(`Model: ${model} (on this computer).`);
 
   say("Timing an answer (the first one also loads the model, so it takes a moment)...");
-  const secs = await timeOne(model);
+  let secs = await timeOne(model);
   if (secs === null) {
     say(`${model} didn't answer. Try: ollama run ${model}   (to see what's wrong), then run this again.`);
     process.exit(1);
   }
-  const plan = settingsForSpeed(secs);
-  say(`It answered in ${secs.toFixed(1)} s: ${plan.note}.`);
+  // Too slow for a lively town, and the model was this launcher's choice: a smaller one answers much faster.
+  const smaller = secs > 10 && !wanted && !flag("keep-model") ? smallerModel(tags.find((m) => m.name === model) ?? model) : null;
+  if (smaller) {
+    say(`It took ${secs.toFixed(1)} s to answer: too slow here for a lively town (people would spend most of their time waiting for it).`);
+    const have = chooseInstalled(tags, smaller.name);
+    if (!have) say(`Downloading a smaller model that answers faster: ${smaller.name} (${smaller.size}, free, once)...`);
+    if (have || (await pull(smaller.name))) {
+      const name = have?.name ?? smaller.name;
+      say(`Timing ${name}...`);
+      const quicker = await timeOne(name);
+      if (quicker !== null && quicker < secs * 0.8) {
+        say(`${name} answered in ${quicker.toFixed(1)} s, so the town uses that. (To use ${model} anyway: npm run free -- --model ${model})`);
+        model = name;
+        secs = quicker;
+      } else say(`${name} wasn't any quicker here, so the town keeps ${model}.`);
+    }
+  }
+  // Ollama answers one request at a time unless it's been told otherwise: worth knowing how many to send at once.
+  let parallel = true;
+  if (secs <= 8) {
+    say("Seeing whether it can answer two at once...");
+    const two = await timeTwo(model);
+    parallel = two !== null && two < secs * 1.5;
+  }
+  const plan = settingsForSpeed(secs, parallel);
+  say(`It answered in ${secs.toFixed(1)} s${secs <= 8 ? (parallel ? " (and two at once about as fast)" : " (one at a time)") : ""}: ${plan.note}.`);
   say();
 
   // Everything the game needs to know, and nothing that could cost money.
@@ -195,6 +232,8 @@ async function main(): Promise<void> {
     LOCAL_ONLY: "1",
     AI_PROVIDER: "free",
     FREE_AI_URL: `${BASE}/v1/chat/completions`,
+    // (It's Ollama, whatever port it's on: replies can be held to the exact shape the town needs.)
+    FREE_AI_OLLAMA: "1",
     AI_MODEL: model,
     AI_ONLY: process.env.AI_ONLY ?? "1",
     FREE_AI_INTERVAL_MS: "0",

@@ -140,15 +140,17 @@ With **Only the AI** on (`world.ai.aiOnly`; `AI_ONLY=1` on the server, a switch 
    - **Asked for one with `--model`:** that one, downloaded if need be.
    - **Already have some:** the best of the ones known to work well.
    - **None yet:** it downloads one that suits the graphics memory (or RAM on Apple Silicon).
-3. It times one realistic request and sets how hard to work the model from it:
+3. It times one realistic request. If that takes more than 10 s and it chose the model itself (no `--model`, no `--keep-model`), it tries the next size down (`smallerModel`: 14B → `qwen2.5:7b`, 7–9B → `qwen2.5:3b`, 3–4B → `qwen2.5:1.5b`), downloading it if need be, and uses it if it's quicker.
+4. If an answer takes 8 s or less, it times two at once: Ollama answers one at a time unless `OLLAMA_NUM_PARALLEL` says otherwise, and the tray app that starts with Windows doesn't.
+5. It sets how hard to work the model (`settingsForSpeed`). The timeout allows for the requests queued ahead (one answer's time × requests at once × 6, between 90 s and 5 minutes): an answer given up on is wasted.
 
-   | One answer takes | Requests at once | Conversations voiced at once | Timeout |
-   | --- | --- | --- | --- |
-   | ≤ 2.5 s | 4 | 20 | 45 s |
-   | ≤ 8 s | 2 | 6 | 60 s |
-   | more | 1 | 2 | 120 s |
+   | One answer takes | Requests at once | Conversations voiced at once |
+   | --- | --- | --- |
+   | ≤ 2.5 s | 4 (2 if it answers one at a time) | 20 (10) |
+   | ≤ 8 s | 2 | 6 |
+   | more | 1 | 2 |
 
-4. It starts the server with `LOCAL_ONLY=1` and only the AI speaking, thinking and deciding, and opens the browser.
+6. It starts the server with `LOCAL_ONLY=1`, `FREE_AI_OLLAMA=1` and only the AI speaking, thinking and deciding, and opens the browser.
 
 `LOCAL_ONLY=1` refuses:
 - Claude, even with `AI_PROVIDER=claude` set;
@@ -156,7 +158,16 @@ With **Only the AI** on (`world.ai.aiOnly`; `AI_ONLY=1` on the server, a switch 
 - cloud model names;
 - endpoints entered in the 🧠 AI panel.
 
-The free client never picks a cloud model when it looks for one, and asks Ollama for JSON replies (`response_format`), which small local models need.
+The free client never picks a cloud model when it looks for one. It holds Ollama to the exact shape of each reply (`response_format` `json_schema`: a choice can only be one of the ids on the list), falling back to plain JSON (`json_object`) for an Ollama too old for that, and caps the length of a reply (`max_tokens`, per kind of request; not for "thinking" models, whose reasoning counts too).
+
+**Keeping the town going with a model of your own.** Everything waits on the AI when only the AI decides, so with a model on this computer:
+- one failed or slow answer never stops it for long: the endpoint rests for 2–5 s (a public service rests for minutes), and the director backs off for 1–10 s, not up to 2 minutes; a request given up on says it took too long (408), not that Ollama couldn't be reached;
+- the runner hands the director the AI's answers, and lets it send the next questions, at least every 100 ms, even while the clock is slowed right down (`SimRunner.afterSteps`); otherwise the slower the clock, the slower the AI's answers were taken in;
+- a line that got no answer at all is asked for again up to 6 times, a line it got wrong 4 times;
+- answers are read generously (`ai/match.ts`): the id in brackets or another case, the option's label, its number on the list;
+- while 3 or more people stand waiting to be told what to do, the agents' thinking about people and plans is put off (not decided for them), so the AI's time goes to the people standing there.
+
+`AIDirector.trouble()` says when something's wrong: the AI keeps failing (with why, and what to do: start Ollama, use a smaller model, restart Ollama), or it can't keep up and 6 or more people have been waiting for over a minute. It's in the AI status (`trouble`, `answers`): the top bar shows **⚠️ The AI isn't answering** or **🐢 The AI can't keep up**, and the 🧠 AI panel says what's wrong, with **Try again now** and **Let the built-in AI fill in meanwhile**. The server prints it in its window as it starts and ends, and with a free AI prints a line a minute: answers, seconds each, failures, people waiting, the clock's pace.
 
 ## Tuning
 

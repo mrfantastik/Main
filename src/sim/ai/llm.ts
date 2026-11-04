@@ -150,6 +150,21 @@ export function strategyPrompt(world: WorldState, c: Citizen, options: { id: str
   return { user, schema };
 }
 
+/** The hour of the day a model meant ("07:30", "7.30", "7:30pm", "8am", "19", 19.5); null if it isn't one. */
+export function readHour(t: unknown): number | null {
+  if (typeof t === "number") return Number.isFinite(t) && t >= 0 && t < 24 ? t : null;
+  if (typeof t !== "string") return null;
+  const m = t.trim().toLowerCase().match(/^(\d{1,2})(?:[:.h](\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?$/);
+  if (!m) return null;
+  let h = Number(m[1]);
+  const min = m[2] ? Number(m[2]) : 0;
+  if (min >= 60 || h > 24) return null;
+  if (m[3]?.startsWith("p") && h < 12) h += 12;
+  if (m[3]?.startsWith("a") && h === 12) h = 0;
+  if (h === 24) h = 0;
+  return h + min / 60;
+}
+
 // ----------------------------------------------------- inner voice
 
 export const THOUGHT_SYSTEM =

@@ -15,6 +15,7 @@ export function AIPanel() {
   const pctUsed = ai.budgetUsd > 0 ? Math.min(100, (ai.spentUsd / ai.budgetUsd) * 100) : 100;
   return (
     <Shell title="🧠 AI engine">
+      {ai.trouble && <TroubleBox ai={ai} />}
       <div className="grid2">
         {ai.brain ? <BrainBox ai={ai} /> : ai.free ? <FreeAIBox ai={ai} /> : (
         <div className="box">
@@ -187,6 +188,44 @@ function AgentsBox() {
   );
 }
 
+/** Something's wrong with the AI: what, what to do about it, and (only the AI deciding) letting the built-in AI fill in. */
+function TroubleBox({ ai }: { ai: AIStatusDTO }) {
+  const t = ai.trouble!;
+  const a = ai.answers;
+  return (
+    <div className="box" style={{ borderColor: t.level === "error" ? "#e5484d" : "#d9a400", marginBottom: 10 }}>
+      <h3 style={{ marginTop: 0 }}>{t.level === "error" ? "⚠️ The AI isn't answering" : "🐢 The AI can't keep up"}</h3>
+      <p style={{ marginTop: 0 }}>
+        {t.text}.{t.hint ? <> {t.hint}</> : null}
+      </p>
+      {a && (
+        <p className="muted">
+          Last minute: {a.answered} answer{a.answered === 1 ? "" : "s"}
+          {a.avgSeconds !== null ? `, ${a.avgSeconds} s each` : ""}
+          {a.failed ? `, ${a.failed} failed` : ""}
+          {a.quietFor !== null && a.quietFor > 30 ? ` · last answer ${a.quietFor} s ago` : ""}
+        </p>
+      )}
+      <div className="god-row">
+        {t.level === "error" && ai.free && (
+          <button className="btn" title="Ask the AI again straight away" onClick={() => store.send({ type: "ai", probe: true })}>
+            🔄 Try again now
+          </button>
+        )}
+        {ai.aiOnly && (
+          <button
+            className="btn"
+            title="Turn off 'Only the AI speaks, thinks and decides': the AI still does all it can, and the built-in AI fills in whatever it can't get to, so nobody stands there waiting. Tick it again in this panel whenever you like."
+            onClick={() => store.send({ type: "ai", aiOnly: false })}
+          >
+            🤝 Let the built-in AI fill in meanwhile
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** How much of the town's talking the AI does: conversations at once, requests at once, gap between calls. */
 function TalkLimits() {
   const ai = useStore((x) => x.state?.ai);
@@ -214,6 +253,16 @@ function TalkLimits() {
           <span>
             {ai.waiting.people} {ai.waiting.people === 1 ? "person" : "people"} waiting to be told what they do · {ai.waiting.decisions} other decision{ai.waiting.decisions === 1 ? "" : "s"} queued
             {ai.waiting.pace < 1 ? ` · clock slowed to ${Math.round(ai.waiting.pace * 100)}%` : ""}
+          </span>
+        </div>
+      )}
+      {ai.answers && (
+        <div className="kv" style={{ marginBottom: 6 }}>
+          <span className="k">The AI's answers</span>
+          <span>
+            last minute: {ai.answers.answered}
+            {ai.answers.avgSeconds !== null ? ` (${ai.answers.avgSeconds} s each)` : ""}
+            {ai.answers.failed ? ` · ${ai.answers.failed} failed` : ""}
           </span>
         </div>
       )}
@@ -308,7 +357,7 @@ function FreeAIBox({ ai }: { ai: AIStatusDTO }) {
           </p>
         </>
       )}
-      {conn?.blocked && (
+      {conn?.blocked && !ai.localOnly && (
         <div className="item" style={{ borderColor: "#e5484d", marginBottom: 8 }}>
           <b>This page can't reach the internet.</b> Pages published on claude.ai aren't allowed to call outside services, so here the built-in AI
           does all the thinking and talking. To play with the free AI, download the game file (<code>ai-hustle-city.html</code>) and open it in
@@ -324,6 +373,8 @@ function FreeAIBox({ ai }: { ai: AIStatusDTO }) {
             <span className="chip good">🌐 Connected · {conn.active}</span>
           ) : conn?.blocked ? (
             <span className="chip bad">No internet here</span>
+          ) : conn?.providers.length && conn.providers.every((p) => p.state === "unreachable") ? (
+            <span className="chip bad">Can't connect</span>
           ) : (
             <span className="chip">Connecting…</span>
           )}

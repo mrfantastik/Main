@@ -1,5 +1,5 @@
 import type { LLMClient, LLMRequest, LLMResponse } from "./llm";
-import { isCloudModel } from "./localai";
+import { isCloudModel, isLocalUrl } from "./localai";
 
 // Free AI anyone can use: public chat endpoints that need no account and no
 // key. Several are tried in turn, because free services come and go and
@@ -25,6 +25,8 @@ export interface FreeProvider {
   model: string;
   key?: string;
   kind: "chat" | "get";
+  /** It's Ollama (whatever its port): it can be held to the reply's shape, and to a short reply. */
+  ollama?: boolean;
 }
 
 export const FREE_PROVIDERS: FreeProvider[] = [
@@ -42,6 +44,8 @@ export interface FreeAIOptions {
   custom?: { url: string; model?: string; key?: string } | null;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** `url` is Ollama's (the free launcher knows, even when it isn't on Ollama's usual port). */
+  ollama?: boolean;
 }
 
 export type ProviderState = "untried" | "ok" | "busy" | "unreachable" | "error";
@@ -59,6 +63,8 @@ export interface FreeAIStatus {
 /** Things the director and hosts can ask of a free client beyond completing. */
 export interface FreeAIClient extends LLMClient {
   readonly free: true;
+  /** It's one model of the player's own, on this computer or their network (not a rate-limited public service). */
+  readonly local: boolean;
   status(): FreeAIStatus;
   /** Try every service with a tiny request; resolves with the status afterwards. */
   probe(): Promise<FreeAIStatus>;
@@ -131,11 +137,35 @@ export function pickModel(ids: string[]): string | null {
 }
 
 const REST_MS: Record<Exclude<ProviderState, "untried" | "ok">, number> = { busy: 30_000, unreachable: 3 * 60_000, error: 2 * 60_000 };
+/**
+ * The one endpoint there is (a model of your own): never rested for minutes
+ * after an error, which would stop everything. It isn't rate limited; it was
+ * busy, still loading the model, or slow to answer once.
+ */
+const FIXED_REST_MS: Record<Exclude<ProviderState, "untried" | "ok">, number> = { busy: 2_000, unreachable: 5_000, error: 2_000 };
+
+/** Models that reason before they answer (slow, and their reasoning counts towards the length of the reply). */
+export const REASONING = /(^|[^a-z])(r1|qwq|qwen3|gpt-oss|magistral|phi4-reasoning|cogito|openthinker|exaone-deep|deepseek-v3\.1)|think|reason/i;
+
+/** "127.0.0.1:11434" (for messages). */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+/** A schema worth holding the model to (one with properties, not an empty one). */
+function hasProperties(schema: unknown): schema is Record<string, unknown> {
+  const props = (schema as { properties?: unknown } | null)?.properties;
+  return !!props && typeof props === "object" && Object.keys(props as object).length > 0;
+}
 
 export function createFreeAIClient(opts: FreeAIOptions = {}): FreeAIClient {
   const doFetch = opts.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
   const timeoutMs = opts.timeoutMs ?? 40_000;
-  const fixed: FreeProvider[] | null = opts.url ? [{ id: "custom", name: "Your endpoint", url: opts.url, model: opts.model ?? "openai", key: opts.key, kind: "chat" }] : null;
+  const fixed: FreeProvider[] | null = opts.url ? [{ id: "custom", name: "Your endpoint", url: opts.url, model: opts.model ?? "openai", key: opts.key, kind: "chat", ollama: opts.ollama }] : null;
   // Each client keeps its own copies (a service's model can change after asking it what it has).
   const builtins = FREE_PROVIDERS.map((p) => ({ ...p }));
   let custom: FreeProvider | null = null;
@@ -148,8 +178,11 @@ export function createFreeAIClient(opts: FreeAIOptions = {}): FreeAIClient {
   const st = (p: FreeProvider) => state.get(p.id) ?? { state: "untried" as ProviderState, note: "", until: 0 };
   const mark = (p: FreeProvider, s: ProviderState, note: string) => {
     const prev = st(p);
-    state.set(p.id, { ...prev, state: s, note, until: s === "ok" ? 0 : Date.now() + REST_MS[s as keyof typeof REST_MS] });
+    const rest = fixed ? FIXED_REST_MS : REST_MS;
+    state.set(p.id, { ...prev, state: s, note, until: s === "ok" ? 0 : Date.now() + rest[s as keyof typeof rest] });
   };
+  // Ollama can be held to the exact reply shape (choices from the list only); older versions that can't are held to JSON.
+  let schemasOk = true;
 
   async function timed(url: string, init: RequestInit): Promise<Response> {
     const ctrl = typeof AbortController === "function" ? new AbortController() : null;
@@ -157,7 +190,9 @@ export function createFreeAIClient(opts: FreeAIOptions = {}): FreeAIClient {
     try {
       return await doFetch(url, { ...init, signal: ctrl?.signal });
     } catch (err) {
-      throw new FreeAIError(`couldn't connect (${(err as Error).message ?? err})`, 0);
+      // Gave up waiting (it's there, but slow or busy) isn't the same as not being there at all.
+      if (ctrl?.signal.aborted) throw new FreeAIError(`took longer than ${Math.round(timeoutMs / 1000)} s to answer`, 408);
+      throw new FreeAIError(`couldn't connect to ${hostOf(url)} (${(err as Error).message ?? err})`, 0);
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -182,10 +217,13 @@ export function createFreeAIClient(opts: FreeAIOptions = {}): FreeAIClient {
     }
   }
 
-  async function callChat(p: FreeProvider, system: string, user: string): Promise<LLMResponse> {
+  async function callChat(p: FreeProvider, system: string, user: string, schema?: Record<string, unknown>, maxTokens?: number): Promise<LLMResponse> {
     const isPollinations = /pollinations\.ai/.test(p.url);
-    // Ollama (on its usual port) can be held to JSON, which small local models need.
-    const isOllama = /:11434\//.test(p.url);
+    // Ollama (on its usual port) can be held to JSON, which small local models need, and to the reply's shape:
+    // then a choice is always one from the list, and an action one the town knows.
+    const isOllama = !!p.ollama || /:11434\//.test(p.url);
+    const shaped = isOllama && schemasOk && hasProperties(schema);
+    const format = isOllama ? (shaped ? { type: "json_schema", json_schema: { name: "reply", schema } } : { type: "json_object" }) : null;
     const res = await timed(p.url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(p.key ? { Authorization: `Bearer ${p.key}` } : {}) },
@@ -200,10 +238,21 @@ export function createFreeAIClient(opts: FreeAIOptions = {}): FreeAIClient {
         seed: seed++,
         // Pollinations: keep the town's chatter out of the public feed, and say who's asking.
         ...(isPollinations ? { private: true, referrer: "ai-hustle-city" } : {}),
-        ...(isOllama ? { response_format: { type: "json_object" } } : {}),
+        ...(format ? { response_format: format } : {}),
+        // (Ollama: a reply is never long, and a model that rambles, or pads its JSON with blank lines, can't hold it up.
+        // Not a "thinking" model, whose reasoning counts too.)
+        ...(isOllama && maxTokens && !REASONING.test(p.model) ? { max_tokens: maxTokens } : {}),
       }),
     });
-    if (!res.ok) throw await failure(res);
+    if (!res.ok) {
+      const e = await failure(res);
+      // An Ollama too old for reply shapes (or a shape it can't follow): plain JSON from now on.
+      if (shaped && (e.status === 400 || e.status === 422 || e.status === 500) && /format|schema|grammar|json/i.test(e.message)) {
+        schemasOk = false;
+        return callChat(p, system, user, undefined, maxTokens);
+      }
+      throw e;
+    }
     const data = (await res.json().catch(() => null)) as { choices?: { message?: { content?: unknown } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string } | null;
     const content = data?.choices?.[0]?.message?.content;
     if (typeof content !== "string" || !content.trim()) throw new FreeAIError("sent back nothing", 502);
@@ -236,7 +285,7 @@ export function createFreeAIClient(opts: FreeAIOptions = {}): FreeAIClient {
       try {
         let res: LLMResponse;
         try {
-          res = p.kind === "get" ? await callGet(p, system, req.user) : await callChat(p, system, req.user);
+          res = p.kind === "get" ? await callGet(p, system, req.user) : await callChat(p, system, req.user, req.schema, req.maxTokens);
         } catch (err) {
           // Wrong or retired model name: ask the service what it has, once.
           const e = err as FreeAIError;
@@ -245,7 +294,7 @@ export function createFreeAIClient(opts: FreeAIOptions = {}): FreeAIClient {
             const m = await discoverModel(p);
             if (!m || m === p.model) throw e;
             p.model = m;
-            res = await callChat(p, system, req.user);
+            res = await callChat(p, system, req.user, req.schema, req.maxTokens);
           } else throw e;
         }
         mark(p, "ok", `connected (${p.model})`);
@@ -254,11 +303,13 @@ export function createFreeAIClient(opts: FreeAIOptions = {}): FreeAIClient {
         return res;
       } catch (err) {
         const e = err instanceof FreeAIError ? err : new FreeAIError(String((err as Error)?.message ?? err), 0);
-        mark(p, e.status === 0 ? "unreachable" : e.status === 429 || e.status === 503 || e.status === 402 ? "busy" : "error", e.message);
+        mark(p, e.status === 0 ? "unreachable" : e.status === 429 || e.status === 503 || e.status === 402 || e.status === 408 ? "busy" : "error", e.message);
         last = e;
       }
     }
-    if (order.length === 0) throw new FreeAIError("every free AI service is resting after errors; trying again shortly", 429);
+    if (order.length === 0) throw new FreeAIError(fixed ? "resting a moment after an error; trying again shortly" : "every free AI service is resting after errors; trying again shortly", 429);
+    // (Just the one endpoint: its own error says it best.)
+    if (fixed && last) throw last;
     const allUnreachable = all.every((p) => st(p).state === "unreachable");
     throw new FreeAIError(allUnreachable ? `couldn't reach any free AI service (${last?.message ?? "no connection"})` : `no free AI service could answer (${last?.message ?? "busy"})`, allUnreachable ? 0 : (last?.status ?? 429));
   }
@@ -266,6 +317,7 @@ export function createFreeAIClient(opts: FreeAIOptions = {}): FreeAIClient {
   const client: FreeAIClient = {
     model: fixed ? fixed[0].model : "auto",
     free: true,
+    local: !!fixed && isLocalUrl(fixed[0].url),
     label: FREE_AI_NAME,
     complete,
     status(): FreeAIStatus {
@@ -274,7 +326,8 @@ export function createFreeAIClient(opts: FreeAIOptions = {}): FreeAIClient {
       return {
         connected: Date.now() - lastOk < 5 * 60_000 && active !== null,
         active: all.find((p) => p.id === active)?.name ?? null,
-        blocked: tried.length === all.length && all.every((p) => st(p).state === "unreachable"),
+        // (A model on this computer that isn't answering isn't a page with no internet: it isn't running.)
+        blocked: !client.local && tried.length === all.length && all.every((p) => st(p).state === "unreachable"),
         providers: all.map((p) => ({ name: p.name, state: st(p).state, note: st(p).note })),
       };
     },

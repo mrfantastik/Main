@@ -2,6 +2,9 @@ import { MAX_SKIP_MINUTES, MS_PER_GAME_MINUTE, SPEEDS } from "../shared/protocol
 import { step } from "./engine";
 import type { WorldState } from "./types";
 
+/** The most time between two calls of afterSteps while running (ms). */
+const PUMP_MS = 100;
+
 /**
  * Runs the simulation in real time. Game time advances in fixed 1-minute
  * steps (so results are deterministic regardless of frame rate); the speed
@@ -13,8 +16,14 @@ export class SimRunner {
   private acc = 0;
   private last = performance.now();
   private timer: ReturnType<typeof setInterval> | null = null;
-  /** Called after each batch of steps (used by the AI director). */
+  /**
+   * Called after each batch of steps, and at least every PUMP_MS while it's
+   * running even if no step was due (used by the AI director: its answers are
+   * taken in, and the next questions sent, without waiting for the clock,
+   * which runs slowly while people wait for the AI).
+   */
   afterSteps: ((world: WorldState) => void) | null = null;
+  private lastAfter = 0;
   /**
    * How fast the clock runs relative to the speed setting (1: as set). The
    * AI director slows it while people wait for the AI (only the AI deciding).
@@ -76,6 +85,9 @@ export class SimRunner {
       this.acc -= steps;
     }
     for (let i = 0; i < steps; i++) step(this.world);
-    if (steps > 0) this.afterSteps?.(this.world);
+    if (steps > 0 || now - this.lastAfter >= PUMP_MS) {
+      this.lastAfter = now;
+      this.afterSteps?.(this.world);
+    }
   }
 }

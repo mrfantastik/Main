@@ -23,7 +23,8 @@ import { botSystem, hourLabel, smallChoicePrompt, smallPlayerChatPrompt, smallDa
 import { situation } from "./situation";
 import { makeAction } from "./actions";
 import type { FreeAIClient, FreeAIStatus } from "./freeai";
-import { costUsd, REFLECTION_SYSTEM, reflectionPrompt, STRATEGY_SYSTEM, strategyPrompt, THOUGHT_SYSTEM, thoughtPrompt, type LLMClient } from "./llm";
+import { costUsd, readHour, REFLECTION_SYSTEM, reflectionPrompt, STRATEGY_SYSTEM, strategyPrompt, THOUGHT_SYSTEM, thoughtPrompt, type LLMClient } from "./llm";
+import { matchOption } from "./match";
 import { applyStrategy, askAgainLater, setStrategyHook, strategyOptions, type StrategyOption } from "./strategy";
 import { SOCIETY } from "../society/config";
 import { societyOf } from "../society/state";
@@ -144,6 +145,8 @@ interface LiveTurn {
   plan?: GroupPlan;
   req?: { system: string; user: string; schema: Record<string, unknown>; small?: SmallPrompt };
   attempts?: number;
+  /** Tries that got no answer at all (it was busy or slow). */
+  missed?: number;
   why?: string;
 }
 
@@ -202,6 +205,12 @@ const ACCEPT_MARGIN = 2.2;
 const AI_ONLY_MARGIN = 4;
 /** A live chat whose AI keeps failing is finished by the built-in voices after this many failures in a row. */
 const LIVE_FAILURES = 3;
+/** AI-only: tries at a line when no answer came back at all (it was busy, or slow), before the conversation ends there. */
+const AI_ONLY_NO_ANSWER = 6;
+/** The longest a reply of each kind needs to be (tokens; a free model is cut off after that, Claude gets plenty). */
+const REPLY_TOKENS: Record<Pending["kind"], number> = { strategy: 400, conversation: 400, reflection: 800, invent: 1500, thought: 250, plan: 400, dayplan: 600, diary: 300, chat: 300, decide: 600, choice: 400 };
+/** The next thing on someone's plan for the day may be started this early (hours). */
+const PLAN_EARLY_H = 0.75;
 
 
 export class AIDirector {
@@ -243,8 +252,15 @@ export class AIDirector {
   private lastKind: Pending["kind"] | null = null;
   /** Messages for the player (the server shows them as toasts). */
   readonly notices: { text: string; level: "info" | "error" }[] = [];
+  /** How the AI's been answering (real time): the last answer, the last failure and why, and the last few minutes' answers. */
+  private health = { okAt: 0, failAt: 0, lastError: "", streak: 0, recent: [] as { at: number; ok: boolean; ms: number }[] };
+  /** Since when (real time) a crowd has been standing there waiting for the AI (0: nobody much). */
+  private crowdSince = 0;
   /** What the AI has done so far: choices people acted on, conversations it wrote, thoughts. */
   readonly tally = { plan: 0, conversation: 0, thought: 0, dayplan: 0, followed: 0, diary: 0, decide: 0, choice: 0 };
+
+  /** When it was made (real time): "hasn't answered for" counts from here until the first answer. */
+  private readonly startedAt = Date.now();
 
   constructor(
     private client: LLMClient | null,
@@ -668,15 +684,18 @@ export class AIDirector {
    * few tries the conversation ends where it is.
    */
   private retryLine(world: WorldState, d: Done, conv: Conversation, l: Live, t: LiveTurn, why: string, name: string): void {
-    const attempts = (t.attempts ?? 0) + 1;
+    // (No answer at all, because it was busy or slow, isn't a line it got wrong: it gets a few more goes at those.)
+    const attempts = (t.attempts ?? 0) + (d.error ? 0 : 1);
+    const missed = (t.missed ?? 0) + (d.error ? 1 : 0);
     l.failures++;
-    const giveUp = attempts >= AI_ONLY_ATTEMPTS;
-    this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), `${d.error ? `error: ${d.error}` : `turned down (${why})`}: ${giveUp ? `${name} couldn't find the words, so the conversation ends there` : `asking for ${name}'s line again (${attempts + 1} of ${AI_ONLY_ATTEMPTS})`}`);
+    const giveUp = attempts >= AI_ONLY_ATTEMPTS || missed >= AI_ONLY_NO_ANSWER;
+    const next = d.error ? `asking for ${name}'s line again (no answer ${missed} of ${AI_ONLY_NO_ANSWER})` : `asking for ${name}'s line again (${attempts + 1} of ${AI_ONLY_ATTEMPTS})`;
+    this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), `${d.error ? `error: ${d.error}` : `turned down (${why})`}: ${giveUp ? `${name} couldn't find the words, so the conversation ends there` : next}`);
     if (giveUp) {
       this.endLiveChat(world, conv.id, l, false);
       return;
     }
-    l.turn = { ...t, attempts, why: d.error ? "" : why };
+    l.turn = { ...t, attempts, missed, why: d.error ? (t.why ?? "") : why };
   }
 
   /**
@@ -709,6 +728,9 @@ export class AIDirector {
     // (A slow model is left out of it, unless only the AI decides.)
     if (!this.available || world.ai.mode !== "llm" || (this.client?.slow?.() && !world.ai.aiOnly)) return false;
     if (!this.canCall(world, true)) return false;
+    // Only the AI deciding, and it can't keep up: people standing there waiting to be told what to do come first,
+    // so they think about people and plans a little later (it's put off, not decided for them).
+    if (world.ai.aiOnly && c.id !== this.focus && this.behind(world)) return false;
     if ([...this.inFlight.values()].some((p) => p.kind === "decide" && p.citizenId === c.id)) return true;
     this.wantDecide.set(c.id, { world, why, at: world.time });
     return true;
@@ -975,9 +997,24 @@ export class AIDirector {
    * world.ai.waitForAI false to let the clock run regardless.
    */
   pace(world: WorldState): number {
-    if (!world.ai.aiOnly || world.ai.waitForAI === false || !this.available || world.ai.mode !== "llm") return 1;
+    if (!world.ai.aiOnly || !this.available || world.ai.mode !== "llm") {
+      this.crowdSince = 0;
+      return 1;
+    }
     const waiting = world.citizenOrder.filter((id) => waitingForAI(world.citizens[id])).length;
+    if (waiting < 6) this.crowdSince = 0;
+    else if (!this.crowdSince) this.crowdSince = Date.now();
+    if (world.ai.waitForAI === false) return 1;
     return waiting <= 2 ? 1 : Math.max(0.1, Math.round((2 / waiting) * 100) / 100);
+  }
+
+  /** Only the AI deciding: it's behind (several people standing there waiting for it, or a queue of decisions). */
+  private behind(world: WorldState): boolean {
+    let waiting = 0;
+    for (const id of world.citizenOrder) if (waitingForAI(world.citizens[id]) && ++waiting >= 3) return true;
+    let queued = 0;
+    for (const w of this.wantDecide.values()) if (w.world === world && ++queued >= 3) return true;
+    return false;
   }
 
   /** Only the AI deciding: people standing waiting for it, and decisions queued for it. */
@@ -1066,7 +1103,7 @@ export class AIDirector {
     if (!focusOnly && (this.small || aiOnly)) {
       c = world.citizenOrder
         .map((cid) => world.citizens[cid])
-        .filter((x) => ready(x) && (waits(x) || (!waitingOnly && left(x) > (aiOnly ? 0 : 8) && left(x) < (aiOnly ? 240 : 180))))
+        .filter((x) => ready(x) && (waits(x) || (!waitingOnly && left(x) > (aiOnly ? 0 : 8) && left(x) < (aiOnly ? 240 : 180) && !(aiOnly && this.planCovers(world, x)))))
         // (Of those waiting, the hungriest or most worn out first.)
         .sort((x, y) => Number(waits(y)) - Number(waits(x)) || (waits(x) ? need(y) - need(x) : 0) || left(x) - left(y))[0];
     }
@@ -1099,8 +1136,7 @@ export class AIDirector {
       return;
     }
     const reply = d.json as { choice?: unknown; thought?: unknown } | null;
-    const choice = reply && typeof reply.choice === "string" ? reply.choice : null;
-    const option = choice ? (this.optionsAfter(world, c).find((o) => o.id === choice) ?? this.seeOptions(world, c).find((o) => o.id === choice)) : undefined;
+    const option = reply ? matchOption(reply.choice, [...this.optionsAfter(world, c), ...this.seeOptions(world, c)]) : undefined;
     if (!option) {
       if (aiOnly) {
         // Only the AI deciding: asked again in a moment (nobody decides for them meanwhile).
@@ -1226,18 +1262,35 @@ export class AIDirector {
     const c = world.citizens[d.pending.citizenId];
     if (!c) return;
     const labels = d.pending.labels ?? {};
+    const options = Object.entries(labels).map(([id, label]) => ({ id, label }));
     const raw = (d.json as { items?: unknown } | null)?.items;
-    const items: AgentPlanItem[] = (Array.isArray(raw) ? raw : [])
-      .filter((x): x is { hour: number; id: string; why?: string } => !!x && typeof x.hour === "number" && typeof x.id === "string" && !!labels[x.id])
-      .map((x) => ({ hour: x.hour, id: x.id, label: labels[x.id], why: typeof x.why === "string" ? x.why : "", status: "todo" as const }));
-    if (items.length < 2) {
-      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : "no usable plan: the utility AI runs their day");
+    // (The town's brain writes {hour, id, why}; a bigger model {time, choice, why}.)
+    const items: AgentPlanItem[] = [];
+    for (const x of Array.isArray(raw) ? (raw as Record<string, unknown>[]) : []) {
+      if (!x || typeof x !== "object") continue;
+      const read = readHour(x.hour ?? x.time);
+      const o = matchOption(x.id ?? x.choice, options);
+      if (read === null || !o) continue;
+      // (Things after midnight are the end of this day: last thing at night.)
+      const hour = read < 4 ? 23.75 : read;
+      const why = typeof x.why === "string" ? x.why.replace(/\s+/g, " ").trim().slice(0, 160) : "";
+      items.push({ hour, id: o.id, label: o.label, why, status: "todo" });
+    }
+    // In time order, each time once.
+    items.sort((a, b) => a.hour - b.hour);
+    const plan = items.filter((it, i) => i === 0 || it.hour !== items[i - 1].hour);
+    if (plan.length < 2) {
+      // Only the AI deciding: asked again before long (meanwhile it's asked what they do next, as it comes up).
+      if (world.ai.aiOnly) c.cooldowns.agentPlan = world.time - 240 + 20;
+      this.log(world, d, d.error ? "error" : "rejected", JSON.stringify(d.json ?? d.error), d.error ? `error: ${d.error}` : world.ai.aiOnly ? "no usable plan: asking again soon" : "no usable plan: the utility AI runs their day");
       return;
     }
     c.agent ??= { plan: null, diary: [] };
-    c.agent.plan = { day: d.pending.day ?? dayOf(world.time), items };
+    c.agent.plan = { day: d.pending.day ?? dayOf(world.time), items: plan };
     this.tally.dayplan++;
-    this.log(world, d, "ok", JSON.stringify(d.json), `${c.name}'s plan for day ${c.agent.plan.day}: ${items.map((i) => `${hourLabel(i.hour)} ${i.label.charAt(0).toLowerCase()}${i.label.slice(1)}`).join(", ")}`);
+    this.log(world, d, "ok", JSON.stringify(d.json), `${c.name}'s plan for day ${c.agent.plan.day}: ${plan.map((i) => `${hourLabel(i.hour)} ${i.label.charAt(0).toLowerCase()}${i.label.slice(1)}`).join(", ")}`);
+    // Standing there waiting to be told what to do: they get on with it.
+    if (world.ai.aiOnly && waitingForAI(c)) c.activity.endsAt = world.time;
   }
 
   // --------------------------------------------------- what they do
@@ -1259,7 +1312,6 @@ export class AIDirector {
     const hour = (world.time % 1440) / 60;
     const plan = c.agent?.plan?.day === dayOf(world.time) ? c.agent.plan : null;
     if (plan) for (const it of plan.items) if (it.status === "todo" && hour > it.hour + 3) it.status = "skipped";
-    const due = plan?.items.find((it) => it.status === "todo" && hour >= it.hour - 0.75);
 
     const pick = this.plans.get(c.id);
     if (pick && pick.reqId >= 0 && world.time <= pick.until) {
@@ -1275,16 +1327,35 @@ export class AIDirector {
         return { option: o, thought: pick.thought };
       }
     }
-    if (due) {
+    // The next thing on the plan, once it's (nearly) time; one that can't be done now is let go once its time has come.
+    for (const due of plan?.items ?? []) {
+      if (due.status !== "todo") continue;
+      if (hour < due.hour - PLAN_EARLY_H) break;
       const o = find(due.id);
       if (o && fits(o)) {
         due.status = "done";
         this.tally.followed++;
         const why = due.why ? due.why.charAt(0).toUpperCase() + due.why.slice(1) : "";
-        return { option: o, thought: why ? (/[.!?]$/.test(why) ? why : `${why}.`) : `${hourLabel(due.hour)} on my plan: ${due.label.charAt(0).toLowerCase()}${due.label.slice(1)}.` };
+        // (Only the AI deciding: only its own words are shown, so no reason given means no thought.)
+        const thought = why ? (/[.!?]$/.test(why) ? why : `${why}.`) : world.ai.aiOnly ? null : `${hourLabel(due.hour)} on my plan: ${due.label.charAt(0).toLowerCase()}${due.label.slice(1)}.`;
+        return { option: o, thought };
       }
+      if (hour >= due.hour) due.status = "skipped";
     }
     return null;
+  }
+
+  /**
+   * Only the AI deciding: what they do once they've finished what they're
+   * doing is already on their plan for the day (so it needn't be asked).
+   */
+  private planCovers(world: WorldState, c: Citizen): boolean {
+    const end = c.activity.endsAt;
+    const plan = c.agent?.plan;
+    if (!plan || plan.day !== dayOf(end)) return false;
+    const hour = (end % 1440) / 60;
+    const next = plan.items.find((it) => it.status === "todo" && hour <= it.hour + 3);
+    return !!next && hour >= next.hour - PLAN_EARLY_H;
   }
 
   // ------------------------------------------------------- the diary
@@ -1441,19 +1512,96 @@ export class AIDirector {
     world.ai.callsToday++;
     const client = this.client!;
     client
-      .complete({ system, user, schema, maxTokens: 3000, small })
+      .complete({ system, user, schema, maxTokens: client.free ? REPLY_TOKENS[p.kind] : 3000, small })
       .then((res) => {
         const cost = client.free ? 0 : costUsd(res.model, res.inputTokens, res.outputTokens);
         if (cost) this.ledger.add(cost);
         this.failures = 0;
+        if (this.inFlight.has(pending.id)) this.noteAnswer(true, Date.now() - pending.startedAt);
         this.finish({ pending, json: res.json, costUsd: cost, ms: Date.now() - pending.startedAt });
       })
       .catch((err: Error & { status?: number }) => {
         if (client.free) this.slowDown(err.status ?? 0);
         else if (err.status === 401 || err.status === 403) this.disabledReason = `Claude API rejected the key (${err.status})`;
+        if (this.inFlight.has(pending.id)) this.noteAnswer(false, Date.now() - pending.startedAt, err.message ?? "error");
         this.finish({ pending, json: null, costUsd: 0, ms: Date.now() - pending.startedAt, error: err.message?.slice(0, 200) ?? "error" });
       });
     return pending.id;
+  }
+
+  private noteAnswer(ok: boolean, ms: number, error?: string): void {
+    const now = Date.now();
+    const h = this.health;
+    if (ok) {
+      h.okAt = now;
+      h.streak = 0;
+    } else {
+      h.failAt = now;
+      h.streak++;
+      h.lastError = (error ?? "error").replace(/\s+/g, " ").slice(0, 160);
+    }
+    h.recent.push({ at: now, ok, ms });
+    while (h.recent.length && (h.recent.length > 400 || now - h.recent[0].at > 5 * 60_000)) h.recent.shift();
+  }
+
+  /**
+   * How the AI's been answering over the last `windowMs` (real time): answers,
+   * failures, how long an answer took on average (s), the last failure, and
+   * how long since the last answer (s; null: none yet).
+   */
+  answers(windowMs = 60_000): { answered: number; failed: number; avgSeconds: number | null; lastError: string | null; quietFor: number | null } {
+    const now = Date.now();
+    const recent = this.health.recent.filter((r) => now - r.at <= windowMs);
+    const ok = recent.filter((r) => r.ok);
+    return {
+      answered: ok.length,
+      failed: recent.length - ok.length,
+      avgSeconds: ok.length ? Math.round(ok.reduce((a, r) => a + r.ms, 0) / ok.length / 100) / 10 : null,
+      lastError: this.health.failAt && now - this.health.failAt <= windowMs ? this.health.lastError : null,
+      quietFor: this.health.okAt ? Math.round((now - this.health.okAt) / 1000) : null,
+    };
+  }
+
+  /**
+   * Something's wrong that the player should know about (null: nothing):
+   * the AI keeps failing (and why, and what to do about it), or it can't
+   * keep up and a crowd is standing there waiting for it.
+   */
+  trouble(world: WorldState): { level: "error" | "slow"; text: string; hint: string } | null {
+    if (!this.available || world.ai.mode !== "llm") return null;
+    const now = Date.now();
+    const h = this.health;
+    const quiet = now - Math.max(h.okAt, this.startedAt);
+    if (h.streak >= 3 && h.failAt > h.okAt && quiet > 20_000) {
+      const e = h.lastError;
+      const local = (this.client as FreeAIClient | null)?.local;
+      const hint = /connect|ECONNREFUSED|fetch failed|unreach|ENOTFOUND/i.test(e)
+        ? local
+          ? "Is Ollama running? Start it from the Start menu (or run: ollama serve). The town carries on by itself as soon as it answers."
+          : "Check your internet connection. The town carries on by itself as soon as it answers."
+        : /no answer within|took longer|timed out|abort/i.test(e)
+          ? local
+            ? "The model is too slow on this computer. A smaller one answers much faster: close the game and start it with  npm run free -- --model qwen2.5:1.5b  (or close other programs that use the graphics card)."
+            : "The AI is too slow right now. It carries on as soon as answers come back in time."
+          : /answered 4\d\d|answered 5\d\d/.test(e)
+            ? local
+              ? "Ollama sent back an error. Try restarting Ollama (quit it from the tray icon and start it again)."
+              : "The AI service sent back an error. It's tried again by itself."
+            : "";
+      return { level: "error", text: `The AI hasn't answered for ${Math.round(quiet / 1000)} s: ${e}`, hint };
+    }
+    const people = world.citizenOrder.filter((id) => waitingForAI(world.citizens[id])).length;
+    if (world.ai.aiOnly && this.crowdSince && now - this.crowdSince > 60_000 && people >= 6) {
+      const a = this.answers();
+      return {
+        level: "slow",
+        text: `The AI can't keep up: ${people} people are waiting for it to decide what they do${a.avgSeconds !== null ? ` (an answer takes ${a.avgSeconds} s)` : ""}`,
+        hint: (this.client as FreeAIClient | null)?.local
+          ? "The clock slows down to wait for it. A smaller model (npm run free -- --model qwen2.5:1.5b) or a graphics card makes the town livelier."
+          : "The clock slows down to wait for it.",
+      };
+    }
+    return null;
   }
 
   /** The free AI is rate limited or unreachable: wait longer each time it happens, then try again. */
@@ -1462,6 +1610,12 @@ export class AIDirector {
     if (this.small) {
       // The town's brain doesn't get busy, but it can stumble (e.g. the graphics card was reset): a short pause.
       this.backoffUntil = Date.now() + Math.min(30_000, 2_000 * this.failures);
+      return;
+    }
+    if ((this.client as FreeAIClient | null)?.local) {
+      // A model of your own (Ollama on this computer): nobody's rate limiting it, and a long pause would leave
+      // the whole town standing there. It was busy, still loading, or slow once: try again in a moment.
+      this.backoffUntil = Date.now() + Math.min(10_000, 1_000 * this.failures);
       return;
     }
     const wait = Math.min(120_000, 5_000 * 2 ** (this.failures - 1));
@@ -1490,6 +1644,7 @@ export class AIDirector {
     for (const p of [...this.inFlight.values()]) {
       if (now - p.startedAt > this.opts.timeoutMs) {
         this.inFlight.delete(p.id);
+        this.noteAnswer(false, now - p.startedAt, `no answer within ${Math.round(this.opts.timeoutMs / 1000)} s`);
         this.done.push({ pending: p, json: null, costUsd: 0, ms: now - p.startedAt, error: "timed out" });
       }
     }
@@ -1528,7 +1683,7 @@ export class AIDirector {
     const options = strategyOptions(world, c);
     const fallback = options.find((o) => o.id === d.pending.fallbackId) ?? options[0];
     const reply = d.json as { choice?: unknown; thought?: unknown } | null;
-    const chosen = reply && typeof reply.choice === "string" ? options.find((o) => o.id === reply.choice) : undefined;
+    const chosen = reply ? matchOption(reply.choice, options) : undefined;
     // A small model may pick well but explain badly: then they think the option's own thought.
     const thought = reply && typeof reply.thought === "string" && reply.thought ? reply.thought.slice(0, 240) : this.small && chosen ? chosen.thought : "";
     // (Only the AI deciding: a good choice with no reason given still stands; nothing's shown for the thought.)

@@ -15,7 +15,7 @@ import type { LLMClient } from "../src/sim/ai/llm";
 import { isCloudModel, isLocalUrl, notLocal } from "../src/sim/ai/localai";
 import { startActivity } from "../src/sim/ai/actions";
 import { considerApplicant } from "../src/sim/economy/operations";
-import { chooseInstalled, localModels, modelForHardware, ollamaBase, settingsForSpeed } from "../src/server/free";
+import { billions, chooseInstalled, localModels, modelForHardware, ollamaBase, settingsForSpeed, smallerModel } from "../src/server/free";
 import { carryOut, checkAction, readAction } from "../src/sim/society/actions";
 import { logDecision } from "../src/sim/society/state";
 import { createPeerLoan } from "../src/sim/economy/bank";
@@ -234,6 +234,20 @@ test("the free version: only models on this computer, never a cloud one", () => 
   assert.equal(settingsForSpeed(1).concurrency, 4);
   assert.equal(settingsForSpeed(5).pace, "steady");
   assert.equal(settingsForSpeed(20).timeoutMs, 120_000);
+  // Ollama answering one at a time: fewer sent at once, and the wait allows for the one queued ahead.
+  assert.equal(settingsForSpeed(1, false).concurrency, 2);
+  assert.ok(settingsForSpeed(60).timeoutMs >= 240_000, "a very slow model is given minutes");
+  // Too slow here: a smaller model that answers faster.
+  assert.equal(billions({ name: "llama3.1:8b", details: { parameter_size: "8.0B" } }), 8);
+  assert.equal(billions("qwen2.5:14b"), 14);
+  assert.ok(Math.abs(billions({ name: "qwen2.5:0.5b", details: { parameter_size: "494.03M" } })! - 0.494) < 0.001);
+  assert.equal(smallerModel("qwen2.5:7b")?.name, "qwen2.5:3b");
+  assert.equal(smallerModel("gemma3:12b")?.name, "qwen2.5:7b");
+  assert.equal(smallerModel("qwen2.5:3b")?.name, "qwen2.5:1.5b");
+  assert.equal(smallerModel("qwen2.5:1.5b"), null);
+  assert.equal(smallerModel("mistral-nemo"), null);
+  // A "thinking" model is the last choice (slow, and its reasoning gets in the way).
+  assert.equal(chooseInstalled([{ name: "gpt-oss:20b", size: 13e9 }, { name: "phi3:mini", size: 2.2e9 }])?.name, "phi3:mini");
   assert.equal(ollamaBase(undefined), "http://127.0.0.1:11434");
   assert.equal(ollamaBase("0.0.0.0:11434"), "http://127.0.0.1:11434");
   assert.equal(ollamaBase("http://192.168.1.5"), "http://192.168.1.5:11434");

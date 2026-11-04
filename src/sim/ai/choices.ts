@@ -1,3 +1,4 @@
+import { matchOption } from "./match";
 import type { ChoiceRequest, Citizen, WorldState } from "../types";
 import { newId } from "../util";
 import { bestOf, cueThought, recordDecision, setThought, type Option } from "./decision";
@@ -87,7 +88,7 @@ export function settleChoice(world: WorldState, req: ChoiceRequest, choice: unkn
     drop(world, req);
     return { ok: false, error: "it no longer arises", gone: true };
   }
-  const chosen = typeof choice === "string" ? options.find((o) => o.id === choice) : undefined;
+  const chosen = matchOption(choice, options);
   if (!chosen) return { ok: false, error: `"${String(choice)}" isn't one of the choices` };
   drop(world, req);
   recordDecision(world, c, "reaction", options, chosen, "llm", thought || chosen.label);

@@ -35,10 +35,13 @@ Then the town opens in your browser. Leave the black window open while you play,
   - `qwen2.5:7b` with 6 GB or more;
   - `qwen2.5:3b` with less, or on the processor;
   - `qwen2.5:1.5b` on a computer without much memory.
-- It times one answer to see how hard the model can be worked, and sets how many requests go out at once and how many conversations it speaks at once.
+- It times one answer to see how hard the model can be worked, and whether it answers two at once as fast as one, and sets how many requests go out at once, how many conversations it speaks at once and how long to wait for an answer (minutes, for a slow model).
+- If the model it picked takes more than 10 seconds to answer, it tries a smaller one that answers faster (downloading it if need be: `qwen2.5:3b` instead of `qwen2.5:7b`, say) and uses that if it is quicker. `--keep-model` (or naming a model with `--model`) keeps the one you have.
 - It starts the game with **only the AI speaking, thinking and deciding** (below), in **free mode** (`LOCAL_ONLY=1`): the game won't use anything that could cost money, even if you ask it to in the 🧠 AI panel. The top bar shows **🆓 Free · on this computer**.
 
-Options: `npm run free -- --model llama3.1:8b` (a particular model, downloaded if need be), `--port 3001`, `--no-open`. On Windows, add them after the file's name in a command prompt: `Play-Free.bat --model llama3.1:8b`.
+Options: `npm run free -- --model llama3.1:8b` (a particular model, downloaded if need be), `--keep-model`, `--port 3001`, `--no-open`. On Windows, add them after the file's name in a command prompt: `Play-Free.bat --model llama3.1:8b`.
+
+**If nobody's moving or talking:** look at the black window. Once a minute it says how the AI is doing, for example `🧠 Day 1 08:15: 24 answers in the last minute (2.1 s each) · 1 waiting for it`. If something's wrong it says what, and what to do about it (Ollama isn't running, the model is too slow for this computer, Ollama sent back an error). The game shows the same thing in the top bar (**⚠️ The AI isn't answering** or **🐢 The AI can't keep up**) and in the 🧠 AI panel, which also has **Try again now** and **Let the built-in AI fill in meanwhile**. One failed or slow answer never holds the town up for long: it's asked again within seconds.
 
 **How lively it is depends on your computer.** With a graphics card (NVIDIA with 6 GB or more, or an Apple Silicon Mac), a 7B model answers in a second or two and keeps up with the whole town at 1×. On the processor alone, an answer takes several seconds: the town is quieter, and the clock slows down while people wait for the AI to decide what they do. A smaller model (`--model qwen2.5:1.5b`) is quicker but less clever.
 
@@ -237,7 +240,8 @@ One model serves the whole town. Each request carries one person's own context a
 | `FREE_AI_INTERVAL_MS` | `2500` | Minimum gap between calls (set `0` for a model of your own). |
 | `AI_ONLY` | *(off)* | `1`: only the AI speaks, thinks and decides, with nothing built-in at all (see above). |
 | `LOCAL_ONLY` | *(off)* | `1`: free mode. Only ever a model on this computer or your own network; Claude, public and hosted services and Ollama's cloud models are refused (`npm run free` sets it). With no `FREE_AI_URL` it uses Ollama at `http://127.0.0.1:11434`. |
-| `FREE_AI_TIMEOUT_MS` | `45000` | How long to wait for an answer (raise it for a slow model on the processor). |
+| `FREE_AI_TIMEOUT_MS` | `45000` | How long to wait for an answer (raise it for a slow model on the processor; `npm run free` sets it from how fast the model answers). |
+| `FREE_AI_OLLAMA` | *(off)* | `1`: `FREE_AI_URL` is Ollama's, even if it isn't on Ollama's usual port 11434 (`npm run free` sets it). Replies are then held to the exact shape the town needs (a choice can only be one from the list) and kept short. |
 | `AI_LIVE_CHATS` | *(a couple)* | How many conversations the AI speaks at once, whatever they're about (`20`: everyone). |
 | `AI_CONCURRENCY` | `2` | Requests out at once (match it to your model server, e.g. `OLLAMA_NUM_PARALLEL`). |
 

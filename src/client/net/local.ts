@@ -303,6 +303,8 @@ export class LocalHost {
       aiOnly: !!ai.aiOnly,
       waiting: ai.aiOnly ? { ...this.director.backlog(this.world), pace: this.director.pace(this.world), waitForAI: ai.waitForAI !== false } : null,
       localOnly: this.localOnly,
+      trouble: this.director.trouble(this.world),
+      answers: this.director.available && ai.mode === "llm" ? this.director.answers() : null,
     };
   }
 

@@ -181,6 +181,14 @@ export interface AIStatusDTO {
   waiting?: { people: number; decisions: number; pace: number; waitForAI: boolean } | null;
   /** Free and on this computer: the AI is only ever a model on this computer or your own network, never a paid or public service. */
   localOnly?: boolean;
+  /**
+   * Something's wrong the player should know about (null: nothing): the AI
+   * keeps failing ("error"), or can't keep up and a crowd is waiting for it
+   * ("slow"); what to do about it; and how it's been answering lately.
+   */
+  trouble?: { level: "error" | "slow"; text: string; hint: string } | null;
+  /** The last minute: answers, failures (and the last one's error), how long an answer took (s), and how long since the last one (s). */
+  answers?: { answered: number; failed: number; avgSeconds: number | null; lastError: string | null; quietFor: number | null } | null;
 }
 
 export interface BrainDTO {
