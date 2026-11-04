@@ -197,9 +197,9 @@ export function workMood(c: Citizen): number {
 }
 
 /** The feeling that stands out right now (null if nothing does). */
-export function dominantEmotion(c: Citizen): { emotion: Emotion; level: number } | null {
+export function dominantEmotion(c: Citizen, threshold = 40): { emotion: Emotion; level: number } | null {
   let best: Emotion | null = null;
-  let bestScore = 40;
+  let bestScore = threshold;
   for (const e of EMOTIONS) {
     // Everyday contentment shouldn't drown out everything else.
     const score = e === "joy" ? c.emotions[e] * 0.8 : e === "love" ? c.emotions[e] * 0.7 : c.emotions[e];

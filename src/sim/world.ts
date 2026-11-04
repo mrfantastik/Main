@@ -161,6 +161,7 @@ function makeCitizen(world: WorldState, i: number, name: string, surname: string
     emotions: neutralEmotions(),
     reflections: [],
     lastReflectionDay: 0,
+    news: [],
     wants: {},
     mood: 60,
     activity: { kind: "idle", label: "Idle", buildingId: null, startedAt: t, endsAt: t, action: null },
@@ -267,6 +268,8 @@ export function createWorld(seed: number, name = "Hustle City"): WorldState {
     stats: { hourly: [], daily: [], hourRevenue: 0, dayRevenue: 0, hourInflow: 0, hourOutflow: 0, dayInflow: 0, dayOutflow: 0, dayTx: 0 },
     ai: { mode: "off", model: "claude-opus-5-5", budgetUsd: 2, spentUsd: 0, calls: 0, callsToday: 0, maxCallsPerDay: 12, log: [] },
     inventionPool: INVENTIONS.map((p) => p.id),
+    happenings: [],
+    nextHappeningT: 34 * 60,
   };
   // Warm up the generator so nearby seeds diverge quickly.
   for (let i = 0; i < 10; i++) rand(world);

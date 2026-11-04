@@ -47,3 +47,12 @@ export function avg(values: number[]): number {
 export function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
+
+/** How people say a number of days from now: "tomorrow", "in 3 days", "in a week", "in a fortnight". */
+export function inDays(n: number): string {
+  const d = Math.max(1, Math.round(n));
+  if (d === 1) return "tomorrow";
+  if (d === 7) return "in a week";
+  if (d === 14) return "in a fortnight";
+  return `in ${d} days`;
+}

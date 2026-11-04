@@ -4,7 +4,7 @@ import { store } from "../net/store";
 import { Camera, TILE } from "./camera";
 import { drawCityLayer, lampPositions } from "./cityLayer";
 import { FrameInterpolator } from "./interpolation";
-import { ACTIVITY_ICON, KIND_COLORS, darkness, drawBubble, drawEmotion, drawLabel, drawMoneyPopup, moneyText, showFeelingOnMap } from "./overlay";
+import { ACTIVITY_ICON, KIND_COLORS, bubbleInk, darkness, drawBubble, drawEmotion, drawLabel, drawMoneyPopup, moneyText, showFeelingOnMap } from "./overlay";
 import type { CityRenderer, Pos } from "./types";
 
 // Draws the live city every animation frame. Citizen positions are
@@ -480,7 +480,8 @@ export class Renderer implements CityRenderer {
     if (!p) return;
     const sp = this.cam.worldToScreen(p.x, p.y);
     if (sp.x < -100 || sp.y < -100 || sp.x > this.cam.width + 100 || sp.y > this.cam.height + 100) return;
-    drawBubble(ctx, bub, sp.x, sp.y, this.cam.width, placed);
+    const who = store.s.state?.citizens.find((c) => c.id === bub.speaker);
+    drawBubble(ctx, bub, sp.x, sp.y, this.cam.width, placed, who ? { name: who.name, color: bubbleInk(who.color) } : undefined);
   }
 }
 

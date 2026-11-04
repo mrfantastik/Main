@@ -1,3 +1,4 @@
+import { settleDecision } from "../society/state";
 import { registerAction } from "../ai/actions";
 import { logEvent } from "../events";
 import { remember } from "../memory/memory";
@@ -144,16 +145,26 @@ export function registerJobActions(): void {
       c.cooldowns.jobHunt = world.time;
       if (minutes < 20) return;
       const target = String(a.params.target ?? "corp");
+      // If they'd decided to go job hunting, they find out how it went.
+      const hunt = c.society?.intents.find((x) => x.topic === "activity:job_hunt");
+      const told = (text: string) => {
+        if (!hunt || !c.society) return;
+        c.society.intents = c.society.intents.filter((x) => x !== hunt);
+        settleDecision(c, hunt.decision, "done", text);
+      };
       if (target === "corp") {
         if (corpOpenings(world) <= 0) {
           remember(world, c, { text: "CityCorp had no openings.", kind: "job", importance: 3, valence: -0.3, people: [], key: "corp-no-openings" });
+          told("Went to CityCorp: no openings.");
           return;
         }
         const avgSkill = (c.skills.tech + c.skills.management + c.skills.sales) / 3;
         if (chance(world, 0.35 + avgSkill / 200 + c.traits.diligence * 0.2)) {
           hireAtCorp(world, c);
+          told("Got a job at CityCorp.");
         } else {
           remember(world, c, { text: "CityCorp turned down my application.", kind: "job", importance: 4, valence: -0.5, people: [], key: "corp-rejected" });
+          told("Applied at CityCorp: turned down.");
         }
       } else {
         c.cooldowns[`applied:${target}`] = world.time;

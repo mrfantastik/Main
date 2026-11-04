@@ -1,5 +1,6 @@
 import { registerAction } from "../ai/actions";
-import { bestOf, recordDecision, setThought, type Option } from "../ai/decision";
+import { putToAI, registerChoice, waitingToHear } from "../ai/choices";
+import { bestOf, recordDecision, scoreOf, setThought, type Option } from "../ai/decision";
 import { logEvent } from "../events";
 import { remember, rememberBetrayal } from "../memory/memory";
 import { chance } from "../rng";
@@ -14,8 +15,8 @@ import { listingsFor, refPrice } from "./market";
 // Running a business day to day: opening up (MANAGE), restocking at the
 // depot (RESTOCK), pricing, and deciding on job applicants.
 
-/** Price review for one product. Logged as a decision so the UI can explain it. */
-function reviewPrice(world: WorldState, b: Business, owner: Citizen, pid: string): void {
+/** What an owner could do about the price of one product (the town's rules pick the best; or the AI chooses). */
+function priceChoices(world: WorldState, b: Business, owner: Citizen, pid: string) {
   const m = world.market[pid];
   const pname = world.products[pid].name;
   const price = b.prices[pid];
@@ -86,12 +87,26 @@ function reviewPrice(world: WorldState, b: Business, owner: Citizen, pid: string
       });
     }
   }
-  const chosen = bestOf(opts);
+  return { opts, cheapest, rivals, pname };
+}
+
+/** Price review for one product. Logged as a decision so the UI can explain it (with only the AI deciding, the AI makes it). */
+function reviewPrice(world: WorldState, b: Business, owner: Citizen, pid: string): void {
+  if (putToAI(world, owner, "price", { businessId: b.id, productId: pid })) return;
+  const ctx = priceChoices(world, b, owner, pid);
+  const chosen = bestOf(ctx.opts);
+  if (chosen.id === "hold") return;
+  recordDecision(world, owner, "strategy", ctx.opts, chosen, "utility", chosen.thought);
+  setThought(world, owner, chosen.thought, 3);
+  applyPrice(world, b, owner, pid, chosen, ctx);
+}
+
+/** The new price, and (undercutting someone) a rivalry. */
+function applyPrice(world: WorldState, b: Business, owner: Citizen, pid: string, chosen: Option<number>, ctx: ReturnType<typeof priceChoices>): void {
+  const { cheapest, rivals, pname } = ctx;
+  b.lastPriceChangeT = world.time;
   if (chosen.id === "hold") return;
   b.prices[pid] = chosen.payload;
-  b.lastPriceChangeT = world.time;
-  recordDecision(world, owner, "strategy", opts, chosen, "utility", chosen.thought);
-  setThought(world, owner, chosen.thought, 3);
   if (chosen.id === "undercut" && cheapest && cheapest.name !== "the Marketplace") {
     const rival = rivals.find((r) => world.citizens[r.ownerId]?.name === cheapest.name);
     if (rival) {
@@ -142,10 +157,28 @@ export function registerOperationsActions(): void {
   });
 }
 
-/** Owner's decision on a job applicant. Returns true if hired. */
+/**
+ * Owner's decision on a job applicant. Returns true if hired. (With only the
+ * AI deciding, the owner's AI decides, and the applicant waits to hear.)
+ */
 export function considerApplicant(world: WorldState, b: Business, applicant: Citizen): boolean {
   const owner = world.citizens[b.ownerId];
   if (!owner || !b.open || b.hiringWage <= 0) return false;
+  if (putToAI(world, owner, "hire", { businessId: b.id, applicantId: applicant.id })) {
+    waitingToHear(world, applicant, `Asked ${owner.name} for a job at ${b.name}. Now I wait to hear.`);
+    return false;
+  }
+  const opts = hireChoices(world, b, owner, applicant);
+  const hire = scoreOf(opts[0]) > -0.15;
+  const chosen = hire ? opts[0] : opts[1];
+  recordDecision(world, owner, "reaction", opts, chosen, "utility", chosen.thought);
+  setThought(world, owner, chosen.thought, 3);
+  applyHire(world, b, owner, applicant, chosen);
+  return hire;
+}
+
+/** Take them on, or turn them down. */
+function hireChoices(world: WorldState, b: Business, owner: Citizen, applicant: Citizen): Option<null>[] {
   const rel = peekRel(owner, applicant.id);
   const betrayal = rememberBetrayal(owner, applicant.id);
   const skill = b.kind === "agency" ? applicant.skills.tech : (applicant.skills.sales + applicant.skills.management) / 2;
@@ -158,20 +191,61 @@ export function considerApplicant(world: WorldState, b: Business, applicant: Cit
     enemy: rel && rel.affinity < -40 ? -0.8 : 0,
     canAfford: b.cash > b.hiringWage * 2 ? 0.2 : -0.4,
   };
-  const score = Object.values(factors).reduce((a, x) => a + x, 0);
-  const hire = score > -0.15;
-  const opts: Option<null>[] = [
+  return [
     { id: "hire", label: `Hire ${applicant.name} at ${money(b.hiringWage)}/day`, factors, payload: null, thought: `${applicant.name} seems right for ${b.name}. Hired!` },
     { id: "reject", label: `Turn ${applicant.name} down`, factors: { bar: -0.15 }, payload: null, thought: betrayal ? `Hire ${applicant.name}? After what they did to me? No.` : `${applicant.name} isn't what ${b.name} needs.` },
   ];
-  const chosen = hire ? opts[0] : opts[1];
-  recordDecision(world, owner, "reaction", opts, chosen, "utility", chosen.thought);
-  setThought(world, owner, chosen.thought, 3);
-  if (hire) {
-    hireAtBusiness(world, applicant, b.id, b.hiringWage);
-  } else {
-    getRel(applicant, owner.id);
-    remember(world, applicant, { text: `${owner.name} turned me down for a job at ${b.name}.`, kind: "job", importance: 4, valence: -0.4, people: [owner.id], key: `rejected:${b.id}` });
-  }
-  return hire;
 }
+
+function applyHire(world: WorldState, b: Business, owner: Citizen, applicant: Citizen, chosen: Option<null>): void {
+  if (chosen.id === "hire") {
+    hireAtBusiness(world, applicant, b.id, b.hiringWage);
+    return;
+  }
+  getRel(applicant, owner.id);
+  remember(world, applicant, { text: `${owner.name} turned me down for a job at ${b.name}.`, kind: "job", importance: 4, valence: -0.4, people: [owner.id], key: `rejected:${b.id}` });
+}
+
+// Only the AI deciding: these wait for the owner's AI (see ai/choices.ts).
+registerChoice<number>("price", {
+  wait: 12 * 60,
+  title(world, c, req) {
+    const b = world.businesses[String(req.params.businessId)];
+    const pid = String(req.params.productId);
+    return `What to charge for ${world.products[pid]?.name.toLowerCase() ?? pid} at ${b?.name ?? "your business"}`;
+  },
+  options(world, c, req) {
+    const b = world.businesses[String(req.params.businessId)];
+    const pid = String(req.params.productId);
+    if (!b || !b.open || b.ownerId !== c.id || !b.products.includes(pid) || !world.market[pid]) return null;
+    return priceChoices(world, b, c, pid).opts;
+  },
+  apply(world, c, req, chosen) {
+    const b = world.businesses[String(req.params.businessId)]!;
+    const pid = String(req.params.productId);
+    applyPrice(world, b, c, pid, chosen, priceChoices(world, b, c, pid));
+  },
+});
+
+registerChoice<null>("hire", {
+  wait: 8 * 60,
+  title(world, c, req) {
+    const b = world.businesses[String(req.params.businessId)];
+    const a = world.citizens[String(req.params.applicantId)];
+    return `${a?.name ?? "Someone"} has asked you for a job at ${b?.name ?? "your business"}${b ? ` (you'd pay ${money(b.hiringWage)} a day)` : ""}`;
+  },
+  options(world, c, req) {
+    const b = world.businesses[String(req.params.businessId)];
+    const a = world.citizens[String(req.params.applicantId)];
+    if (!b || !b.open || b.ownerId !== c.id || b.hiringWage <= 0 || !a || a.employerId === b.id || a.businessIds.some((id) => world.businesses[id]?.open)) return null;
+    return hireChoices(world, b, c, a);
+  },
+  apply(world, c, req, chosen) {
+    applyHire(world, world.businesses[String(req.params.businessId)]!, c, world.citizens[String(req.params.applicantId)]!, chosen);
+  },
+  lapse(world, c, req) {
+    const b = world.businesses[String(req.params.businessId)];
+    const a = world.citizens[String(req.params.applicantId)];
+    if (a && b) remember(world, a, { text: `I never heard back from ${c.name} about the job at ${b.name}.`, kind: "job", importance: 3, valence: -0.25, people: [c.id] });
+  },
+});

@@ -1,3 +1,5 @@
+import { endLive } from "./social/conversation";
+import { firstHappeningT } from "./town/happenings";
 import { neutralEmotions } from "./mind/emotions";
 import { generatePersonality } from "./mind/personality";
 import type { WorldState } from "./types";
@@ -28,6 +30,8 @@ function migrate(raw: unknown): WorldState | null {
   w.loans ??= [];
   w.shocks ??= [];
   w.inventionPool ??= [];
+  w.happenings ??= [];
+  w.nextHappeningT ??= firstHappeningT(w);
   w.ai.log ??= [];
   w.economy.rentIndex ??= 1;
   for (const id of w.citizenOrder) {
@@ -44,6 +48,7 @@ function migrate(raw: unknown): WorldState | null {
     c.emotions ??= neutralEmotions();
     c.reflections ??= [];
     c.lastReflectionDay ??= 0;
+    c.news ??= [];
   }
   for (const pid of w.productOrder) {
     const m = w.market[pid];
@@ -59,12 +64,48 @@ function migrate(raw: unknown): WorldState | null {
     b.staffedHoursYesterday ??= 0;
     b.agencyEarned ??= 0;
   }
-  // Conversations waiting on an AI reply fall back to their template version.
+  // Conversations waiting on an AI reply fall back to their built-in version;
+  // a live chat that was cut off by saving is finished by the built-in voices
+  // (or, from an older save, ends there with a goodbye).
   for (const conv of w.conversations) {
+    // Only the AI speaks: whatever was being said waits for the AI to pick it up again
+    // (and ends where it is if it doesn't); nothing is filled in.
+    if (w.ai.aiOnly) {
+      if (conv.status === "awaiting_ai") {
+        conv.status = "live";
+        conv.lines = [];
+        conv.live = { done: true, lastLineT: w.time };
+      }
+      if (conv.live) conv.live.heldT = w.time;
+      if (conv.group) conv.group.driver = "ai";
+      continue;
+    }
+    // A group chat carries on in the built-in voices (the AI picks up new ones).
+    if (conv.group) {
+      conv.group.driver = "built-in";
+      continue;
+    }
     if (conv.status === "awaiting_ai" && conv.fallback) {
       conv.status = "talking";
       conv.lines = conv.fallback.lines;
       conv.outcome = conv.fallback.outcome;
+      if (conv.fallback.dlg) conv.dlg = conv.fallback.dlg;
+    }
+    if (conv.status === "live" && conv.live && !conv.live.done && conv.dlg && conv.dlg.turns.length === conv.lines.length) {
+      endLive(w, conv.id, true);
+      continue;
+    }
+    if (conv.status === "live" && conv.live && !conv.live.done && conv.fallback) {
+      conv.live.done = true;
+      if (conv.lines.length < 2) {
+        conv.lines = conv.fallback.lines;
+        conv.source = "template";
+      } else {
+        const last = conv.lines[conv.lines.length - 1].speaker;
+        const byes = conv.fallback.lines.slice(-2);
+        if (byes.length === 2) conv.lines.push({ speaker: last === conv.a ? conv.b : conv.a, text: byes[0].text }, { speaker: last, text: byes[1].text });
+      }
+      conv.revealed = Math.min(conv.revealed, conv.lines.length);
     }
   }
   return w;

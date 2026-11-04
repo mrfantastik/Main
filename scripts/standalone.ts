@@ -8,7 +8,7 @@
 //
 //   npm run build:standalone
 
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -23,8 +23,13 @@ if (js.length !== 1) throw new Error(`expected one JS bundle, found ${js.join(",
 const script = readFileSync(path.join(assets, js[0]), "utf8").replace(/<\/script/gi, "<\\/script").replace(/<!--/g, "<\\!--");
 const style = css.map((f) => readFileSync(path.join(assets, f), "utf8")).join("\n").replace(/<\/style/gi, "<\\/style");
 
+// The town's brain (scripts/build-brain.ts) rides along inside the page, so it can start a
+// worker even where no files sit next to the page (a downloaded copy opened from disk).
+const brainPath = path.join(root, "dist/brain/worker.classic.js");
+const brain = existsSync(brainPath) ? `<script>globalThis.__HUSTLE_BRAIN__ = "${readFileSync(brainPath).toString("base64")}";</script>\n` : "";
+
 const title = "AI Hustle City";
-const body = `<div id="root"></div>\n<script type="module">\n${script}\n</script>\n`;
+const body = `<div id="root"></div>\n${brain}<script type="module">\n${script}\n</script>\n`;
 const page = `<title>${title}</title>\n<style>\n${style}\n</style>\n${body}`;
 const full = `<!doctype html>
 <html lang="en">

@@ -54,6 +54,12 @@ function retention(m: Memory): number {
   return m.importance * m.strength * (1 + Math.abs(m.valence));
 }
 
+/** Someone who wants to know when a new memory is made (the conversation system: work news travels round the workplace). */
+let observer: ((world: WorldState, c: Citizen, m: Memory) => void) | null = null;
+export function setMemoryObserver(fn: ((world: WorldState, c: Citizen, m: Memory) => void) | null): void {
+  observer = fn;
+}
+
 export function remember(world: WorldState, c: Citizen, input: MemoryInput): Memory {
   const key = input.key ?? `${input.kind}:${input.people.join(",")}:${input.text}`;
   const importance = clamp(input.importance, 1, 10);
@@ -87,6 +93,7 @@ export function remember(world: WorldState, c: Citizen, input: MemoryInput): Mem
   c.memories.short.push(m);
   if (c.memories.short.length > SHORT_LIMIT) c.memories.short.shift();
   promote(c, m);
+  observer?.(world, c, m);
   return m;
 }
 

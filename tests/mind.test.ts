@@ -119,7 +119,9 @@ test("gratitude makes people generous to whoever helped them", () => {
   remember(w, lender, { text: `${borrower.name} lent me money when I needed it.`, kind: "favor", importance: 8, valence: 0.9, people: [borrower.id] });
   const after = loanTerms(w, borrower, lender, 80, "rent");
   assert.ok(after.maxLend >= before.maxLend && after.minRate <= before.minRate);
-  assert.equal(memoryCallback(lender, borrower, "agree", "x")?.includes("Day"), true, "they bring it up when agreeing");
+  const agree = memoryCallback(lender, borrower, "agree", "x") ?? "";
+  assert.match(agree, /helped me out|what you did for me/, "they bring it up when agreeing");
+  assert.doesNotMatch(agree, /Day \d/, "people don't say 'Day 12' out loud");
   assert.match(memoryCallback(lender, borrower, "agree", "x", dayOf(w.time)) ?? "", /today/, "same-day favours are 'today', not 'Day 1'");
 });
 

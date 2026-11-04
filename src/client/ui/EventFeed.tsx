@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { SimEvent } from "../../sim/types";
 import { store, useStore } from "../net/store";
-import { when } from "./format";
+import { aiName, when } from "./format";
 import { Transcript } from "./Transcript";
 
 const FILTERS: { id: string; label: string; cats: string[] }[] = [
@@ -11,6 +11,7 @@ const FILTERS: { id: string; label: string; cats: string[] }[] = [
   { id: "money", label: "💷 Money", cats: ["finance"] },
   { id: "social", label: "💬 Social", cats: ["social", "conversation"] },
   { id: "market", label: "📈 Market", cats: ["market"] },
+  { id: "town", label: "🗞️ Town", cats: ["town"] },
   { id: "life", label: "🏠 Life", cats: ["life"] },
   { id: "god", label: "⚡ God/AI", cats: ["god", "ai"] },
 ];
@@ -47,14 +48,14 @@ function EventText({ ev }: { ev: SimEvent }) {
 }
 
 function ConversationToggle({ id }: { id: number }) {
-  useStore((s) => s.state);
+  const ai = useStore((s) => s.state?.ai);
   const conv = store.conversations.get(id);
   const [open, setOpen] = useState(false);
   if (!conv) return null;
   return (
     <div>
       <button className="chip" style={{ border: 0, marginTop: 3 }} onClick={() => setOpen(!open)}>
-        {open ? "Hide" : "💬 Read"} conversation{conv.source === "llm" ? " · 🧠 Claude" : ""}
+        {open ? "Hide" : "💬 Read"} conversation{conv.source === "llm" ? ` · ${ai?.free && !ai.brain ? "🌐" : "🧠"} ${aiName(ai)}` : ""}
       </button>
       {open && <Transcript c={conv} />}
     </div>

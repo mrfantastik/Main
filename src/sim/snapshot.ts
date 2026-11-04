@@ -1,6 +1,9 @@
+import { agentInspector, conversationLines, societyDTO } from "./society/inspect";
+import { HAPPENING_ICON, isActive } from "./town/happenings";
 import type {
   AIStatusDTO,
   ConversationDTO,
+  HappeningDTO,
   BubbleDTO,
   BusinessDetail,
   BusinessSummary,
@@ -12,6 +15,7 @@ import type {
   MarketRow,
   StateMsg,
 } from "../shared/protocol";
+import { shownThought } from "./ai/decision";
 import { getBuildingIndexed } from "./city/lookup";
 import { placeName } from "./places";
 import { employerName } from "./economy/jobs";
@@ -20,6 +24,7 @@ import { debtsOf, netWorth } from "./economy/valuation";
 import { breakthroughThreshold } from "./economy/research";
 import { recentMemories } from "./memory/memory";
 import { dominantEmotion, EMOTION_EMOJI } from "./mind/emotions";
+import { botCard } from "./mind/bot";
 import { personalitySummary } from "./mind/personality";
 import { relLabel } from "./social/relationships";
 import { dayOf, formatTime } from "./time";
@@ -80,7 +85,7 @@ export function citizenSummary(world: WorldState, c: Citizen): CitizenSummary {
     activity: c.activity.label,
     activityKind: c.activity.kind,
     goal: c.goal.label,
-    thought: c.thought,
+    thought: shownThought(world, c),
     thoughtSource: c.thoughtSource,
     mood: Math.round(c.mood),
     homeless: c.homeless,
@@ -91,8 +96,9 @@ export function citizenSummary(world: WorldState, c: Citizen): CitizenSummary {
   };
 }
 
+/** How they feel, as the panels show it: the strongest feeling once it's noticeable (lower than the bar for it to change what they do). */
 function emotionDTO(c: Citizen): CitizenSummary["emotion"] {
-  const d = dominantEmotion(c);
+  const d = dominantEmotion(c, 28);
   return d ? { kind: d.emotion, level: d.level, emoji: EMOTION_EMOJI[d.emotion] } : null;
 }
 
@@ -201,8 +207,33 @@ export function state(
     savedAt: opts.savedAt,
     txCount: world.txCount,
     conversations: world.conversationLog.slice(-12).map((x) => conversationDTO(world, x)),
+    happenings: happeningsDTO(world),
     fx: opts.fx,
+    society: societyDTO(world),
   };
+}
+
+/** What's going on now, then the most recent others (newest first). */
+export function happeningsDTO(world: WorldState): HappeningDTO[] {
+  const known = (id: number) => world.citizenOrder.reduce((n, cid) => n + (world.citizens[cid].news.some((k) => k.id === id) ? 1 : 0), 0);
+  const list = [...world.happenings].reverse();
+  const active = list.filter((h) => isActive(world, h));
+  const recent = list.filter((h) => !isActive(world, h)).slice(0, Math.max(0, 8 - active.length));
+  return [...active, ...recent].map((h) => ({
+    id: h.id,
+    kind: h.kind,
+    icon: HAPPENING_ICON[h.kind],
+    title: h.title,
+    text: h.text,
+    t: h.t,
+    until: h.until,
+    active: isActive(world, h),
+    buildingId: h.buildingId,
+    subject: h.subject,
+    businessId: h.businessId,
+    source: h.source,
+    known: known(h.id),
+  }));
 }
 
 export function conversationDTO(world: WorldState, c: Conversation): ConversationDTO {
@@ -216,9 +247,14 @@ export function conversationDTO(world: WorldState, c: Conversation): Conversatio
     aName: name(c.a),
     bName: name(c.b),
     place: c.buildingId ? placeName(world, c.buildingId) : "town",
-    lines: c.lines.map((l) => ({ speaker: l.speaker, name: name(l.speaker), text: l.text })),
+    lines: conversationLines(world, c),
+    ...(c.group ? { members: c.group.members.map((id) => ({ id, name: name(id) })) } : {}),
     summary: c.summary,
     source: c.source,
+    topics: c.topics ?? [],
+    live: c.status !== "done",
+    spoken: !!c.live,
+    writing: c.status === "live" && !c.live?.done,
   };
 }
 
@@ -268,7 +304,7 @@ export function citizenDetail(world: WorldState, id: string): CitizenDetail | nu
     location: inside ? placeName(world, inside.id) : dest ? `On the way to ${placeName(world, dest.id)}` : "Out and about",
     activity: c.activity.label,
     goal: c.goal,
-    thought: c.thought,
+    thought: shownThought(world, c),
     thoughtSource: c.thoughtSource,
     archetypes: c.archetypes,
     traits: c.traits,
@@ -311,6 +347,11 @@ export function citizenDetail(world: WorldState, id: string): CitizenDetail | nu
       .slice(0, 20)
       .map((t) => txDTO(world, t)),
     decisions: [...c.strategyLog.slice(-8), ...c.decisions.slice(-10)].sort((a, b) => b.t - a.t),
+    society: agentInspector(world, c),
+    agent: c.agent ? { plan: c.agent.plan && c.agent.plan.day === dayOf(world.time) ? c.agent.plan.items : null, diary: [...c.agent.diary].reverse() } : null,
+    bot: botCard(c),
+    playerChat: (c.playerChat ?? []).slice(-30),
+    chatWaiting: !!c.chatWaiting,
     financeHistory: c.finance.history.slice(-30),
     loans: world.loans.filter((l) => (l.borrower === c.id || l.lender === c.id) && (l.status === "active" || world.time - l.dueT < 3 * 1440)).map((l) => loanDTO(world, l)),
     research: { points: Math.round(c.research.points), threshold: breakthroughThreshold(c), breakthroughs: c.research.breakthroughs, patents: c.research.patents },
@@ -320,8 +361,14 @@ export function citizenDetail(world: WorldState, id: string): CitizenDetail | nu
     emotions: Object.fromEntries(Object.entries(c.emotions).map(([k, v]) => [k, Math.round(v)])) as Emotions,
     emotion: emotionDTO(c),
     lessons: [...c.reflections].sort((a, b) => b.strength - a.strength),
+    news: [...c.news].reverse().flatMap((k) => {
+      const h = world.happenings.find((x) => x.id === k.id);
+      if (!h) return [];
+      const via = k.via === "saw" ? "saw it" : k.via === "paper" ? "the paper" : k.via === "self" ? "it happened to them" : `heard from ${world.citizens[k.via]?.name ?? "someone"}`;
+      return [{ id: h.id, icon: HAPPENING_ICON[h.kind], title: h.title, t: k.t, via, stance: k.stance }];
+    }),
     conversations: [...world.conversations, ...world.conversationLog]
-      .filter((x) => (x.a === c.id || x.b === c.id) && x.lines.length > 0)
+      .filter((x) => (x.a === c.id || x.b === c.id || !!x.group?.members.includes(c.id)) && x.lines.length > 0)
       .sort((x, y) => y.startedT - x.startedT)
       .slice(0, 8)
       .map((x) => conversationDTO(world, x)),

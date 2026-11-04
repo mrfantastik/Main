@@ -3,19 +3,24 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { describeSkip, type AIStatusDTO, type ClientMsg, type HelloMsg, type ServerMsg } from "../shared/protocol";
+import { describeSkip, SKIP_AI_ONLY, type AIStatusDTO, type ClientMsg, type HelloMsg, type ServerMsg } from "../shared/protocol";
 import { newWorld as createWorld } from "../sim";
 import { applyGodCommand, GodError } from "../sim/god";
+import { saveCard } from "../sim/mind/bot";
 import * as snap from "../sim/snapshot";
 import type { WorldState } from "../sim/types";
 import { AIDirector } from "../sim/ai/director";
+import { createFreeAIClient } from "../sim/ai/freeai";
+import { notLocal } from "../sim/ai/localai";
 import type { SpendLedger } from "../sim/ai/director";
 import { prepareLoadedWorld } from "../sim/migrate";
+import { applyAgentsCommand } from "../sim/society/state";
 import { createClaudeClient } from "./anthropic";
 import { openJsonStore } from "./persistence/jsonStore";
 import { openSqliteStore } from "./persistence/sqliteStore";
 import type { WorldStore } from "./persistence/store";
 import { SimRunner } from "../sim/runner";
+import { formatTime } from "../sim/time";
 
 // AI Hustle City server: runs the simulation continuously and streams it to
 // any number of browser clients over a WebSocket.
@@ -35,6 +40,9 @@ function loadEnv(file: string): void {
 }
 loadEnv(path.join(root, ".env"));
 const PORT = Number(process.env.PORT ?? 3000);
+// HOST=127.0.0.1 (what `npm run free` sets): only this computer can open the game (and
+// Windows doesn't ask to let it through the firewall). Unset: anyone on the network can.
+const HOST = process.env.HOST || undefined;
 const PROD = process.argv.includes("--prod");
 
 interface Client {
@@ -48,10 +56,41 @@ interface Client {
 const clients = new Set<Client>();
 let runner: SimRunner;
 
-// ---- AI (Claude) configuration. Everything works without it.
-const AI_MODEL = process.env.AI_MODEL || "claude-opus-5-5";
+// ---- AI configuration. Everything works without it.
+// AI_PROVIDER=free (default): citizens' conversations are written by a free,
+// keyless public AI (Pollinations). AI_PROVIDER=claude: Claude, with an
+// ANTHROPIC_API_KEY and a budget. AI_PROVIDER=off: built-in AI only.
+// Any OpenAI-compatible model (a local Ollama or LM Studio, or a hosted one):
+// AI_PROVIDER=free FREE_AI_URL=<its /v1/chat/completions URL> AI_MODEL=<model>
+// (and FREE_AI_KEY=<key> if it needs one).
+// LOCAL_ONLY=1 (what `npm run free` sets): only ever a model on this computer or your own
+// network (Ollama, LM Studio...), so nothing can cost money: no Claude, no public or hosted
+// services, no Ollama cloud models, and the AI panel won't take anything else.
+const LOCAL_ONLY = /^(1|true|yes|on)$/i.test(process.env.LOCAL_ONLY ?? "");
+const OLLAMA_URL = "http://127.0.0.1:11434/v1/chat/completions";
+if (LOCAL_ONLY && (process.env.AI_PROVIDER || "free").toLowerCase() === "claude") console.warn("  🆓 LOCAL_ONLY is on, so Claude stays off (it's a paid service). Using the model on this computer.");
+const AI_PROVIDER = LOCAL_ONLY ? "free" : (process.env.AI_PROVIDER || "free").toLowerCase();
+const FREE = AI_PROVIDER === "free";
+// (An AI_MODEL left over from a Claude setup doesn't apply to the free AI.)
+const AI_MODEL = FREE ? (process.env.AI_MODEL && !/^claude/.test(process.env.AI_MODEL) ? process.env.AI_MODEL : "openai") : process.env.AI_MODEL || "claude-opus-5-5";
+const FREE_AI_URL = process.env.FREE_AI_URL || (LOCAL_ONLY ? OLLAMA_URL : undefined);
+if (LOCAL_ONLY) {
+  const why = notLocal(FREE_AI_URL!, AI_MODEL);
+  if (why) {
+    console.error(`\n  🆓 LOCAL_ONLY is on, but ${why}. Nothing that might cost money is used in this mode.\n     Point FREE_AI_URL at a model on this computer (e.g. ${OLLAMA_URL}) and AI_MODEL at a local model.\n`);
+    process.exit(1);
+  }
+}
 const AI_BUDGET_USD = Number(process.env.AI_BUDGET_USD ?? 2);
-const AI_MAX_CALLS_PER_DAY = Number(process.env.AI_MAX_CALLS_PER_DAY ?? 12);
+const AI_MAX_CALLS_PER_DAY = Number(process.env.AI_MAX_CALLS_PER_DAY ?? (FREE ? 5000 : 12));
+// How hard the AI works: requests at once, and how many conversations it voices at once
+// (unset: a couple at a time; set it to 20 and every conversation in town is the AI's).
+const AI_CONCURRENCY = process.env.AI_CONCURRENCY ? Number(process.env.AI_CONCURRENCY) : undefined;
+const AI_LIVE_CHATS = process.env.AI_LIVE_CHATS ? Number(process.env.AI_LIVE_CHATS) : undefined;
+// AI_ONLY=1: only the AI speaks, with no built-in lines at all (conversations happen when the AI can speak them).
+const AI_ONLY = process.env.AI_ONLY === undefined ? undefined : /^(1|true|yes|on)$/i.test(process.env.AI_ONLY);
+// How long to wait for the free AI's answer (a slow model on the processor needs minutes when it's busy).
+const FREE_AI_TIMEOUT_MS = Number(process.env.FREE_AI_TIMEOUT_MS ?? 45_000);
 const DATA_DIR = process.env.DATA_DIR ?? path.join(root, "data");
 const AUTOSAVE_MS = Number(process.env.AUTOSAVE_SECONDS ?? 30) * 1000;
 
@@ -65,10 +104,25 @@ const ledger: SpendLedger = {
   total: () => Number(store?.getMeta("aiSpendUsd") ?? 0),
   add: (usd) => store?.setMeta("aiSpendUsd", String(ledger.total() + usd)),
 };
-const director = new AIDirector(createClaudeClient(AI_MODEL), ledger);
+const director =
+  AI_PROVIDER === "off"
+    ? new AIDirector(null, ledger)
+    : FREE
+      ? new AIDirector(createFreeAIClient({ model: AI_MODEL, url: FREE_AI_URL, key: process.env.FREE_AI_KEY || undefined, timeoutMs: FREE_AI_TIMEOUT_MS, ollama: /^(1|true|yes|on)$/i.test(process.env.FREE_AI_OLLAMA ?? "") }), ledger, {
+          maxConcurrent: AI_CONCURRENCY ?? 2,
+          minIntervalMs: Number(process.env.FREE_AI_INTERVAL_MS ?? 2500),
+          // (The same wait as the client's own, so a request given up on is also cancelled at the model.)
+          timeoutMs: FREE_AI_TIMEOUT_MS,
+          liveChats: AI_LIVE_CHATS,
+        })
+      : new AIDirector(createClaudeClient(AI_MODEL), ledger, { maxConcurrent: AI_CONCURRENCY ?? 2, minIntervalMs: Number(process.env.AI_INTERVAL_MS ?? 2500), timeoutMs: 25_000, liveChats: AI_LIVE_CHATS });
 director.attach();
 
+/** The player's own free-AI endpoint (set from the AI panel; lasts until restart). */
+let customEndpoint: { url: string; model?: string; key?: string } | null = null;
+
 function configureAI(world: WorldState): void {
+  if (AI_ONLY !== undefined) world.ai.aiOnly = AI_ONLY;
   world.ai.model = director.model;
   world.ai.budgetUsd = AI_BUDGET_USD;
   world.ai.maxCallsPerDay = AI_MAX_CALLS_PER_DAY;
@@ -96,7 +150,53 @@ function aiStatus(world: WorldState): AIStatusDTO {
     maxCallsPerDay: ai.maxCallsPerDay,
     pending: director.pending,
     reason: director.unavailableReason,
+    writer: director.writer,
+    doing: director.doing(world),
+    done: { ...director.tally },
+    free: director.free,
+    connection: director.freeStatus(),
+    endpoint: customEndpoint ? { url: customEndpoint.url, model: customEndpoint.model } : null,
+    limits: { ...director.limits, liveChats: director.limits.liveChats ?? null },
+    aiOnly: !!world.ai.aiOnly,
+    waiting: world.ai.aiOnly ? { ...director.backlog(world), pace: director.pace(world), waitForAI: world.ai.waitForAI !== false } : null,
+    localOnly: LOCAL_ONLY,
+    trouble: director.trouble(world),
+    answers: director.available && world.ai.mode === "llm" ? director.answers() : null,
   };
+}
+
+/**
+ * The black window: how the AI's getting on. Straight away when something
+ * goes wrong (and what to do about it) or comes right again, and with a free
+ * AI a line a minute: how many answers, how long each took, how many people
+ * are waiting for it and how fast the clock is running.
+ */
+function watchTheAI(): void {
+  let told = "";
+  setInterval(() => {
+    const w = runner.world;
+    const on = director.available && w.ai.mode === "llm";
+    const t = on ? director.trouble(w) : null;
+    if (t && t.level !== told) console.log(`\n  ⚠️  ${t.text}.${t.hint ? `\n      ${t.hint}` : ""}\n`);
+    // (Paused from the AI panel isn't "answering again".)
+    else if (!t && told && on) console.log(`  ✅ The AI is ${told === "error" ? "answering" : "keeping up"} again.`);
+    told = t?.level ?? "";
+  }, 5_000);
+  if (!director.free) return;
+  setInterval(() => {
+    const w = runner.world;
+    if (!director.available || w.ai.mode !== "llm" || runner.paused) return;
+    const a = director.answers();
+    const backlog = w.ai.aiOnly ? director.backlog(w) : null;
+    const pace = Math.round(director.pace(w) * 100);
+    const parts = [
+      `${a.answered} answer${a.answered === 1 ? "" : "s"} in the last minute${a.avgSeconds !== null ? ` (${a.avgSeconds} s each)` : ""}`,
+      ...(a.failed ? [`${a.failed} failed${a.lastError ? ` (${a.lastError})` : ""}`] : []),
+      ...(backlog ? [`${backlog.people} waiting for it`] : []),
+      ...(pace < 100 ? [`clock at ${pace}%`] : []),
+    ];
+    console.log(`  🧠 ${formatTime(w.time)}: ${parts.join(" · ")}`);
+  }, 60_000);
 }
 
 function newWorld(seed?: number): WorldState {
@@ -153,12 +253,28 @@ function handle(client: Client, msg: ClientMsg): void {
       break;
     case "select":
       client.selected = msg.kind && msg.id ? { kind: msg.kind, id: msg.id } : null;
+      if (client.selected?.kind === "citizen") director.focus = client.selected.id;
       pushDetail(client);
       break;
     case "dashboard":
       client.dashboard = msg.open;
       if (msg.open) send(client.ws, snap.dashboard(world));
       break;
+    case "bot": {
+      const c = world.citizens[msg.id];
+      if (!c) break;
+      saveCard(c, msg.card);
+      send(client.ws, { type: "toast", text: msg.card ? `🤖 Saved ${c.name}'s chatbot.` : `🤖 ${c.name}'s chatbot is back to how they were.`, level: "info" });
+      pushDetail(client);
+      break;
+    }
+    case "chat": {
+      const c = world.citizens[msg.id];
+      if (!c) break;
+      if (!director.playerChat(world, c.id, msg.text)) send(client.ws, { type: "toast", text: `🤖 No AI is available to answer for ${c.name} right now.`, level: "error" });
+      pushDetail(client);
+      break;
+    }
     case "god": {
       try {
         const text = applyGodCommand(world, msg.command);
@@ -169,9 +285,33 @@ function handle(client: Client, msg: ClientMsg): void {
       break;
     }
     case "ai": {
+      if (msg.limits || msg.aiOnly !== undefined || msg.waitForAI !== undefined) {
+        if (msg.limits) director.setLimits(msg.limits);
+        if (msg.aiOnly !== undefined) world.ai.aiOnly = msg.aiOnly;
+        if (msg.waitForAI !== undefined) world.ai.waitForAI = msg.waitForAI;
+        broadcastState();
+        break;
+      }
+      if (msg.endpoint !== undefined && LOCAL_ONLY) {
+        send(client.ws, { type: "toast", text: `🆓 Free mode only uses the model on this computer (${AI_MODEL}). To use another, start the game again with it.`, level: "error" });
+        break;
+      }
+      if (msg.endpoint !== undefined) {
+        customEndpoint = msg.endpoint && msg.endpoint.url ? { url: msg.endpoint.url.trim(), model: msg.endpoint.model?.trim() || undefined, key: msg.endpoint.key?.trim() || undefined } : null;
+        director.setCustomEndpoint(customEndpoint);
+      }
+      if (msg.probe || msg.endpoint !== undefined) {
+        void director.probe().then((st) => {
+          if (!st) return;
+          const ok = st.providers.filter((p) => p.state === "ok").map((p) => p.name);
+          send(client.ws, { type: "toast", text: ok.length ? `🌐 Connected: ${ok.join(", ")}.` : "No free AI service answered from the server. Check its internet access, or try again in a minute.", level: ok.length ? "info" : "error" });
+          broadcastState();
+        });
+        break;
+      }
       if (msg.mode) {
         if (msg.mode === "llm" && !director.available) {
-          send(client.ws, { type: "toast", text: `Claude isn't available: ${director.unavailableReason ?? "no API key"}`, level: "error" });
+          send(client.ws, { type: "toast", text: `The AI isn't available: ${director.unavailableReason ?? "none configured"}`, level: "error" });
         } else world.ai.mode = msg.mode;
       }
       if (msg.budgetUsd !== undefined && Number.isFinite(msg.budgetUsd) && msg.budgetUsd >= 0) world.ai.budgetUsd = msg.budgetUsd;
@@ -181,9 +321,22 @@ function handle(client: Client, msg: ClientMsg): void {
     case "skip": {
       const minutes = Number(msg.minutes);
       if (!Number.isFinite(minutes) || minutes <= 0) break;
+      if (world.ai.aiOnly) {
+        send(client.ws, { type: "toast", text: SKIP_AI_ONLY, level: "error" });
+        break;
+      }
       const events = runner.skip(minutes);
       broadcastState();
       for (const c of clients) send(c.ws, { type: "toast", text: `⏩ Skipped ${describeSkip(minutes)} — ${events} things happened. It's now ${snap.describeTime(world.time)}.`, level: "info" });
+      break;
+    }
+    case "agents":
+      send(client.ws, { type: "toast", text: applyAgentsCommand(world, msg), level: "info" });
+      broadcastState();
+      break;
+    case "invent": {
+      const why = director.invent(world, typeof msg.idea === "string" ? msg.idea : "");
+      send(client.ws, { type: "toast", text: why ?? `✨ ${director.free ? "The free AI" : "Claude"} is dreaming something up…`, level: why ? "error" : "info" });
       break;
     }
     case "save":
@@ -348,9 +501,14 @@ async function main(): Promise<void> {
     ws.on("close", () => clients.delete(client));
   });
 
-  runner.afterSteps = (w) => director.pump(w);
+  runner.pace = () => director.pace(runner.world);
+  runner.afterSteps = (w) => {
+    director.pump(w);
+    for (const n of director.notices.splice(0)) for (const c of clients) send(c.ws, { type: "toast", text: n.text, level: n.level });
+  };
   runner.start();
   setInterval(() => saveWorld("autosave"), AUTOSAVE_MS);
+  watchTheAI();
   const shutdown = () => {
     saveWorld("shutdown");
     store.close();
@@ -358,14 +516,31 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
-  console.log(director.available ? `  🧠 Claude enabled (${director.model}), budget $${AI_BUDGET_USD}, spent so far $${ledger.total().toFixed(3)}` : "  🧠 Claude disabled (no ANTHROPIC_API_KEY) — using the built-in utility AI");
+  console.log(
+    !director.available
+      ? AI_PROVIDER === "off"
+        ? "  🧠 AI off (AI_PROVIDER=off): using the built-in utility AI"
+        : "  🧠 Claude disabled (no ANTHROPIC_API_KEY): using the built-in utility AI"
+      : LOCAL_ONLY
+        ? `  🆓 Free: ${AI_MODEL} on this computer (${FREE_AI_URL}) ${runner.world.ai.aiOnly ? "speaks, thinks and decides for everyone; nothing is built-in" : "writes the conversations"}. Nothing here can cost money.`
+        : director.free
+          ? `  🧠 ${runner.world.ai.aiOnly ? `Only the AI speaks, thinks and decides (${director.writer})` : `Conversations written by the ${director.writer}; the built-in AI fills in when it's busy`}`
+          : `  🧠 Claude enabled (${director.model}), budget $${AI_BUDGET_USD}, spent so far $${ledger.total().toFixed(3)}`,
+  );
   setInterval(broadcastFrames, 100);
   setInterval(broadcastState, 500);
   setInterval(broadcastDashboard, 1500);
 
-  server.listen(PORT, () => {
+  server.listen({ port: PORT, host: HOST }, () => {
     console.log(`\n  🏙️  AI Hustle City is running:  http://localhost:${PORT}\n`);
   });
+  if (director.free && runner.world.ai.mode === "llm") {
+    void director.probe().then((st) => {
+      if (!st) return;
+      const ok = st.providers.filter((p) => p.state === "ok").map((p) => p.name);
+      console.log(ok.length ? `  🌐 Free AI connected: ${ok.join(", ")}` : `  🌐 No free AI service answered yet (${st.providers.map((p) => `${p.name}: ${p.note || p.state}`).join("; ")}). The built-in AI fills in; it keeps trying.`);
+    });
+  }
 }
 
 main().catch((err) => {
